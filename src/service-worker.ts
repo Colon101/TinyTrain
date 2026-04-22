@@ -18,6 +18,8 @@ const self = globalThis.self as unknown as ServiceWorkerGlobalScope;
 // Create a unique cache name for this deployment
 const CACHE = `cache-${version}`;
 const APP_SHELL = '/';
+const DEPLOYMENT_MANIFEST = '/deployment.json';
+const DEV = import.meta.env.DEV;
 
 const ASSETS = [
 	...build, // the app itself
@@ -25,11 +27,107 @@ const ASSETS = [
 	APP_SHELL
 ];
 
+type DeploymentManifest = {
+	id?: unknown;
+};
+
+type CacheUrlsMessage = {
+	type?: unknown;
+	urls?: unknown;
+};
+
+async function fetchFresh(request: Request | string) {
+	const response = await fetch(request, { cache: 'no-store' });
+
+	// if we're offline, fetch can return a value that is not a Response
+	// instead of throwing - and we can't pass this non-Response to respondWith
+	if (!(response instanceof Response)) {
+		throw new Error('invalid response from fetch');
+	}
+
+	return response;
+}
+
+async function getCachedResponse(cache: Cache, request: Request, url: URL) {
+	return (
+		(await cache.match(request)) ??
+		(await cache.match(url.pathname)) ??
+		(request.mode === 'navigate' ? await cache.match(APP_SHELL) : undefined)
+	);
+}
+
+async function readDeploymentId(response: Response | undefined) {
+	if (!response?.ok) return undefined;
+
+	try {
+		const manifest = (await response.clone().json()) as DeploymentManifest;
+		return typeof manifest.id === 'string' ? manifest.id : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function hasCurrentDeployment(cache: Cache) {
+	const [cachedResponse, latestResponse] = await Promise.all([
+		cache.match(DEPLOYMENT_MANIFEST),
+		fetchFresh(`${DEPLOYMENT_MANIFEST}?sw-update=${Date.now()}`)
+	]);
+
+	const cachedId = await readDeploymentId(cachedResponse);
+	const latestId = await readDeploymentId(latestResponse);
+
+	return Boolean(cachedId && latestId && cachedId === latestId);
+}
+
+function cacheResponse(event: FetchEvent, cache: Cache, request: Request, response: Response) {
+	if (response.status === 200) {
+		event.waitUntil(cache.put(request, response.clone()).catch(() => undefined));
+	}
+}
+
+async function cacheUrls(urls: unknown) {
+	if (!Array.isArray(urls)) {
+		return;
+	}
+
+	const cache = await caches.open(CACHE);
+
+	await Promise.all(
+		urls.map(async (url) => {
+			if (typeof url !== 'string') {
+				return;
+			}
+
+			try {
+				const parsedUrl = new URL(url, self.location.origin);
+
+				if (parsedUrl.origin !== self.location.origin) {
+					return;
+				}
+
+				const response = await fetchFresh(parsedUrl.href);
+
+				if (response.status === 200) {
+					await cache.put(parsedUrl.href, response);
+				}
+			} catch {
+				// Best-effort cache warming only.
+			}
+		})
+	);
+}
+
 self.addEventListener('install', (event) => {
 	// Create a new cache and add all files to it
 	async function addFilesToCache() {
+		if (DEV) {
+			await self.skipWaiting();
+			return;
+		}
+
 		const cache = await caches.open(CACHE);
 		await cache.addAll(ASSETS);
+		await self.skipWaiting();
 	}
 
 	event.waitUntil(addFilesToCache());
@@ -39,7 +137,7 @@ self.addEventListener('activate', (event) => {
 	// Remove previous cached data from disk
 	async function deleteOldCaches() {
 		for (const key of await caches.keys()) {
-			if (key !== CACHE) await caches.delete(key);
+			if (DEV || key !== CACHE) await caches.delete(key);
 		}
 
 		await self.clients.claim();
@@ -48,41 +146,39 @@ self.addEventListener('activate', (event) => {
 	event.waitUntil(deleteOldCaches());
 });
 
+self.addEventListener('message', (event) => {
+	const data = event.data as CacheUrlsMessage;
+
+	if (data?.type === 'CACHE_URLS') {
+		event.waitUntil(cacheUrls(data.urls));
+	}
+});
+
 self.addEventListener('fetch', (event) => {
 	// ignore POST requests etc
 	if (event.request.method !== 'GET') return;
 
 	async function respond() {
 		const url = new URL(event.request.url);
-		const cache = await caches.open(CACHE);
 		const isSameOrigin = url.origin === self.location.origin;
+		const cache = await caches.open(CACHE);
 
-		// `build`/`files` can always be served from the cache
-		if (ASSETS.includes(url.pathname)) {
-			const response = await cache.match(url.pathname);
-
-			if (response) {
-				return response;
-			}
-		}
-
-		if (event.request.mode === 'navigate') {
+		if (DEV) {
 			try {
-				const response = await fetch(event.request);
+				const response = await fetchFresh(event.request);
 
-				if (response.status === 200) {
-					cache.put(event.request, response.clone());
+				if (isSameOrigin) {
+					cacheResponse(event, cache, event.request, response);
 				}
 
 				return response;
 			} catch (err) {
-				const response =
-					(await cache.match(event.request)) ??
-					(await cache.match(url.pathname)) ??
-					(await cache.match(APP_SHELL));
+				if (isSameOrigin) {
+					const response = await getCachedResponse(cache, event.request, url);
 
-				if (response) {
-					return response;
+					if (response) {
+						return response;
+					}
 				}
 
 				throw err;
@@ -93,24 +189,34 @@ self.addEventListener('fetch', (event) => {
 			return fetch(event.request);
 		}
 
-		// for everything else, try the network first, but
-		// fall back to the cache if we're offline
+		if (url.pathname === DEPLOYMENT_MANIFEST) {
+			return fetchFresh(event.request);
+		}
+
+		// Check the deploy UUID before trusting the cache. If the check fails,
+		// assume we're offline and let the cache carry the app.
+		let canUseCache: boolean;
 		try {
-			const response = await fetch(event.request);
+			canUseCache = await hasCurrentDeployment(cache);
+		} catch {
+			canUseCache = true;
+		}
 
-			// if we're offline, fetch can return a value that is not a Response
-			// instead of throwing - and we can't pass this non-Response to respondWith
-			if (!(response instanceof Response)) {
-				throw new Error('invalid response from fetch');
+		if (canUseCache) {
+			const cached = await getCachedResponse(cache, event.request, url);
+
+			if (cached) {
+				return cached;
 			}
+		}
 
-			if (response.status === 200) {
-				cache.put(event.request, response.clone());
-			}
+		try {
+			const response = await fetchFresh(event.request);
 
+			cacheResponse(event, cache, event.request, response);
 			return response;
 		} catch (err) {
-			const response = await cache.match(event.request);
+			const response = await getCachedResponse(cache, event.request, url);
 
 			if (response) {
 				return response;

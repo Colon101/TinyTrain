@@ -5,6 +5,7 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
 		<meta name="theme-color" content="#172033" />
+		<meta name="mobile-web-app-capable" content="yes" />
 		<meta name="apple-mobile-web-app-capable" content="yes" />
 		<meta name="apple-mobile-web-app-title" content="TinyTrain" />
 		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -18,6 +19,59 @@
 				window.__tinytrainInstallPrompt = event;
 				window.dispatchEvent(new Event('tinytraininstallprompt'));
 			});
+
+			if ('serviceWorker' in navigator) {
+				const rootScope = new URL('/', window.location.origin).href;
+
+				function getCurrentPageCacheUrls() {
+					const urls = [window.location.href, rootScope];
+
+					for (const entry of performance.getEntriesByType('resource')) {
+						if (entry.name.startsWith(window.location.origin)) {
+							urls.push(entry.name);
+						}
+					}
+
+					return [...new Set(urls)];
+				}
+
+				function warmServiceWorkerCache(registration) {
+					const worker = registration.active || navigator.serviceWorker.controller;
+
+					if (!worker) {
+						return;
+					}
+
+					worker.postMessage({
+						type: 'CACHE_URLS',
+						urls: getCurrentPageCacheUrls()
+					});
+				}
+
+				window.addEventListener('load', () => {
+					navigator.serviceWorker
+						.getRegistrations()
+						.then(async (registrations) => {
+							await Promise.all(
+								registrations
+									.filter((registration) => registration.scope !== rootScope)
+									.map((registration) => registration.unregister())
+							);
+
+							return navigator.serviceWorker.register('/service-worker.js', {
+								scope: '/',
+								type: 'module'
+							});
+						})
+						.then((registration) => {
+							registration.update();
+							warmServiceWorkerCache(registration);
+							return navigator.serviceWorker.ready;
+						})
+						.then(warmServiceWorkerCache)
+						.catch(() => undefined);
+				});
+			}
 		</script>
 		%sveltekit.head%
 	</head>

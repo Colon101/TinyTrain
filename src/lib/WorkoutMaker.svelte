@@ -128,10 +128,6 @@
 		return dbApi;
 	}
 
-	function getWorkoutHref(workoutId: string) {
-		return resolve(`/workouts/${encodeURIComponent(workoutId)}`);
-	}
-
 	async function loadPageData(preferredWorkoutId = selectedWorkoutId) {
 		const api = requireDbApi();
 		const [nextExercises, nextWorkouts] = await Promise.all([
@@ -194,7 +190,9 @@
 			isCreatingWorkout = false;
 			pageMode = 'detail';
 			await loadPageData(workout.id);
-			await goto(getWorkoutHref(workout.id), { keepFocus: true });
+			await goto(resolve('/workouts/[workoutId]', { workoutId: workout.id }), {
+				keepFocus: true
+			});
 		});
 	}
 
@@ -203,7 +201,7 @@
 		pageMode = 'detail';
 		closeExercisePicker();
 		void loadSelectedWorkoutExercises();
-		void goto(getWorkoutHref(workoutId), { keepFocus: true });
+		void goto(resolve('/workouts/[workoutId]', { workoutId }), { keepFocus: true });
 	}
 
 	function closeWorkout() {
@@ -648,7 +646,7 @@
 												<span
 													class="rounded-md border border-amber-300/20 bg-amber-300/10 px-2 py-1 text-[0.68rem] font-semibold text-amber-100"
 												>
-														Unilateral
+													Unilateral
 												</span>
 											{/if}
 										</div>
@@ -777,7 +775,7 @@
 											{#if isExerciseAlreadyInWorkout}
 												Already in workout
 											{:else if exercise.unilateral}
-													Unilateral
+												Unilateral
 											{:else}
 												Exercise
 											{/if}
@@ -870,7 +868,7 @@
 							<span
 								class="rounded-md border border-amber-300/20 bg-amber-300/10 px-2 py-1 text-[0.68rem] font-semibold text-amber-100"
 							>
-									Unilateral
+								Unilateral
 							</span>
 						{/if}
 					</div>
