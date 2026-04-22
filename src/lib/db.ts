@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-
+import { BASELINE_EXERCISES } from './exercises';
 export type SessionStatus = 'planned' | 'in_progress' | 'completed' | 'abandoned';
 
 export interface Exercise {
@@ -68,7 +68,6 @@ export type WorkoutExerciseWithExercise = WorkoutExercise & {
 	exercise: Exercise;
 };
 
-const BASELINE_EXERCISES = ['Curls', 'Pull-ups', 'Rows', 'Lat Pulldown', 'Bench Press', 'Squat'];
 const STORES = {
 	exercises: '&id, &normalizedName, archived, updatedAt',
 	workouts: '&id, &normalizedName, archived, updatedAt',
@@ -149,16 +148,19 @@ function createExerciseRow(name: string, unilateral = false, now = timestamp()):
 }
 
 export async function ensureBaselineExercises() {
-	const normalizedNames = BASELINE_EXERCISES.map(normalizeName);
+	const baselineExerciseByNormalizedName = new Map(
+		BASELINE_EXERCISES.map((exercise) => [normalizeName(exercise.name), exercise])
+	);
+	const normalizedNames = [...baselineExerciseByNormalizedName.keys()];
 	const existingExercises = await db.exercises
 		.where('normalizedName')
 		.anyOf(normalizedNames)
 		.toArray();
 	const existingNames = new Set(existingExercises.map((exercise) => exercise.normalizedName));
 	const now = timestamp();
-	const missingExercises = BASELINE_EXERCISES.filter(
-		(exerciseName) => !existingNames.has(normalizeName(exerciseName))
-	).map((exerciseName) => createExerciseRow(exerciseName, false, now));
+	const missingExercises = [...baselineExerciseByNormalizedName.values()]
+		.filter((exercise) => !existingNames.has(normalizeName(exercise.name)))
+		.map((exercise) => createExerciseRow(exercise.name, exercise.unilateral, now));
 
 	if (missingExercises.length > 0) {
 		await db.exercises.bulkAdd(missingExercises);

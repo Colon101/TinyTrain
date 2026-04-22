@@ -4,7 +4,21 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
+		<meta name="theme-color" content="#172033" />
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-title" content="TinyTrain" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 		<link rel="manifest" href="/manifest.webmanifest" />
+		<link rel="icon" href="/app-icon.svg" type="image/svg+xml" />
+		<link rel="apple-touch-icon" href="/app-icon.png" />
+		<script>
+			window.__tinytrainInstallPrompt = null;
+			window.addEventListener('beforeinstallprompt', (event) => {
+				event.preventDefault();
+				window.__tinytrainInstallPrompt = event;
+				window.dispatchEvent(new Event('tinytraininstallprompt'));
+			});
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">
