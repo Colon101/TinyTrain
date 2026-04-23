@@ -103,8 +103,22 @@ export function formatSessionStatus(status: SessionStatus) {
 	}
 }
 
-export function formatSetLine(weight: number, reps: number) {
-	return `${weight} kg x ${reps}`;
+export function formatSetLine(weight?: number, reps?: number, rir?: number) {
+	const parts: string[] = [];
+
+	if (typeof weight === 'number' && Number.isFinite(weight)) {
+		parts.push(`${weight} kg`);
+	}
+
+	if (typeof reps === 'number' && Number.isFinite(reps)) {
+		parts.push(`${reps} reps`);
+	}
+
+	if (typeof rir === 'number' && Number.isFinite(rir)) {
+		parts.push(`RIR ${rir}`);
+	}
+
+	return parts.join(' x ') || 'Set logged';
 }
 
 export function formatHistoryCount(count: number) {

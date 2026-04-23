@@ -63,8 +63,9 @@ export interface SessionSet {
 	sessionExerciseId: string;
 	exerciseId: string;
 	order: number;
-	weight: number;
-	reps: number;
+	weight?: number;
+	reps?: number;
+	rir?: number;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -140,6 +141,11 @@ const STORES = {
 	sessionSets:
 		'&id, sessionExerciseId, exerciseId, createdAt, [sessionExerciseId+order], [exerciseId+createdAt]',
 	exerciseResetEvents: '&id, exerciseId, resetAt, [exerciseId+resetAt], createdAt'
+};
+
+const SYNC_SAFE_STORES = {
+	...STORES,
+	exercises: '&id, normalizedName, source, archived, updatedAt'
 };
 
 const EXAMPLE_WORKOUT_NAME = 'Upper Builder Demo';
@@ -219,6 +225,58 @@ class TinyTrainDatabase extends Dexie {
 					.toCollection()
 					.modify((session: Partial<WorkoutSession>) => {
 						session.dayKey = toDayKey(session.startedAt ?? session.createdAt ?? new Date());
+					});
+			});
+		this.version(5)
+			.stores(STORES)
+			.upgrade(async (transaction) => {
+				await transaction
+					.table('sessionSets')
+					.toCollection()
+					.modify(
+						(
+							sessionSet: Partial<SessionSet> & {
+								weight?: unknown;
+								reps?: unknown;
+								rir?: unknown;
+							}
+						) => {
+							const weight = toOptionalNumber(sessionSet.weight);
+							const reps = toOptionalNumber(sessionSet.reps);
+							const rir = toOptionalNumber(sessionSet.rir);
+
+							if (weight === undefined) {
+								delete sessionSet.weight;
+							} else {
+								sessionSet.weight = weight;
+							}
+
+							if (reps === undefined) {
+								delete sessionSet.reps;
+							} else {
+								sessionSet.reps = reps;
+							}
+
+							if (rir === undefined) {
+								delete sessionSet.rir;
+							} else {
+								sessionSet.rir = rir;
+							}
+						}
+					);
+			});
+		this.version(6)
+			.stores(SYNC_SAFE_STORES)
+			.upgrade(async (transaction) => {
+				await transaction
+					.table('exercises')
+					.toCollection()
+					.modify((exercise: Partial<Exercise> & { name?: string; normalizedName?: string }) => {
+						exercise.normalizedName = normalizeName(exercise.name ?? exercise.normalizedName ?? '');
+						exercise.source = inferExerciseSource(
+							exercise.normalizedName || exercise.name || '',
+							exercise.source
+						);
 					});
 			});
 
@@ -352,16 +410,68 @@ function withExerciseDefaults(exercise: Exercise): Exercise {
 	};
 }
 
+function compareExercises(first: Exercise, second: Exercise) {
+	if (first.archived !== second.archived) {
+		return Number(first.archived) - Number(second.archived);
+	}
+
+	if (first.source !== second.source) {
+		return first.source === 'baseline' ? -1 : 1;
+	}
+
+	if (first.updatedAt !== second.updatedAt) {
+		return second.updatedAt.localeCompare(first.updatedAt);
+	}
+
+	if (first.createdAt !== second.createdAt) {
+		return first.createdAt.localeCompare(second.createdAt);
+	}
+
+	return first.id.localeCompare(second.id);
+}
+
+function pickPreferredExercise(exercises: Exercise[]) {
+	return exercises.map(withExerciseDefaults).sort(compareExercises)[0] ?? null;
+}
+
+function dedupeExercises(exercises: Exercise[]) {
+	const exerciseByNormalizedName = new Map<string, Exercise>();
+
+	for (const exercise of exercises.map(withExerciseDefaults)) {
+		const existingExercise = exerciseByNormalizedName.get(exercise.normalizedName);
+
+		if (!existingExercise || compareExercises(exercise, existingExercise) < 0) {
+			exerciseByNormalizedName.set(exercise.normalizedName, exercise);
+		}
+	}
+
+	return [...exerciseByNormalizedName.values()];
+}
+
+function toOptionalNumber(value: unknown) {
+	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function withSessionSetDefaults(sessionSet: SessionSet): SessionSet {
+	return {
+		...sessionSet,
+		weight: toOptionalNumber(sessionSet.weight),
+		reps: toOptionalNumber(sessionSet.reps),
+		rir: toOptionalNumber(sessionSet.rir)
+	};
+}
+
 function createExerciseRow(
 	name: string,
 	unilateral = false,
 	source: ExerciseSource = 'custom',
-	now = timestamp()
+	now = timestamp(),
+	id = createId()
 ): Exercise {
 	const cleanName = displayName(name);
 
 	return {
-		id: createId(),
+		id,
 		name: cleanName,
 		unilateral,
 		source,
@@ -370,6 +480,10 @@ function createExerciseRow(
 		createdAt: now,
 		updatedAt: now
 	};
+}
+
+function createBaselineExerciseId(normalizedName: string) {
+	return `baseline:${normalizedName}`;
 }
 
 function summarizeSession(
@@ -396,7 +510,11 @@ async function getSessionSummariesByIds(sessionIds: string[]) {
 	const sessionSets =
 		sessionExerciseIds.length === 0
 			? []
-			: await db.sessionSets.where('sessionExerciseId').anyOf(sessionExerciseIds).toArray();
+			: (await db.sessionSets
+					.where('sessionExerciseId')
+					.anyOf(sessionExerciseIds)
+					.toArray()
+			  ).map(withSessionSetDefaults);
 	const sessionExercisesBySessionId = new Map<string, SessionExercise[]>();
 	const sessionSetsBySessionId = new Map<string, SessionSet[]>();
 	const sessionExerciseById = new Map(
@@ -443,9 +561,28 @@ export async function ensureBaselineExercises() {
 		.toArray();
 	const existingNames = new Set(existingExercises.map((exercise) => exercise.normalizedName));
 	const now = timestamp();
-	const missingExercises = BASELINE_EXERCISES.filter(
-		(exercise) => !existingNames.has(normalizeName(exercise.name))
-	).map((exercise) => createExerciseRow(exercise.name, exercise.unilateral, 'baseline', now));
+	const missingExercisesByName = new Map<string, Exercise>();
+
+	for (const exercise of BASELINE_EXERCISES) {
+		const normalizedName = normalizeName(exercise.name);
+
+		if (existingNames.has(normalizedName) || missingExercisesByName.has(normalizedName)) {
+			continue;
+		}
+
+		missingExercisesByName.set(
+			normalizedName,
+			createExerciseRow(
+				exercise.name,
+				exercise.unilateral,
+				'baseline',
+				now,
+				createBaselineExerciseId(normalizedName)
+			)
+		);
+	}
+
+	const missingExercises = [...missingExercisesByName.values()];
 
 	if (missingExercises.length > 0) {
 		await db.exercises.bulkAdd(missingExercises);
@@ -453,20 +590,18 @@ export async function ensureBaselineExercises() {
 }
 
 export async function listExercises() {
-	const exercises = await db.exercises.toArray();
+	const exercises = dedupeExercises(await db.exercises.toArray());
 
 	return exercises
-		.map(withExerciseDefaults)
 		.filter((exercise) => !exercise.archived)
 		.sort((first, second) => first.name.localeCompare(second.name));
 }
 
 export async function listCustomExercises() {
-	const exercises = await db.exercises.where('source').equals('custom').toArray();
+	const exercises = dedupeExercises(await db.exercises.toArray());
 
 	return exercises
-		.map(withExerciseDefaults)
-		.filter((exercise) => !exercise.archived)
+		.filter((exercise) => !exercise.archived && exercise.source === 'custom')
 		.sort((first, second) => first.name.localeCompare(second.name));
 }
 
@@ -532,10 +667,9 @@ export async function createExercise(name: string, unilateral = false) {
 		throw new Error('Exercise name is required.');
 	}
 
-	const existingExercise = await db.exercises
-		.where('normalizedName')
-		.equals(normalizedName)
-		.first();
+	const existingExercise = pickPreferredExercise(
+		await db.exercises.where('normalizedName').equals(normalizedName).toArray()
+	);
 
 	if (existingExercise) {
 		if (existingExercise.archived) {
@@ -568,16 +702,16 @@ export async function createCustomExercise(name: string, unilateral = false) {
 		throw new Error('Exercise name is required.');
 	}
 
-	const existingExercise = await db.exercises
-		.where('normalizedName')
-		.equals(normalizedName)
-		.first();
+	const matchingExercises = (await db.exercises.where('normalizedName').equals(normalizedName).toArray()).map(
+		withExerciseDefaults
+	);
+	const existingExercise = pickPreferredExercise(matchingExercises);
+
+	if (matchingExercises.some((exercise) => exercise.source === 'baseline')) {
+		throw new Error('That name already belongs to a built-in exercise.');
+	}
 
 	if (existingExercise) {
-		if (withExerciseDefaults(existingExercise).source === 'baseline') {
-			throw new Error('That name already belongs to a built-in exercise.');
-		}
-
 		if (existingExercise.archived) {
 			const updatedAt = timestamp();
 			await db.exercises.update(existingExercise.id, {
@@ -660,6 +794,7 @@ export async function listExerciseHistory(exerciseId: string): Promise<ExerciseH
 			.where('sessionExerciseId')
 			.anyOf(sessionExercises.map((sessionExercise) => sessionExercise.id))
 			.toArray()
+			.then((rows) => rows.map(withSessionSetDefaults))
 	]);
 	const sessionById = new Map(sessions.filter(isDefined).map((session) => [session.id, session]));
 	const setsBySessionExerciseId = new Map<string, SessionSet[]>();
@@ -987,7 +1122,11 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 	const sessionSets =
 		sessionExerciseIds.length === 0
 			? []
-			: await db.sessionSets.where('sessionExerciseId').anyOf(sessionExerciseIds).toArray();
+			: (await db.sessionSets
+					.where('sessionExerciseId')
+					.anyOf(sessionExerciseIds)
+					.toArray()
+			  ).map(withSessionSetDefaults);
 	const setsBySessionExerciseId = new Map<string, SessionSet[]>();
 
 	for (const sessionSet of sessionSets) {

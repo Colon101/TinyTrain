@@ -133,9 +133,9 @@
 					class="flex min-h-10 items-center gap-2 rounded-lg border border-white/10 px-3 text-sm font-medium text-zinc-300"
 					type="button"
 					onclick={goBack}
+					aria-label="Go back"
 				>
 					<Icon name="arrow-left" class="h-4 w-4" />
-					Go back
 				</button>
 
 				<ProfileMenu user={currentUser} />

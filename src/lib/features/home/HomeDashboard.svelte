@@ -166,16 +166,20 @@
 </script>
 
 <section class="flex flex-1 flex-col">
-	<div class="flex items-center justify-end gap-2 pb-3">
-		<button
-			class="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-200 transition hover:border-emerald-300/40 hover:bg-white/[0.08]"
-			type="button"
-			title="Open calendar"
-			onclick={openDayPicker}
-		>
-			<Icon name="calendar" class="h-4 w-4" />
-		</button>
-		<ProfileMenu user={currentUser} />
+	<div class="flex items-center justify-between gap-3 pb-3">
+		<p class="text-lg font-semibold text-white">TinyTrain</p>
+
+		<div class="flex items-center gap-2">
+			<button
+				class="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-200 transition hover:border-emerald-300/40 hover:bg-white/[0.08]"
+				type="button"
+				title="Open calendar"
+				onclick={openDayPicker}
+			>
+				<Icon name="calendar" class="h-4 w-4" />
+			</button>
+			<ProfileMenu user={currentUser} />
+		</div>
 	</div>
 
 	{#if errorMessage}

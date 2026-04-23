@@ -820,8 +820,11 @@ export const JOINT_ACTION_EXERCISES = [...new Set(JOINT_ACTION_EXERCISE_NAMES)].
 		name.startsWith('Unilateral')
 }));
 
-export const BASELINE_EXERCISES = [
-	...BILATERAL_EXERCISES,
-	...UNILATERAL_EXERCISES,
-	...JOINT_ACTION_EXERCISES
-];
+const BASELINE_EXERCISE_MAP = new Map(
+	[...BILATERAL_EXERCISES, ...UNILATERAL_EXERCISES, ...JOINT_ACTION_EXERCISES].map((exercise) => [
+		exercise.name.trim().replace(/\s+/g, ' ').toLocaleLowerCase(),
+		exercise
+	])
+);
+
+export const BASELINE_EXERCISES = [...BASELINE_EXERCISE_MAP.values()];
