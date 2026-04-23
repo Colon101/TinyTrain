@@ -1,20 +1,24 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
-	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 
 	type InstallStatus = 'idle' | 'available' | 'installing' | 'installed' | 'manual';
+	type InstallPlatform = 'generic' | 'ios' | 'android';
 
 	let deferredPrompt = $state<BeforeInstallPromptEvent | null>(null);
+	let installPlatform = $state<InstallPlatform>('generic');
 	let installStatus = $state<InstallStatus>('idle');
-	let installMessage = $state('Save TinyTrain to your phone for quick offline access.');
+	let installMessage = $state('Save TinyTrain to your phone for quick access.');
+	let showInstallSteps = $state(false);
 
 	let installButtonText = $derived(
 		installStatus === 'installing'
 			? 'Opening install prompt...'
 			: installStatus === 'installed'
 				? 'Added to home screen'
-				: 'Add to home screen'
+				: installPlatform === 'ios'
+					? 'Install on iPhone'
+					: 'Add to home screen'
 	);
 
 	const isStandalone = () =>
@@ -32,6 +36,7 @@
 		deferredPrompt = prompt;
 		installStatus = 'available';
 		installMessage = 'TinyTrain is ready to install on this device.';
+		showInstallSteps = false;
 	}
 
 	function showManualInstallHelp() {
@@ -39,17 +44,20 @@
 		if (!window.isSecureContext) {
 			installMessage =
 				'Install needs an HTTPS address. The local network preview can open, but phones will not install it as an app.';
+			showInstallSteps = false;
 			return;
 		}
 
 		if (isIosDevice()) {
 			installMessage = 'On iPhone or iPad, tap Share in Safari, then Add to Home Screen.';
+			showInstallSteps = true;
 			return;
 		}
 
 		installMessage = isAndroidDevice()
 			? 'On Android, open Chrome menu, then tap Install app or Add to Home screen.'
 			: 'Use your browser menu to install TinyTrain on this device.';
+		showInstallSteps = true;
 	}
 
 	async function addToHomeScreen() {
@@ -58,6 +66,7 @@
 		if (isStandalone()) {
 			installStatus = 'installed';
 			installMessage = 'TinyTrain is already installed on this device.';
+			showInstallSteps = false;
 			return;
 		}
 
@@ -83,6 +92,7 @@
 		if (choice.outcome === 'accepted') {
 			installStatus = 'installed';
 			installMessage = 'TinyTrain is being added to your home screen.';
+			showInstallSteps = false;
 			return;
 		}
 
@@ -93,6 +103,7 @@
 		if (isStandalone()) {
 			installStatus = 'installed';
 			installMessage = 'TinyTrain is already installed on this device.';
+			showInstallSteps = false;
 			return;
 		}
 
@@ -114,6 +125,7 @@
 			window.__tinytrainInstallPrompt = null;
 			installStatus = 'installed';
 			installMessage = 'TinyTrain was added to your home screen.';
+			showInstallSteps = false;
 		};
 
 		window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
@@ -125,9 +137,11 @@
 			installMessage =
 				'Install needs HTTPS. Open the deployed TinyTrain URL on your phone to add it as an app.';
 		} else if (isIosDevice()) {
+			installPlatform = 'ios';
 			installStatus = 'manual';
-			installMessage = 'On iPhone or iPad, use Safari Share, then Add to Home Screen.';
+			installMessage = 'Tap Install on iPhone for the Safari steps.';
 		} else if (isAndroidDevice()) {
+			installPlatform = 'android';
 			installMessage =
 				'On Android Chrome, the button opens the install prompt when the browser marks the app installable.';
 		}
@@ -142,22 +156,9 @@
 	});
 </script>
 
-<main
-	class="mx-auto flex min-h-svh w-full max-w-[430px] flex-col justify-center bg-[#080b0d] px-4 py-8 text-zinc-100"
->
-	<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">TinyTrain</p>
-	<h1 class="mt-2 text-3xl font-semibold text-white">Training log</h1>
-	<p class="mt-2 text-sm leading-6 text-zinc-400">Build workouts and track your training.</p>
-
-	<a
-		class="mt-6 flex min-h-12 items-center justify-center rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950"
-		href={resolve('/workouts')}
-	>
-		Open workouts
-	</a>
-
+<section aria-label="Install TinyTrain">
 	<button
-		class="mt-3 flex min-h-12 items-center justify-center rounded-lg border border-emerald-300/40 px-4 text-base font-semibold text-emerald-100 transition hover:border-emerald-200 hover:bg-emerald-300/10 disabled:cursor-default disabled:border-zinc-700 disabled:text-zinc-500 disabled:hover:bg-transparent"
+		class="flex min-h-12 w-full items-center justify-center rounded-lg border border-emerald-300/40 px-4 text-base font-semibold text-emerald-100 transition hover:border-emerald-200 hover:bg-emerald-300/10 disabled:cursor-default disabled:border-zinc-700 disabled:text-zinc-500 disabled:hover:bg-transparent"
 		type="button"
 		disabled={installStatus === 'installing' || installStatus === 'installed'}
 		onclick={addToHomeScreen}
@@ -168,4 +169,33 @@
 	<p class="mt-3 min-h-10 text-sm leading-5 text-zinc-400" aria-live="polite">
 		{installMessage}
 	</p>
-</main>
+
+	{#if showInstallSteps}
+		<section
+			class="mt-2 rounded-lg border border-zinc-800 bg-zinc-950/60 px-4 py-3 text-sm leading-5 text-zinc-300"
+			aria-label="Install instructions"
+		>
+			<p class="font-semibold text-zinc-100">
+				{installPlatform === 'ios'
+					? 'Add TinyTrain from Safari'
+					: 'Add TinyTrain from your browser'}
+			</p>
+			<ol class="mt-2 space-y-2">
+				{#if installPlatform === 'ios'}
+					<li>1. Open this page in Safari.</li>
+					<li>2. Tap Share in the Safari toolbar. If you see More first, tap More, then Share.</li>
+					<li>3. Choose Add to Home Screen.</li>
+					<li>4. Keep Open as Web App on, then tap Add.</li>
+					<li class="text-zinc-500">
+						If Add to Home Screen is missing, scroll to the bottom of the Share sheet and tap Edit
+						Actions.
+					</li>
+				{:else}
+					<li>1. Open the browser menu.</li>
+					<li>2. Choose Install app or Add to Home screen.</li>
+					<li>3. Confirm the install.</li>
+				{/if}
+			</ol>
+		</section>
+	{/if}
+</section>

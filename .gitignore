@@ -17,6 +17,8 @@ Thumbs.db
 .env.*
 !.env.example
 !.env.test
+dexie-cloud.json
+dexie-cloud.key
 
 # Vite
 vite.config.js.timestamp-*
