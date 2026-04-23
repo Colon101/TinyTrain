@@ -107,7 +107,7 @@ export function formatSetLine(weight?: number, reps?: number, rir?: number) {
 	const parts: string[] = [];
 
 	if (typeof weight === 'number' && Number.isFinite(weight)) {
-		parts.push(`${weight} kg`);
+		parts.push(`${weight}`);
 	}
 
 	if (typeof reps === 'number' && Number.isFinite(reps)) {
@@ -118,7 +118,7 @@ export function formatSetLine(weight?: number, reps?: number, rir?: number) {
 		parts.push(`RIR ${rir}`);
 	}
 
-	return parts.join(' x ') || 'Set logged';
+	return parts.join(' x ');
 }
 
 export function formatHistoryCount(count: number) {

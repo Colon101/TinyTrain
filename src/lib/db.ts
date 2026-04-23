@@ -113,9 +113,27 @@ export type SessionExerciseDetail = SessionExercise & {
 	sets: SessionSet[];
 };
 
+export type SessionExerciseProgressStatus = 'new' | 'matched' | 'improved' | 'regressed' | 'mixed';
+
+export type SessionExerciseOverview = SessionExerciseDetail & {
+	previousPerformance: ExerciseHistoryEntry | null;
+	progressStatus: SessionExerciseProgressStatus;
+	progressSummary: string;
+};
+
+export type SessionProgressSummary = {
+	improvedExercises: number;
+	matchedExercises: number;
+	regressedExercises: number;
+	mixedExercises: number;
+	newExercises: number;
+};
+
 export type SessionOverview = {
 	summary: SessionSummary;
-	exercises: SessionExerciseDetail[];
+	previousSummary: SessionSummary | null;
+	progress: SessionProgressSummary | null;
+	exercises: SessionExerciseOverview[];
 };
 
 export type ExerciseDetail = {
@@ -461,6 +479,193 @@ function withSessionSetDefaults(sessionSet: SessionSet): SessionSet {
 	};
 }
 
+async function listSessionExerciseDetails(sessionId: string): Promise<SessionExerciseDetail[]> {
+	const sessionExercises = await db.sessionExercises
+		.where('sessionId')
+		.equals(sessionId)
+		.sortBy('order');
+	const sessionExerciseIds = sessionExercises.map((sessionExercise) => sessionExercise.id);
+	const sessionSets =
+		sessionExerciseIds.length === 0
+			? []
+			: (await db.sessionSets.where('sessionExerciseId').anyOf(sessionExerciseIds).toArray()).map(
+					withSessionSetDefaults
+				);
+	const setsBySessionExerciseId = new Map<string, SessionSet[]>();
+
+	for (const sessionSet of sessionSets) {
+		const rows = setsBySessionExerciseId.get(sessionSet.sessionExerciseId) ?? [];
+		rows.push(sessionSet);
+		setsBySessionExerciseId.set(sessionSet.sessionExerciseId, rows);
+	}
+
+	return sessionExercises.map((sessionExercise) => ({
+		...sessionExercise,
+		sets: (setsBySessionExerciseId.get(sessionExercise.id) ?? []).sort(
+			(first, second) => first.order - second.order
+		)
+	}));
+}
+
+function compareHigherIsBetter(current?: number, previous?: number) {
+	if (typeof current !== 'number' || !Number.isFinite(current)) {
+		return null;
+	}
+
+	if (typeof previous !== 'number' || !Number.isFinite(previous)) {
+		return null;
+	}
+
+	if (current > previous) {
+		return 1;
+	}
+
+	if (current < previous) {
+		return -1;
+	}
+
+	return 0;
+}
+
+function compareSessionSet(currentSet: SessionSet, previousSet: SessionSet) {
+	const comparisons = [
+		compareHigherIsBetter(currentSet.weight, previousSet.weight),
+		compareHigherIsBetter(currentSet.reps, previousSet.reps)
+	].filter((comparison): comparison is -1 | 0 | 1 => comparison !== null);
+
+	if (comparisons.length === 0) {
+		return 'matched';
+	}
+
+	const hasImprovement = comparisons.includes(1);
+	const hasRegression = comparisons.includes(-1);
+
+	if (hasImprovement && !hasRegression) {
+		return 'improved';
+	}
+
+	if (hasRegression && !hasImprovement) {
+		return 'regressed';
+	}
+
+	return 'matched';
+}
+
+function summarizeExerciseProgress(
+	currentExercise: SessionExerciseDetail,
+	previousPerformance: Pick<ExerciseHistoryEntry, 'sets'> | null
+) {
+	if (!previousPerformance) {
+		return {
+			progressStatus: 'new' as const,
+			progressSummary: 'First logged performance for this exercise.'
+		};
+	}
+
+	const comparedSetCount = Math.min(currentExercise.sets.length, previousPerformance.sets.length);
+	let improvedComparableSetCount = 0;
+	let regressedComparableSetCount = 0;
+
+	for (let index = 0; index < comparedSetCount; index += 1) {
+		const comparison = compareSessionSet(
+			currentExercise.sets[index],
+			previousPerformance.sets[index]
+		);
+
+		if (comparison === 'improved') {
+			improvedComparableSetCount += 1;
+			continue;
+		}
+
+		if (comparison === 'regressed') {
+			regressedComparableSetCount += 1;
+		}
+	}
+
+	const addedSetCount = Math.max(currentExercise.sets.length - previousPerformance.sets.length, 0);
+	const removedSetCount = Math.max(
+		previousPerformance.sets.length - currentExercise.sets.length,
+		0
+	);
+	const summaryParts: string[] = [];
+
+	if (improvedComparableSetCount > 0) {
+		summaryParts.push(
+			`${improvedComparableSetCount} stronger set${improvedComparableSetCount === 1 ? '' : 's'}`
+		);
+	}
+
+	if (regressedComparableSetCount > 0) {
+		summaryParts.push(
+			`${regressedComparableSetCount} lower set${regressedComparableSetCount === 1 ? '' : 's'}`
+		);
+	}
+
+	if (addedSetCount > 0) {
+		summaryParts.push(`${addedSetCount} extra set${addedSetCount === 1 ? '' : 's'}`);
+	}
+
+	if (removedSetCount > 0) {
+		summaryParts.push(`${removedSetCount} fewer set${removedSetCount === 1 ? '' : 's'}`);
+	}
+
+	if (summaryParts.length === 0) {
+		return {
+			progressStatus: 'matched' as const,
+			progressSummary: 'Matched the last workout.'
+		};
+	}
+
+	if (
+		improvedComparableSetCount + addedSetCount > 0 &&
+		regressedComparableSetCount + removedSetCount === 0
+	) {
+		return {
+			progressStatus: 'improved' as const,
+			progressSummary: summaryParts.join(', ')
+		};
+	}
+
+	if (
+		regressedComparableSetCount + removedSetCount > 0 &&
+		improvedComparableSetCount + addedSetCount === 0
+	) {
+		return {
+			progressStatus: 'regressed' as const,
+			progressSummary: summaryParts.join(', ')
+		};
+	}
+
+	return {
+		progressStatus: 'mixed' as const,
+		progressSummary: summaryParts.join(', ')
+	};
+}
+
+async function getLatestExerciseHistoryEntries(
+	exerciseIds: string[],
+	currentSessionId: string,
+	beforeStartedAt: string
+) {
+	const uniqueExerciseIds = [...new Set(exerciseIds)];
+	const previousEntries = await Promise.all(
+		uniqueExerciseIds.map(async (exerciseId) => {
+			const previousEntry =
+				(await listExerciseHistory(exerciseId)).find(
+					(entry) => entry.sessionId !== currentSessionId && entry.startedAt < beforeStartedAt
+				) ?? null;
+
+			return [exerciseId, previousEntry] as const;
+		})
+	);
+
+	return new Map(
+		previousEntries.filter(
+			(entry): entry is readonly [string, ExerciseHistoryEntry] => entry[1] !== null
+		)
+	);
+}
+
 function createExerciseRow(
 	name: string,
 	unilateral = false,
@@ -510,11 +715,9 @@ async function getSessionSummariesByIds(sessionIds: string[]) {
 	const sessionSets =
 		sessionExerciseIds.length === 0
 			? []
-			: (await db.sessionSets
-					.where('sessionExerciseId')
-					.anyOf(sessionExerciseIds)
-					.toArray()
-			  ).map(withSessionSetDefaults);
+			: (await db.sessionSets.where('sessionExerciseId').anyOf(sessionExerciseIds).toArray()).map(
+					withSessionSetDefaults
+				);
 	const sessionExercisesBySessionId = new Map<string, SessionExercise[]>();
 	const sessionSetsBySessionId = new Map<string, SessionSet[]>();
 	const sessionExerciseById = new Map(
@@ -702,9 +905,9 @@ export async function createCustomExercise(name: string, unilateral = false) {
 		throw new Error('Exercise name is required.');
 	}
 
-	const matchingExercises = (await db.exercises.where('normalizedName').equals(normalizedName).toArray()).map(
-		withExerciseDefaults
-	);
+	const matchingExercises = (
+		await db.exercises.where('normalizedName').equals(normalizedName).toArray()
+	).map(withExerciseDefaults);
 	const existingExercise = pickPreferredExercise(matchingExercises);
 
 	if (matchingExercises.some((exercise) => exercise.source === 'baseline')) {
@@ -1114,36 +1317,127 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 		return null;
 	}
 
-	const sessionExercises = await db.sessionExercises
-		.where('sessionId')
-		.equals(sessionId)
-		.sortBy('order');
-	const sessionExerciseIds = sessionExercises.map((sessionExercise) => sessionExercise.id);
-	const sessionSets =
-		sessionExerciseIds.length === 0
-			? []
-			: (await db.sessionSets
-					.where('sessionExerciseId')
-					.anyOf(sessionExerciseIds)
-					.toArray()
-			  ).map(withSessionSetDefaults);
-	const setsBySessionExerciseId = new Map<string, SessionSet[]>();
+	const [sessionExercises, previousSession] = await Promise.all([
+		listSessionExerciseDetails(sessionId),
+		db.workoutSessions
+			.where('workoutId')
+			.equals(session.workoutId)
+			.toArray()
+			.then(
+				(sessions) =>
+					sessions
+						.filter((candidate) => candidate.startedAt < session.startedAt)
+						.sort((first, second) => first.startedAt.localeCompare(second.startedAt))
+						.at(-1) ?? null
+			)
+	]);
+	const sessionSets = sessionExercises.flatMap((sessionExercise) => sessionExercise.sets);
+	const previousExercises = previousSession
+		? await listSessionExerciseDetails(previousSession.id)
+		: [];
+	const previousSummary = previousSession
+		? summarizeSession(
+				previousSession,
+				previousExercises,
+				previousExercises.flatMap((sessionExercise) => sessionExercise.sets)
+			)
+		: null;
+	const previousPerformanceByExerciseId = await getLatestExerciseHistoryEntries(
+		sessionExercises.map((sessionExercise) => sessionExercise.exerciseId),
+		session.id,
+		session.startedAt
+	);
+	const progress =
+		previousPerformanceByExerciseId.size === 0
+			? null
+			: {
+					improvedExercises: 0,
+					matchedExercises: 0,
+					regressedExercises: 0,
+					mixedExercises: 0,
+					newExercises: 0
+				};
+	const exercises = sessionExercises.map((sessionExercise) => {
+		const previousPerformance =
+			previousPerformanceByExerciseId.get(sessionExercise.exerciseId) ?? null;
+		const { progressStatus, progressSummary } = summarizeExerciseProgress(
+			sessionExercise,
+			previousPerformance
+		);
 
-	for (const sessionSet of sessionSets) {
-		const rows = setsBySessionExerciseId.get(sessionSet.sessionExerciseId) ?? [];
-		rows.push(sessionSet);
-		setsBySessionExerciseId.set(sessionSet.sessionExerciseId, rows);
-	}
+		if (progress) {
+			switch (progressStatus) {
+				case 'improved':
+					progress.improvedExercises += 1;
+					break;
+				case 'regressed':
+					progress.regressedExercises += 1;
+					break;
+				case 'mixed':
+					progress.mixedExercises += 1;
+					break;
+				case 'new':
+					progress.newExercises += 1;
+					break;
+				default:
+					progress.matchedExercises += 1;
+			}
+		}
+
+		return {
+			...sessionExercise,
+			previousPerformance,
+			progressStatus,
+			progressSummary
+		};
+	});
 
 	return {
 		summary: summarizeSession(session, sessionExercises, sessionSets),
-		exercises: sessionExercises.map((sessionExercise) => ({
-			...sessionExercise,
-			sets: (setsBySessionExerciseId.get(sessionExercise.id) ?? []).sort(
-				(first, second) => first.order - second.order
-			)
-		}))
+		previousSummary,
+		progress,
+		exercises
 	};
+}
+
+export async function deleteWorkoutSession(sessionId: string) {
+	requireLoggedInUser();
+
+	await db.transaction(
+		'rw',
+		db.workoutSessions,
+		db.sessionExercises,
+		db.sessionSets,
+		db.workouts,
+		async () => {
+			const session = await db.workoutSessions.get(sessionId);
+
+			if (!session) {
+				return;
+			}
+
+			const sessionExercises = await db.sessionExercises
+				.where('sessionId')
+				.equals(sessionId)
+				.toArray();
+			const sessionExerciseIds = sessionExercises.map((sessionExercise) => sessionExercise.id);
+			const sessionSets =
+				sessionExerciseIds.length === 0
+					? []
+					: await db.sessionSets.where('sessionExerciseId').anyOf(sessionExerciseIds).toArray();
+
+			if (sessionSets.length > 0) {
+				await db.sessionSets.bulkDelete(sessionSets.map((sessionSet) => sessionSet.id));
+			}
+
+			if (sessionExerciseIds.length > 0) {
+				await db.sessionExercises.bulkDelete(sessionExerciseIds);
+			}
+
+			await db.workoutSessions.delete(sessionId);
+			await db.workouts.update(session.workoutId, { updatedAt: timestamp() });
+		}
+	);
 }
 
 function createExampleStartedAt(daysAgo: number, hours: number, minutes: number) {
@@ -1154,26 +1448,146 @@ function createExampleStartedAt(daysAgo: number, hours: number, minutes: number)
 	return date;
 }
 
-export async function seedExampleBackfill(): Promise<BackfillSeedResult> {
+type ExampleSetSeed = Pick<SessionSet, 'weight' | 'reps' | 'rir'>;
+
+type ExampleSessionSeed = {
+	daysAgo: number;
+	startedAt: {
+		hours: number;
+		minutes: number;
+	};
+	completedAt: {
+		hours: number;
+		minutes: number;
+	};
+	setsByExercise: ExampleSetSeed[][];
+};
+
+const EXAMPLE_BASELINE_SETS: ExampleSetSeed[][] = [
+	[
+		{ weight: 60, reps: 8, rir: 2 },
+		{ weight: 65, reps: 8, rir: 1 },
+		{ weight: 67.5, reps: 6, rir: 1 }
+	],
+	[
+		{ reps: 10, rir: 2 },
+		{ reps: 9, rir: 1 },
+		{ reps: 8, rir: 1 }
+	],
+	[
+		{ weight: 10, reps: 15, rir: 2 },
+		{ weight: 12.5, reps: 12, rir: 1 },
+		{ weight: 12.5, reps: 12, rir: 1 }
+	]
+];
+
+const EXAMPLE_IMPROVEMENT_SETS: ExampleSetSeed[][] = [
+	[
+		{ weight: 62.5, reps: 8, rir: 2 },
+		{ weight: 67.5, reps: 8, rir: 1 },
+		{ weight: 70, reps: 6, rir: 1 }
+	],
+	[
+		{ reps: 11, rir: 2 },
+		{ reps: 10, rir: 1 },
+		{ weight: 2.5, reps: 8, rir: 1 }
+	],
+	[
+		{ weight: 12.5, reps: 15, rir: 2 },
+		{ weight: 15, reps: 12, rir: 1 },
+		{ weight: 15, reps: 12, rir: 1 }
+	]
+];
+
+async function listExampleBaselineExercises() {
+	const baselineExerciseIds = EXAMPLE_EXERCISE_NAMES.map((name) =>
+		createBaselineExerciseId(normalizeName(name))
+	);
+	const exercises = (await db.exercises.bulkGet(baselineExerciseIds)).filter(isDefined);
+	const exerciseById = new Map(exercises.map((exercise) => [exercise.id, exercise]));
+
+	return baselineExerciseIds.map((exerciseId) => exerciseById.get(exerciseId)).filter(isDefined);
+}
+
+async function normalizeExampleSessionExerciseIds(sessionId: string) {
+	const sessionExercises = await db.sessionExercises.where('sessionId').equals(sessionId).toArray();
+	const exerciseIdsBySessionExerciseId = new Map(
+		sessionExercises.map((sessionExercise) => [
+			sessionExercise.id,
+			createBaselineExerciseId(normalizeName(sessionExercise.exerciseNameSnapshot))
+		])
+	);
+	const now = timestamp();
+
+	await db.transaction('rw', db.sessionExercises, db.sessionSets, async () => {
+		for (const sessionExercise of sessionExercises) {
+			const nextExerciseId = exerciseIdsBySessionExerciseId.get(sessionExercise.id);
+
+			if (!nextExerciseId || sessionExercise.exerciseId === nextExerciseId) {
+				continue;
+			}
+
+			await db.sessionExercises.update(sessionExercise.id, {
+				exerciseId: nextExerciseId,
+				updatedAt: now
+			});
+		}
+
+		if (sessionExercises.length === 0) {
+			return;
+		}
+
+		const sessionExerciseIds = sessionExercises.map((sessionExercise) => sessionExercise.id);
+		const sessionSets = await db.sessionSets
+			.where('sessionExerciseId')
+			.anyOf(sessionExerciseIds)
+			.toArray();
+
+		for (const sessionSet of sessionSets) {
+			const nextExerciseId = exerciseIdsBySessionExerciseId.get(sessionSet.sessionExerciseId);
+
+			if (!nextExerciseId || sessionSet.exerciseId === nextExerciseId) {
+				continue;
+			}
+
+			await db.sessionSets.update(sessionSet.id, {
+				exerciseId: nextExerciseId,
+				updatedAt: now
+			});
+		}
+	});
+}
+
+async function ensureExampleWorkoutSetup() {
 	requireLoggedInUser();
 
 	await ensureBaselineExercises();
 
 	const workout = await createWorkout(EXAMPLE_WORKOUT_NAME);
-	const normalizedNames = EXAMPLE_EXERCISE_NAMES.map((name) => normalizeName(name));
-	const exercises = await db.exercises.where('normalizedName').anyOf(normalizedNames).toArray();
-	const exerciseByName = new Map(exercises.map((exercise) => [exercise.normalizedName, exercise]));
+	const exercises = await listExampleBaselineExercises();
 
-	for (const name of EXAMPLE_EXERCISE_NAMES) {
-		const exercise = exerciseByName.get(normalizeName(name));
-
-		if (exercise) {
-			await addExerciseToWorkout(workout.id, exercise.id);
-		}
+	for (const exercise of exercises) {
+		await addExerciseToWorkout(workout.id, exercise.id);
 	}
 
-	const startedAtDate = createExampleStartedAt(2, 18, 10);
-	const completedAtDate = createExampleStartedAt(2, 18, 58);
+	return {
+		workout,
+		exercises
+	};
+}
+
+async function seedExampleSession(seed: ExampleSessionSeed): Promise<BackfillSeedResult> {
+	const { workout, exercises } = await ensureExampleWorkoutSetup();
+	const startedAtDate = createExampleStartedAt(
+		seed.daysAgo,
+		seed.startedAt.hours,
+		seed.startedAt.minutes
+	);
+	const completedAtDate = createExampleStartedAt(
+		seed.daysAgo,
+		seed.completedAt.hours,
+		seed.completedAt.minutes
+	);
 	const dayKey = toDayKey(startedAtDate);
 	const existingSession = (await db.workoutSessions.where('dayKey').equals(dayKey).toArray()).find(
 		(session) =>
@@ -1181,6 +1595,8 @@ export async function seedExampleBackfill(): Promise<BackfillSeedResult> {
 	);
 
 	if (existingSession) {
+		await normalizeExampleSessionExerciseIds(existingSession.id);
+
 		return {
 			workoutId: workout.id,
 			sessionId: existingSession.id,
@@ -1205,10 +1621,7 @@ export async function seedExampleBackfill(): Promise<BackfillSeedResult> {
 
 	await db.workoutSessions.add(session);
 
-	const pickedExercises = EXAMPLE_EXERCISE_NAMES.map((name) =>
-		exerciseByName.get(normalizeName(name))
-	).filter(isDefined);
-	const sessionExercises: SessionExercise[] = pickedExercises.map((exercise, index) => ({
+	const sessionExercises: SessionExercise[] = exercises.map((exercise, index) => ({
 		id: createId(),
 		sessionId,
 		workoutId: workout.id,
@@ -1222,33 +1635,16 @@ export async function seedExampleBackfill(): Promise<BackfillSeedResult> {
 
 	await db.sessionExercises.bulkAdd(sessionExercises);
 
-	const setsByExercise = [
-		[
-			{ weight: 60, reps: 8 },
-			{ weight: 65, reps: 8 },
-			{ weight: 67.5, reps: 6 }
-		],
-		[
-			{ weight: 0, reps: 10 },
-			{ weight: 0, reps: 9 },
-			{ weight: 0, reps: 8 }
-		],
-		[
-			{ weight: 10, reps: 15 },
-			{ weight: 12.5, reps: 12 },
-			{ weight: 12.5, reps: 12 }
-		]
-	];
-
 	await db.sessionSets.bulkAdd(
 		sessionExercises.flatMap((sessionExercise, exerciseIndex) =>
-			(setsByExercise[exerciseIndex] ?? []).map((set, setIndex) => ({
+			(seed.setsByExercise[exerciseIndex] ?? []).map((set, setIndex) => ({
 				id: createId(),
 				sessionExerciseId: sessionExercise.id,
 				exerciseId: sessionExercise.exerciseId,
 				order: setIndex + 1,
 				weight: set.weight,
 				reps: set.reps,
+				rir: set.rir,
 				createdAt: timestamp(
 					new Date(startedAtDate.getTime() + (exerciseIndex * 12 + setIndex * 3) * 60 * 1000)
 				),
@@ -1262,4 +1658,36 @@ export async function seedExampleBackfill(): Promise<BackfillSeedResult> {
 		sessionId,
 		created: true
 	};
+}
+
+export async function seedExampleBackfill(): Promise<BackfillSeedResult> {
+	return seedExampleSession({
+		daysAgo: 2,
+		startedAt: {
+			hours: 18,
+			minutes: 10
+		},
+		completedAt: {
+			hours: 18,
+			minutes: 58
+		},
+		setsByExercise: EXAMPLE_BASELINE_SETS
+	});
+}
+
+export async function seedImprovedBackfill(): Promise<BackfillSeedResult> {
+	await seedExampleBackfill();
+
+	return seedExampleSession({
+		daysAgo: 1,
+		startedAt: {
+			hours: 18,
+			minutes: 12
+		},
+		completedAt: {
+			hours: 19,
+			minutes: 1
+		},
+		setsByExercise: EXAMPLE_IMPROVEMENT_SETS
+	});
 }

@@ -1,12 +1,12 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
-	import type { SessionOverview } from '$lib/db';
+	import type { ExerciseHistoryEntry, SessionOverview } from '$lib/db';
 	import Icon from '$lib/ui/Icon.svelte';
 	import {
 		formatDayHeading,
 		formatDuration,
 		formatSessionStatus,
-		formatSetLine,
 		formatSessionTime
 	} from './session-format';
 
@@ -17,6 +17,7 @@
 	let api = $state<DatabaseApi | null>(null);
 	let overview = $state<SessionOverview | null>(null);
 	let isLoading = $state(true);
+	let isDeleting = $state(false);
 	let errorMessage = $state('');
 	let nowMs = $state(Date.now());
 
@@ -58,17 +59,72 @@
 			}
 		};
 	});
+
+	function formatSetCellValue(value?: number) {
+		return typeof value === 'number' && Number.isFinite(value)
+			? `${Number(value.toFixed(2))}`
+			: '-';
+	}
+
+	function formatSetOrder(order: number) {
+		return String(order).padStart(2, '0');
+	}
+
+	function getPreviousSet(previousPerformance: ExerciseHistoryEntry | null, setIndex: number) {
+		return previousPerformance?.sets[setIndex] ?? null;
+	}
+
+	function getPositiveDeltaLabel(current?: number, previous?: number) {
+		if (typeof current !== 'number' || !Number.isFinite(current) || current <= 0) {
+			return '';
+		}
+
+		const previousValue = typeof previous === 'number' && Number.isFinite(previous) ? previous : 0;
+
+		if (current <= previousValue) {
+			return '';
+		}
+
+		return `(+${Number((current - previousValue).toFixed(2))})`;
+	}
+
+	async function handleDeleteSession() {
+		if (!api || !overview || isDeleting) {
+			return;
+		}
+
+		const confirmed = window.confirm(
+			`Delete ${overview.summary.workoutNameSnapshot} from ${formatDayHeading(overview.summary.dayKey)}?`
+		);
+
+		if (!confirmed) {
+			return;
+		}
+
+		isDeleting = true;
+		errorMessage = '';
+
+		try {
+			await api.deleteWorkoutSession(overview.summary.id);
+			await goto('/', { replaceState: true });
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
+			isDeleting = false;
+		}
+	}
 </script>
 
 <section class="flex flex-1 flex-col">
 	{#if errorMessage}
 		<p
-			class="rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-3 text-sm leading-5 text-red-100"
+			class="mb-4 rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-3 text-sm leading-5 text-red-100"
 			role="alert"
 		>
 			{errorMessage}
 		</p>
-	{:else if isLoading}
+	{/if}
+
+	{#if isLoading}
 		<section class="flex flex-1 flex-col justify-center">
 			<div class="h-1.5 w-24 overflow-hidden rounded-full bg-white/10">
 				<div class="h-full w-1/2 animate-pulse rounded-full bg-emerald-300"></div>
@@ -91,22 +147,44 @@
 		</section>
 	{:else}
 		<div class="pb-5">
-			<a
-				class="flex min-h-10 items-center gap-2 rounded-lg border border-white/10 px-3 text-sm font-medium text-zinc-300"
-				href="/"
-			>
-				<Icon name="arrow-left" class="h-4 w-4" />
-				Back to home
-			</a>
-			<p class="mt-4 text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
-				Session overview
-			</p>
+			<div class="flex items-center justify-between gap-3">
+				<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
+					Session overview
+				</p>
+				<button
+					class="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-300 disabled:text-zinc-500"
+					type="button"
+					disabled={isDeleting}
+					onclick={handleDeleteSession}
+					aria-label="Delete session"
+					title="Delete session"
+				>
+					<Icon name="trash-2" class="h-4 w-4" />
+				</button>
+			</div>
 			<h1 class="mt-2 text-3xl font-semibold text-white">{overview.summary.workoutNameSnapshot}</h1>
 			<p class="mt-2 text-sm leading-6 text-zinc-400">
 				{formatDayHeading(overview.summary.dayKey)} at {formatSessionTime(
 					overview.summary.startedAt
 				)}
 			</p>
+
+			<div class="mt-4 grid gap-3">
+				{#if overview.previousSummary}
+					<a
+						class="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-4 transition hover:border-emerald-300/40 hover:bg-white/[0.05]"
+						href={`/sessions/${overview.previousSummary.id}`}
+					>
+						<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
+							Previous session
+						</p>
+						<p class="mt-2 text-sm font-semibold text-white">
+							{formatDayHeading(overview.previousSummary.dayKey)} at
+							{formatSessionTime(overview.previousSummary.startedAt)}
+						</p>
+					</a>
+				{/if}
+			</div>
 		</div>
 
 		<section class="border-y border-white/10 py-5">
@@ -149,17 +227,69 @@
 					<div class="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-4">
 						<h2 class="text-lg font-semibold text-white">{sessionExercise.exerciseNameSnapshot}</h2>
 
-						<div class="mt-3 grid gap-2">
-							{#each sessionExercise.sets as set}
-								<div
-									class="flex items-center justify-between rounded-md bg-white/[0.04] px-3 py-2 text-sm"
-								>
-									<span class="font-medium text-zinc-300">Set {set.order}</span>
-									<span class="font-semibold text-white">{formatSetLine(set.weight, set.reps)}</span
-									>
-								</div>
-							{/each}
-						</div>
+						<table class="mt-4 w-full table-fixed border-separate border-spacing-y-2">
+							<thead>
+								<tr class="text-[11px] font-semibold tracking-[0.16em] text-zinc-500 uppercase">
+									<th class="w-20 px-3 text-left"></th>
+									<th class="px-2 text-center">Weight</th>
+									<th class="px-2 text-center">Reps</th>
+									<th class="px-2 text-center">RIR</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each sessionExercise.sets as set, setIndex}
+									{@const previousSet = getPreviousSet(
+										sessionExercise.previousPerformance,
+										setIndex
+									)}
+									{@const weightDelta = getPositiveDeltaLabel(set.weight, previousSet?.weight)}
+									{@const repsDelta = getPositiveDeltaLabel(set.reps, previousSet?.reps)}
+									{@const rirDelta = getPositiveDeltaLabel(set.rir, previousSet?.rir)}
+									<tr>
+										<td class="rounded-l-md bg-white/[0.04] px-3 py-3 align-middle">
+											<span
+												class="block text-xs font-medium tracking-[0.12em] text-zinc-400 uppercase"
+											>
+												Set
+											</span>
+											<span class="mt-1 block text-xl leading-none font-semibold text-white">
+												{formatSetOrder(set.order)}
+											</span>
+										</td>
+										<td
+											class="bg-white/[0.04] px-2 py-3 text-center align-middle text-base font-semibold text-white"
+										>
+											<div class="flex items-baseline justify-center gap-1">
+												<span>{formatSetCellValue(set.weight)}</span>
+												{#if weightDelta}
+													<span class="text-xs font-semibold text-emerald-300">{weightDelta}</span>
+												{/if}
+											</div>
+										</td>
+										<td
+											class="bg-white/[0.04] px-2 py-3 text-center align-middle text-base font-semibold text-white"
+										>
+											<div class="flex items-baseline justify-center gap-1">
+												<span>{formatSetCellValue(set.reps)}</span>
+												{#if repsDelta}
+													<span class="text-xs font-semibold text-emerald-300">{repsDelta}</span>
+												{/if}
+											</div>
+										</td>
+										<td
+											class="rounded-r-md bg-white/[0.04] px-2 py-3 text-center align-middle text-base font-semibold text-white"
+										>
+											<div class="flex items-baseline justify-center gap-1">
+												<span>{formatSetCellValue(set.rir)}</span>
+												{#if rirDelta}
+													<span class="text-xs font-semibold text-emerald-300">{rirDelta}</span>
+												{/if}
+											</div>
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
 					</div>
 				{/each}
 			</div>

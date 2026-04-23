@@ -284,7 +284,7 @@
 										<span
 											class="rounded-full bg-white/[0.06] px-3 py-1 text-xs font-medium text-zinc-200"
 										>
-											{formatSetLine(set.weight, set.reps)}
+											{formatSetLine(set.weight, set.reps, set.rir)}
 										</span>
 									{/each}
 								</div>
