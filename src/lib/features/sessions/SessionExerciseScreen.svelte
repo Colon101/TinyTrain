@@ -167,8 +167,31 @@
 		return Number.isFinite(nextValue) ? nextValue : undefined;
 	}
 
+	function sanitizeInputValue(field: SessionInputField, rawValue: string) {
+		if (field === 'reps' || field === 'rir') {
+			return rawValue.replace(/\D/g, '');
+		}
+
+		const normalizedValue = rawValue.replace(',', '.').replace(/[^\d.]/g, '');
+		const [whole = '', ...decimalParts] = normalizedValue.split('.');
+
+		return decimalParts.length === 0 ? whole : `${whole}.${decimalParts.join('')}`;
+	}
+
 	function formatPlaceholder(value?: number) {
 		return typeof value === 'number' && Number.isFinite(value) ? `${Number(value.toFixed(2))}` : '';
+	}
+
+	function formatInputValue(value?: number) {
+		return typeof value === 'number' && Number.isFinite(value) ? `${Number(value.toFixed(2))}` : '';
+	}
+
+	function formatAutofillInputValue(field: SessionInputField, value?: number) {
+		if (typeof value !== 'number' || !Number.isFinite(value)) {
+			return '';
+		}
+
+		return field === 'reps' || field === 'rir' ? `${Math.round(value)}` : formatInputValue(value);
 	}
 
 	function formatSetBadgeValue(side: SessionSetSide, order: number) {
@@ -310,7 +333,13 @@
 	}
 
 	function handleSetInput(sessionSetId: string, field: SessionInputField, event: Event) {
-		const rawValue = (event.currentTarget as HTMLInputElement).value;
+		const input = event.currentTarget as HTMLInputElement;
+		const rawValue = sanitizeInputValue(field, input.value);
+
+		if (input.value !== rawValue) {
+			input.value = rawValue;
+		}
+
 		const key = `${sessionSetId}:${field}`;
 		const nextVersion = (inputVersions.get(key) ?? 0) + 1;
 		inputVersions.set(key, nextVersion);
@@ -325,6 +354,76 @@
 				}
 
 				updateOverviewSet(sessionSetId, (sessionSet) => rebuildSetOverview(sessionSet, updatedSet));
+			} catch (error) {
+				errorMessage = getErrorMessage(error);
+				await loadData();
+			}
+		})();
+	}
+
+	function focusNextSetInput(currentInput: HTMLInputElement) {
+		const inputs = [
+			...document.querySelectorAll<HTMLInputElement>('[data-session-set-input="true"]')
+		];
+		const currentIndex = inputs.indexOf(currentInput);
+		const nextInput = inputs[currentIndex + 1];
+
+		if (nextInput) {
+			nextInput.focus();
+			nextInput.select();
+			return;
+		}
+
+		currentInput.blur();
+	}
+
+	function handleSetInputKeydown(event: KeyboardEvent) {
+		if (event.key !== 'Enter') {
+			return;
+		}
+
+		event.preventDefault();
+		focusNextSetInput(event.currentTarget as HTMLInputElement);
+	}
+
+	function autofillPreviousSet(sessionSet: SessionSetOverview) {
+		const previousReference = sessionSet.previousReference;
+
+		if (!previousReference) {
+			return;
+		}
+
+		const values: Array<[SessionInputField, string]> = [
+			['weight', formatAutofillInputValue('weight', previousReference.weight)],
+			['reps', formatAutofillInputValue('reps', previousReference.reps)],
+			['rir', formatAutofillInputValue('rir', previousReference.rir)]
+		];
+		const versions = new Map(
+			values.map(([field]) => {
+				const key = `${sessionSet.id}:${field}`;
+				const nextVersion = (inputVersions.get(key) ?? 0) + 1;
+				inputVersions.set(key, nextVersion);
+
+				return [field, nextVersion] as const;
+			})
+		);
+
+		for (const [field, rawValue] of values) {
+			applyLocalInput(sessionSet.id, field, rawValue);
+		}
+
+		void (async () => {
+			try {
+				await Promise.all(
+					values.map(([field, rawValue]) =>
+						requireApi().updateSessionSetInput(sessionSet.id, field, rawValue)
+					)
+				);
+				for (const [field, version] of versions) {
+					if (inputVersions.get(`${sessionSet.id}:${field}`) !== version) {
+						return;
+					}
+				}
 			} catch (error) {
 				errorMessage = getErrorMessage(error);
 				await loadData();
@@ -491,6 +590,12 @@
 		});
 	}
 
+	function handleRemoveSet(sessionSetId: string) {
+		void runMutation(async () => {
+			await requireApi().removeSessionSetRow(sessionSetId);
+		});
+	}
+
 	function handleRemoveExercise() {
 		if (!activeExercise || !overview) {
 			return;
@@ -637,9 +742,8 @@
 						{activeExercise.exerciseNameSnapshot}
 					</h1>
 					<p class="mt-1.5 text-xs leading-5 text-zinc-400">
-						{activeExercise.exercise?.unilateral ? 'Unilateral' : 'Bilateral'} ·
-						{formatSessionStatus(overview.summary.status)} ·
-						{formatSessionTime(overview.summary.startedAt ?? overview.summary.createdAt)}
+						{overview.summary.workoutNameSnapshot} ·
+						{activeExercise.exercise?.unilateral ? 'Unilateral' : 'Bilateral'}
 					</p>
 				</div>
 
@@ -699,28 +803,35 @@
 		<section class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1 pr-1">
 			{#if activeExercise.sets.length > 0}
 				<div
-					class="mb-1.5 grid grid-cols-[3.1rem_repeat(3,minmax(0,1fr))] gap-1.5 px-1 text-[9px] font-semibold tracking-[0.16em] text-zinc-500 uppercase"
+					class="mb-1.5 grid grid-cols-[3.1rem_repeat(3,minmax(0,1fr))_2rem] gap-1.5 px-1 text-[9px] font-semibold tracking-[0.16em] text-zinc-500 uppercase"
 				>
 					<span>Set</span>
 					<span class="text-center">Weight</span>
 					<span class="text-center">Reps</span>
 					<span class="text-center">RIR</span>
+					<span class="sr-only">Remove</span>
 				</div>
 
 				<div class="grid gap-1.5">
 					{#each activeExercise.sets as set (set.id)}
 						<div
-							class="grid grid-cols-[3.1rem_repeat(3,minmax(0,1fr))] gap-1.5 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2"
+							class="grid grid-cols-[3.1rem_repeat(3,minmax(0,1fr))_2rem] gap-1.5 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2"
 						>
 							<div class="flex min-w-0 items-center justify-center">
-								<div class="flex w-full flex-col items-center justify-center leading-none">
+								<button
+									class="flex w-full flex-col items-center justify-center rounded-md leading-none transition hover:bg-white/[0.06] disabled:opacity-50"
+									type="button"
+									title="Fill from previous session"
+									disabled={!set.previousReference || isSaving}
+									onclick={() => autofillPreviousSet(set)}
+								>
 									<p class="text-[9px] font-semibold tracking-[0.16em] text-zinc-500 uppercase">
 										Set
 									</p>
 									<p class="mt-1 text-lg font-bold text-white tabular-nums">
 										{formatSetBadgeValue(set.side, set.order)}
 									</p>
-								</div>
+								</button>
 							</div>
 
 							<div class="relative">
@@ -728,9 +839,12 @@
 									class={`h-9 w-full rounded-md border px-2 text-center text-xs outline-none placeholder:text-zinc-500 ${getFieldInputClass(set.weightDelta.state)}`}
 									type="text"
 									inputmode="decimal"
+									enterkeyhint="next"
+									data-session-set-input="true"
 									value={set.weightInput ?? ''}
 									placeholder={formatPlaceholder(set.previousReference?.weight)}
 									oninput={(event) => handleSetInput(set.id, 'weight', event)}
+									onkeydown={handleSetInputKeydown}
 								/>
 								{#if set.weightDelta.label}
 									<span
@@ -745,10 +859,14 @@
 								<input
 									class={`h-9 w-full rounded-md border px-2 text-center text-xs outline-none placeholder:text-zinc-500 ${getFieldInputClass(set.repsDelta.state)}`}
 									type="text"
-									inputmode="decimal"
+									inputmode="numeric"
+									pattern="[0-9]*"
+									enterkeyhint="next"
+									data-session-set-input="true"
 									value={set.repsInput ?? ''}
 									placeholder={formatPlaceholder(set.previousReference?.reps)}
 									oninput={(event) => handleSetInput(set.id, 'reps', event)}
+									onkeydown={handleSetInputKeydown}
 								/>
 								{#if set.repsDelta.label}
 									<span
@@ -763,10 +881,14 @@
 								<input
 									class={`h-9 w-full rounded-md border px-2 text-center text-xs outline-none placeholder:text-zinc-500 ${getFieldInputClass(set.rirDelta.state)}`}
 									type="text"
-									inputmode="decimal"
+									inputmode="numeric"
+									pattern="[0-9]*"
+									enterkeyhint="next"
+									data-session-set-input="true"
 									value={set.rirInput ?? ''}
 									placeholder={formatPlaceholder(set.previousReference?.rir)}
 									oninput={(event) => handleSetInput(set.id, 'rir', event)}
+									onkeydown={handleSetInputKeydown}
 								/>
 								{#if set.rirDelta.label}
 									<span
@@ -775,6 +897,18 @@
 										{set.rirDelta.label}
 									</span>
 								{/if}
+							</div>
+
+							<div class="flex items-center justify-center">
+								<button
+									class="flex h-8 w-8 items-center justify-center rounded-md border border-white/10 text-zinc-400 transition hover:border-red-300/50 hover:bg-red-400/10 hover:text-red-100 disabled:opacity-50"
+									type="button"
+									title={activeExercise.exercise?.unilateral ? 'Remove set pair' : 'Remove set'}
+									disabled={isSaving}
+									onclick={() => handleRemoveSet(set.id)}
+								>
+									<Icon name="x" class="h-4 w-4" />
+								</button>
 							</div>
 						</div>
 					{/each}

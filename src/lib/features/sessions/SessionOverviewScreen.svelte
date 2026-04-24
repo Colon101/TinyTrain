@@ -505,9 +505,8 @@
 			return getSessionExerciseIds();
 		}
 
-		const nextIds = (dragStartSessionExerciseIds.length
-			? dragStartSessionExerciseIds
-			: getSessionExerciseIds()
+		const nextIds = (
+			dragStartSessionExerciseIds.length ? dragStartSessionExerciseIds : getSessionExerciseIds()
 		).filter((id) => id !== draggedSessionExerciseId);
 		const pointerDocumentY = pointerY + window.scrollY;
 		const targetSessionExerciseId = dragDropTargets.find(
@@ -776,12 +775,12 @@
 							{overview.summary.workoutNameSnapshot}
 						</h1>
 					{/if}
-					<p
-						class={`${overview.summary.status === 'in_progress' ? '' : 'mt-2'} text-sm leading-6 text-zinc-400`}
-					>
-						{formatDayHeading(overview.summary.dayKey)} at
-						{formatSessionTime(overview.summary.startedAt ?? overview.summary.createdAt)}
-					</p>
+					{#if overview.summary.status !== 'in_progress'}
+						<p class="mt-2 text-sm leading-6 text-zinc-400">
+							{formatDayHeading(overview.summary.dayKey)} at
+							{formatSessionTime(overview.summary.startedAt ?? overview.summary.createdAt)}
+						</p>
+					{/if}
 				</div>
 
 				<div class="relative shrink-0">
@@ -853,7 +852,7 @@
 			{#if overview.previousSummary && overview.summary.status !== 'in_progress'}
 				<a
 					class="mt-4 block rounded-lg border border-white/10 bg-white/[0.03] px-4 py-4 transition hover:border-emerald-300/40 hover:bg-white/[0.05]"
-					href={resolve('/sessions/[sessionId]', { sessionId: overview.previousSummary.id })}
+					href={`/sessions/${overview.previousSummary.id}`}
 				>
 					<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
 						Previous session
@@ -925,20 +924,22 @@
 			</section>
 		{/if}
 
-		<section class="py-5">
+		<section class="py-4">
 			<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">Exercises</p>
 
 			{#if isEditable}
-				<div class="mt-4 grid gap-3">
+				<div class="mt-3 grid gap-2.5">
 					{#each overview.exercises as sessionExercise (sessionExercise.id)}
 						{@const performedSets = getPerformedSets(sessionExercise)}
 						<div
-							class="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-4"
+							class="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-3"
 							data-session-exercise-id={sessionExercise.id}
 						>
-							<div class="grid min-w-0 grid-cols-[2.5rem_minmax(0,1fr)_2.5rem] items-center gap-3">
+							<div
+								class="grid min-w-0 grid-cols-[2.25rem_minmax(0,1fr)_2.25rem] items-center gap-3"
+							>
 								<button
-									class="flex h-10 w-10 shrink-0 touch-none items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-400 select-none"
+									class="flex h-9 w-9 shrink-0 touch-none items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-400 select-none"
 									type="button"
 									aria-label="Reorder exercise"
 									onpointerdown={(event) => handleDragPointerDown(event, sessionExercise.id)}
@@ -953,18 +954,12 @@
 									class="min-w-0 flex-1 text-left"
 									type="button"
 									disabled={overview.summary.status === 'planned'}
-									onclick={() =>
-										goto(
-											resolve('/sessions/[sessionId]/exercises/[sessionExerciseId]', {
-												sessionId,
-												sessionExerciseId: sessionExercise.id
-											})
-										)}
+									onclick={() => goto(`/sessions/${sessionId}/exercises/${sessionExercise.id}`)}
 								>
-									<p class="truncate text-base font-semibold text-white">
+									<p class="truncate text-base leading-5 font-semibold text-white">
 										{sessionExercise.exerciseNameSnapshot}
 									</p>
-									<p class="mt-1 text-sm text-zinc-400">
+									<p class="mt-0.5 text-sm leading-5 text-zinc-400">
 										{overview.summary.status === 'in_progress'
 											? `${performedSets.length} performed set${performedSets.length === 1 ? '' : 's'}`
 											: `${sessionExercise.exercise?.unilateral ? 'Unilateral' : 'Bilateral'} · ${new Set(sessionExercise.sets.map((sessionSet) => sessionSet.order)).size} set${new Set(sessionExercise.sets.map((sessionSet) => sessionSet.order)).size === 1 ? '' : 's'}`}
@@ -972,7 +967,7 @@
 								</button>
 
 								<button
-									class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-sm font-semibold text-zinc-300"
+									class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-sm font-semibold text-zinc-300"
 									type="button"
 									onclick={() =>
 										(openExerciseMenuId =
@@ -1078,7 +1073,7 @@
 				</div>
 
 				<button
-					class="mt-4 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-4 text-base font-semibold text-white disabled:text-zinc-500"
+					class="mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-4 text-base font-semibold text-white disabled:text-zinc-500"
 					type="button"
 					disabled={isSaving}
 					onclick={() => openExercisePicker('add')}

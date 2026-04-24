@@ -226,7 +226,7 @@
 						<Icon name="arrow-left" class="h-4 w-4" />
 					</button>
 
-					{#if sessionOverviewMatch && sessionTimer?.workoutNameSnapshot}
+					{#if sessionMatch && sessionTimer?.workoutNameSnapshot}
 						<h1 class="min-w-0 truncate text-base font-semibold text-white">
 							{sessionTimer.workoutNameSnapshot}
 						</h1>

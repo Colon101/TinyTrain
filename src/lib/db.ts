@@ -183,6 +183,27 @@ export type BackfillSeedResult = {
 	created: boolean;
 };
 
+export type BackfillSessionSetInput = {
+	order?: number;
+	side?: SessionSetSide;
+	weightInput?: string;
+	repsInput?: string;
+	rirInput?: string;
+};
+
+export type BackfillSessionExerciseInput = {
+	exerciseId: string;
+	sets: BackfillSessionSetInput[];
+};
+
+export type BackfillWorkoutSessionInput = {
+	workoutId: string;
+	dayKey: string;
+	startTime: string;
+	durationMinutes: number;
+	exercises: BackfillSessionExerciseInput[];
+};
+
 type HistoricalSessionExerciseMatch = {
 	session: WorkoutSession;
 	sessionExercise: SessionExercise;
@@ -380,10 +401,9 @@ class TinyTrainDatabase extends Dexie {
 		this.cloud.configure({
 			databaseUrl: 'https://zpai2umlq.dexie.cloud',
 			nameSuffix: false,
-			tryUseServiceWorker: true,
-			periodicSync: {
-				minInterval: 6 * 60 * 60 * 1000
-			}
+			tryUseServiceWorker: false,
+			disableEagerSync: true,
+			disableWebSocket: true
 		});
 	}
 }
@@ -439,6 +459,24 @@ export async function logoutFromCloud() {
 export async function syncNow() {
 	await ensureDbOpen();
 	await db.cloud.sync();
+}
+
+function canAttemptCloudSync() {
+	return Boolean(
+		db.cloud.currentUser.value?.isLoggedIn && (typeof navigator === 'undefined' || navigator.onLine)
+	);
+}
+
+async function syncCloudAtSessionBoundary() {
+	if (!canAttemptCloudSync()) {
+		return;
+	}
+
+	try {
+		await db.cloud.sync({ wait: true, purpose: 'push' });
+	} catch (error) {
+		console.warn('Session boundary sync failed; changes remain queued locally.', error);
+	}
 }
 
 export function toDayKey(input: Date | string) {
@@ -557,14 +595,24 @@ function toStoredInputValue(rawValue?: string, numericValue?: number) {
 	return typeof numericValue === 'number' && Number.isFinite(numericValue) ? `${numericValue}` : '';
 }
 
-function toParsedInputValue(rawValue: string) {
+function toParsedInputValue(rawValue: string, field?: SessionInputField) {
 	if (!rawValue.trim()) {
 		return undefined;
 	}
 
-	const nextValue = Number(rawValue.trim());
+	const cleanValue = toCleanSessionInputValue(rawValue, field);
+
+	if (!cleanValue) {
+		return undefined;
+	}
+
+	const nextValue = Number(cleanValue);
 
 	return Number.isFinite(nextValue) ? nextValue : undefined;
+}
+
+function toCleanSessionInputValue(rawValue: string, field?: SessionInputField) {
+	return field === 'reps' || field === 'rir' ? rawValue.trim().replace(/\D/g, '') : rawValue.trim();
 }
 
 function normalizeSessionSetSide(side: unknown): SessionSetSide {
@@ -1828,17 +1876,18 @@ async function updateSessionSetInputs(
 	}
 
 	const nextSet = withSessionSetDefaults(sessionSet);
-	const parsedValue = toParsedInputValue(rawValue);
+	const cleanInputValue = toCleanSessionInputValue(rawValue, field);
+	const parsedValue = toParsedInputValue(cleanInputValue, field);
 	const updatedAt = timestamp();
 
 	if (field === 'weight') {
-		nextSet.weightInput = rawValue;
+		nextSet.weightInput = cleanInputValue;
 		nextSet.weight = parsedValue;
 	} else if (field === 'reps') {
-		nextSet.repsInput = rawValue;
+		nextSet.repsInput = cleanInputValue;
 		nextSet.reps = parsedValue;
 	} else {
-		nextSet.rirInput = rawValue;
+		nextSet.rirInput = cleanInputValue;
 		nextSet.rir = parsedValue;
 	}
 
@@ -2074,6 +2123,8 @@ export async function startWorkoutSession(sessionId: string) {
 	if (!nextSession) {
 		throw new Error('Session not found.');
 	}
+
+	await syncCloudAtSessionBoundary();
 
 	return summarizeSession(nextSession, nextSessionExercises, nextSessionSets);
 }
@@ -2316,6 +2367,65 @@ export async function addSessionSetRow(sessionExerciseId: string) {
 	return nextSets.map(withSessionSetDefaults).sort(compareSessionSetRows);
 }
 
+export async function removeSessionSetRow(sessionSetId: string) {
+	requireLoggedInUser();
+
+	const sessionSet = await db.sessionSets.get(sessionSetId);
+
+	if (!sessionSet) {
+		return;
+	}
+
+	const sessionExercise = await db.sessionExercises.get(sessionSet.sessionExerciseId);
+
+	if (!sessionExercise) {
+		await db.sessionSets.delete(sessionSetId);
+		return;
+	}
+
+	await db.transaction('rw', db.sessionSets, db.sessionExercises, db.workoutSessions, async () => {
+		const currentSets = await db.sessionSets
+			.where('sessionExerciseId')
+			.equals(sessionSet.sessionExerciseId)
+			.toArray();
+		const deleteSetIds = currentSets
+			.filter((currentSet) => currentSet.order === sessionSet.order)
+			.map((currentSet) => currentSet.id);
+
+		if (deleteSetIds.length > 0) {
+			await db.sessionSets.bulkDelete(deleteSetIds);
+		}
+
+		const remainingSets = currentSets
+			.filter((currentSet) => !deleteSetIds.includes(currentSet.id))
+			.sort(compareSessionSetRows);
+		const uniqueOrders = [...new Set(remainingSets.map((currentSet) => currentSet.order))].sort(
+			(first, second) => first - second
+		);
+		const nextOrderByCurrentOrder = new Map(
+			uniqueOrders.map((order, index) => [order, index + 1] as const)
+		);
+		const now = timestamp();
+
+		await Promise.all(
+			remainingSets.map((remainingSet) => {
+				const nextOrder = nextOrderByCurrentOrder.get(remainingSet.order) ?? remainingSet.order;
+
+				if (nextOrder === remainingSet.order) {
+					return Promise.resolve(0);
+				}
+
+				return db.sessionSets.update(remainingSet.id, {
+					order: nextOrder,
+					updatedAt: now
+				});
+			})
+		);
+		await db.sessionExercises.update(sessionExercise.id, { updatedAt: now });
+		await db.workoutSessions.update(sessionExercise.sessionId, { updatedAt: now });
+	});
+}
+
 export async function updateSessionSetInput(
 	sessionSetId: string,
 	field: SessionInputField,
@@ -2426,6 +2536,8 @@ export async function completeWorkoutSession(sessionId: string) {
 			});
 		}
 	);
+
+	await syncCloudAtSessionBoundary();
 }
 
 export async function getSessionOverview(sessionId: string): Promise<SessionOverview | null> {
@@ -2600,6 +2712,133 @@ export async function deleteWorkoutSession(sessionId: string) {
 			await db.workouts.update(session.workoutId, { updatedAt: timestamp() });
 		}
 	);
+}
+
+function toBackfillSessionDate(dayKey: string, timeValue: string) {
+	const cleanDayKey = dayKey.trim();
+	const cleanTimeValue = timeValue.trim() || '12:00';
+	const date = new Date(`${cleanDayKey}T${cleanTimeValue}`);
+
+	if (!cleanDayKey || Number.isNaN(date.getTime())) {
+		throw new Error('Choose a valid backfill date.');
+	}
+
+	return date;
+}
+
+export async function createBackfillWorkoutSession(input: BackfillWorkoutSessionInput) {
+	requireLoggedInUser();
+
+	const workout = await db.workouts.get(input.workoutId);
+
+	if (!workout || workout.archived) {
+		throw new Error('Workout not found.');
+	}
+
+	const workoutExercises = await listWorkoutExercises(workout.id);
+
+	if (workoutExercises.length === 0) {
+		throw new Error('Add exercises to this workout before backfilling it.');
+	}
+
+	const workoutExerciseByExerciseId = new Map(
+		workoutExercises.map((workoutExercise) => [workoutExercise.exercise.id, workoutExercise])
+	);
+	const includedExercises = input.exercises
+		.map((entry) => ({
+			...entry,
+			workoutExercise: workoutExerciseByExerciseId.get(entry.exerciseId) ?? null,
+			sets: entry.sets.filter(
+				(set) => set.weightInput?.trim() || set.repsInput?.trim() || set.rirInput?.trim()
+			)
+		}))
+		.filter((entry) => entry.workoutExercise && entry.sets.length > 0);
+
+	if (includedExercises.length === 0) {
+		throw new Error('Log at least one set before saving.');
+	}
+
+	const startedAtDate = toBackfillSessionDate(input.dayKey, input.startTime);
+	const durationMinutes =
+		Number.isFinite(input.durationMinutes) && input.durationMinutes > 0
+			? input.durationMinutes
+			: 60;
+	const completedAtDate = new Date(startedAtDate.getTime() + durationMinutes * 60 * 1000);
+	const startedAt = timestamp(startedAtDate);
+	const completedAt = timestamp(completedAtDate);
+	const sessionId = createId();
+	const session: WorkoutSession = {
+		id: sessionId,
+		workoutId: workout.id,
+		workoutNameSnapshot: workout.name,
+		dayKey: toDayKey(startedAtDate),
+		startedAt,
+		completedAt,
+		status: 'completed',
+		createdAt: startedAt,
+		updatedAt: completedAt
+	};
+	const sessionExercises: SessionExercise[] = includedExercises.map((entry, index) => {
+		const workoutExercise = entry.workoutExercise as WorkoutExerciseWithExercise;
+
+		return {
+			id: createId(),
+			sessionId,
+			workoutId: workout.id,
+			exerciseId: workoutExercise.exercise.id,
+			exerciseNameSnapshot: workoutExercise.exercise.name,
+			order: index + 1,
+			performedAt: timestamp(new Date(startedAtDate.getTime() + index * 8 * 60 * 1000)),
+			createdAt: startedAt,
+			updatedAt: completedAt
+		};
+	});
+	const sessionSets: SessionSet[] = sessionExercises.flatMap((sessionExercise, exerciseIndex) =>
+		includedExercises[exerciseIndex].sets.map((set, setIndex) => {
+			const weightInput = toCleanSessionInputValue(set.weightInput ?? '', 'weight');
+			const repsInput = toCleanSessionInputValue(set.repsInput ?? '', 'reps');
+			const rirInput = toCleanSessionInputValue(set.rirInput ?? '', 'rir');
+
+			return {
+				id: createId(),
+				sessionExerciseId: sessionExercise.id,
+				exerciseId: sessionExercise.exerciseId,
+				order:
+					typeof set.order === 'number' && Number.isFinite(set.order) && set.order > 0
+						? set.order
+						: setIndex + 1,
+				side: normalizeSessionSetSide(set.side),
+				weightInput,
+				repsInput,
+				rirInput,
+				weight: toParsedInputValue(weightInput, 'weight'),
+				reps: toParsedInputValue(repsInput, 'reps'),
+				rir: toParsedInputValue(rirInput, 'rir'),
+				createdAt: timestamp(
+					new Date(startedAtDate.getTime() + (exerciseIndex * 8 + setIndex * 3) * 60 * 1000)
+				),
+				updatedAt: completedAt
+			};
+		})
+	);
+
+	await db.transaction(
+		'rw',
+		db.workoutSessions,
+		db.sessionExercises,
+		db.sessionSets,
+		db.workouts,
+		async () => {
+			await db.workoutSessions.add(session);
+			await db.sessionExercises.bulkAdd(sessionExercises);
+			await db.sessionSets.bulkAdd(sessionSets);
+			await db.workouts.update(workout.id, { updatedAt: completedAt });
+		}
+	);
+
+	await syncCloudAtSessionBoundary();
+
+	return summarizeSession(session, sessionExercises, sessionSets);
 }
 
 function createExampleStartedAt(daysAgo: number, hours: number, minutes: number) {
