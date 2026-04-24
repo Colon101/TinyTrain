@@ -19,6 +19,9 @@
 		grabY: number;
 	};
 
+	const DRAG_SCROLL_EDGE_PX = 96;
+	const DRAG_SCROLL_MAX_STEP_PX = 18;
+
 	let { routeWorkoutId = '' }: { routeWorkoutId?: string } = $props();
 
 	let dbApi = $state<DatabaseApi | null>(null);
@@ -38,6 +41,8 @@
 	let draggedWorkoutExerciseId = $state('');
 	let dragStartWorkoutExerciseIds = $state<string[]>([]);
 	let dragPreview = $state<DragPreview | null>(null);
+	let dragAutoScrollFrameId: number | null = null;
+	let dragAutoScrollPointerY = 0;
 	let isLoading = $state(true);
 	let isSaving = $state(false);
 	let errorMessage = $state('');
@@ -103,6 +108,7 @@
 
 		return () => {
 			disposed = true;
+			stopDragAutoScroll();
 		};
 	});
 
@@ -210,14 +216,6 @@
 		closeExercisePicker();
 		void loadSelectedWorkoutExercises();
 		void goto(resolve('/workouts/[workoutId]', { workoutId }), { keepFocus: true });
-	}
-
-	function closeWorkout() {
-		pageMode = 'workouts';
-		selectedWorkoutId = '';
-		workoutExercises = [];
-		closeExercisePicker();
-		void goto(resolve('/workouts'), { keepFocus: true });
 	}
 
 	function openExercisePicker() {
@@ -381,9 +379,63 @@
 			orderWorkoutExercises(dragStartWorkoutExerciseIds);
 		}
 
+		stopDragAutoScroll();
 		draggedWorkoutExerciseId = '';
 		dragStartWorkoutExerciseIds = [];
 		dragPreview = null;
+	}
+
+	function getDragAutoScrollStep(pointerY: number) {
+		if (pointerY < DRAG_SCROLL_EDGE_PX) {
+			return -Math.ceil(
+				((DRAG_SCROLL_EDGE_PX - pointerY) / DRAG_SCROLL_EDGE_PX) * DRAG_SCROLL_MAX_STEP_PX
+			);
+		}
+
+		const bottomEdgeDistance = window.innerHeight - pointerY;
+
+		if (bottomEdgeDistance < DRAG_SCROLL_EDGE_PX) {
+			return Math.ceil(
+				((DRAG_SCROLL_EDGE_PX - bottomEdgeDistance) / DRAG_SCROLL_EDGE_PX) * DRAG_SCROLL_MAX_STEP_PX
+			);
+		}
+
+		return 0;
+	}
+
+	function startDragAutoScroll(pointerY: number) {
+		dragAutoScrollPointerY = pointerY;
+
+		if (dragAutoScrollFrameId !== null) {
+			return;
+		}
+
+		const scrollFrame = () => {
+			if (!draggedWorkoutExerciseId) {
+				dragAutoScrollFrameId = null;
+				return;
+			}
+
+			const scrollStep = getDragAutoScrollStep(dragAutoScrollPointerY);
+
+			if (scrollStep !== 0) {
+				window.scrollBy(0, scrollStep);
+				previewDraggedOrderAt(dragAutoScrollPointerY);
+			}
+
+			dragAutoScrollFrameId = window.requestAnimationFrame(scrollFrame);
+		};
+
+		dragAutoScrollFrameId = window.requestAnimationFrame(scrollFrame);
+	}
+
+	function stopDragAutoScroll() {
+		if (dragAutoScrollFrameId === null) {
+			return;
+		}
+
+		window.cancelAnimationFrame(dragAutoScrollFrameId);
+		dragAutoScrollFrameId = null;
 	}
 
 	function handleDragPointerDown(event: PointerEvent, workoutExerciseId: string) {
@@ -415,6 +467,7 @@
 		};
 
 		target.setPointerCapture(event.pointerId);
+		startDragAutoScroll(event.clientY);
 		event.preventDefault();
 	}
 
@@ -430,6 +483,7 @@
 		};
 
 		previewDraggedOrderAt(event.clientY);
+		startDragAutoScroll(event.clientY);
 		event.preventDefault();
 	}
 
@@ -516,7 +570,6 @@
 		{dragPreview}
 		{draggedWorkoutExerciseId}
 		{draggedWorkoutExercise}
-		onBack={closeWorkout}
 		onOpenPicker={openExercisePicker}
 		onRemoveExercise={removeExercise}
 		onDragPointerDown={handleDragPointerDown}
@@ -534,6 +587,7 @@
 				{selectedPickerExerciseIdSet}
 				{selectedExerciseIds}
 				{addSelectedLabel}
+				submitDisabled={selectedPickerCount === 0}
 				{canCreateCustomExercise}
 				{isSaving}
 				onClose={closeExercisePicker}

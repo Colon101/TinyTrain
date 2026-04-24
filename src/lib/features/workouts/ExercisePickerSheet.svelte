@@ -11,8 +11,11 @@
 		selectedPickerExerciseIdSet,
 		selectedExerciseIds,
 		addSelectedLabel,
+		submitDisabled,
 		canCreateCustomExercise,
 		isSaving,
+		sheetEyebrow = 'Exercise picker',
+		sheetTitle = 'Add exercises',
 		onClose,
 		onExerciseSearchInput,
 		onCustomExerciseNameInput,
@@ -30,8 +33,11 @@
 		selectedPickerExerciseIdSet: Set<string>;
 		selectedExerciseIds: Set<string>;
 		addSelectedLabel: string;
+		submitDisabled: boolean;
 		canCreateCustomExercise: boolean;
 		isSaving: boolean;
+		sheetEyebrow?: string;
+		sheetTitle?: string;
 		onClose: () => void;
 		onExerciseSearchInput: (event: Event) => void;
 		onCustomExerciseNameInput: (value: string) => void;
@@ -50,9 +56,9 @@
 		<header class="flex items-center justify-between border-b border-white/10 px-4 py-4">
 			<div>
 				<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
-					Exercise picker
+					{sheetEyebrow}
 				</p>
-				<h2 class="mt-2 text-xl font-semibold text-white">Add exercises</h2>
+				<h2 class="mt-2 text-xl font-semibold text-white">{sheetTitle}</h2>
 			</div>
 			<button
 				class="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-300"
@@ -77,7 +83,7 @@
 			</label>
 
 			<div class="mt-4 grid gap-3">
-				{#each visiblePickerExercises as exercise}
+				{#each visiblePickerExercises as exercise (exercise.id)}
 					<button
 						class={`flex min-h-14 items-center justify-between rounded-lg border px-4 text-left transition ${
 							selectedExerciseIds.has(exercise.id)
@@ -181,7 +187,7 @@
 			<button
 				class="flex min-h-12 w-full items-center justify-center rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
 				type="button"
-				disabled={isSaving || addSelectedLabel === 'Add exercise(s)'}
+				disabled={isSaving || submitDisabled}
 				onclick={onAddSelected}
 			>
 				{addSelectedLabel}

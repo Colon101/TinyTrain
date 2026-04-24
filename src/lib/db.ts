@@ -4,6 +4,8 @@ import { BASELINE_EXERCISES } from './exercises';
 
 export type SessionStatus = 'planned' | 'in_progress' | 'completed' | 'abandoned';
 export type ExerciseSource = 'baseline' | 'custom';
+export type SessionSetSide = 'bilateral' | 'left' | 'right';
+export type SessionInputField = 'weight' | 'reps' | 'rir';
 
 export interface Exercise {
 	id: string;
@@ -39,7 +41,7 @@ export interface WorkoutSession {
 	workoutId: string;
 	workoutNameSnapshot: string;
 	dayKey: string;
-	startedAt: string;
+	startedAt?: string;
 	completedAt?: string;
 	status: SessionStatus;
 	createdAt: string;
@@ -63,6 +65,10 @@ export interface SessionSet {
 	sessionExerciseId: string;
 	exerciseId: string;
 	order: number;
+	side: SessionSetSide;
+	weightInput?: string;
+	repsInput?: string;
+	rirInput?: string;
 	weight?: number;
 	reps?: number;
 	rir?: number;
@@ -103,7 +109,8 @@ export type ExerciseHistoryEntry = {
 	workoutId: string;
 	workoutNameSnapshot: string;
 	dayKey: string;
-	startedAt: string;
+	performedAt?: string;
+	startedAt?: string;
 	completedAt?: string;
 	status: SessionStatus;
 	sets: SessionSet[];
@@ -113,12 +120,40 @@ export type SessionExerciseDetail = SessionExercise & {
 	sets: SessionSet[];
 };
 
+export type SessionFieldDeltaState = 'improved' | 'regressed' | 'matched' | 'empty';
+
+export type SessionFieldDelta = {
+	state: SessionFieldDeltaState;
+	label: string;
+};
+
+export type SessionSetReference = {
+	sessionId: string;
+	startedAt?: string;
+	completedAt?: string;
+	order: number;
+	side: SessionSetSide;
+	weight?: number;
+	reps?: number;
+	rir?: number;
+};
+
+export type SessionSetOverview = SessionSet & {
+	label: string;
+	previousReference: SessionSetReference | null;
+	weightDelta: SessionFieldDelta;
+	repsDelta: SessionFieldDelta;
+	rirDelta: SessionFieldDelta;
+};
+
 export type SessionExerciseProgressStatus = 'new' | 'matched' | 'improved' | 'regressed' | 'mixed';
 
 export type SessionExerciseOverview = SessionExerciseDetail & {
+	exercise: Exercise | null;
 	previousPerformance: ExerciseHistoryEntry | null;
 	progressStatus: SessionExerciseProgressStatus;
 	progressSummary: string;
+	sets: SessionSetOverview[];
 };
 
 export type SessionProgressSummary = {
@@ -148,6 +183,12 @@ export type BackfillSeedResult = {
 	created: boolean;
 };
 
+type HistoricalSessionExerciseMatch = {
+	session: WorkoutSession;
+	sessionExercise: SessionExercise;
+	sets: SessionSet[];
+};
+
 const STORES = {
 	exercises: '&id, &normalizedName, source, archived, updatedAt',
 	workouts: '&id, &normalizedName, archived, updatedAt',
@@ -157,7 +198,7 @@ const STORES = {
 	sessionExercises:
 		'&id, sessionId, workoutId, exerciseId, performedAt, [sessionId+order], [exerciseId+performedAt], [workoutId+performedAt]',
 	sessionSets:
-		'&id, sessionExerciseId, exerciseId, createdAt, [sessionExerciseId+order], [exerciseId+createdAt]',
+		'&id, sessionExerciseId, exerciseId, createdAt, side, [sessionExerciseId+order], [sessionExerciseId+order+side], [exerciseId+createdAt]',
 	exerciseResetEvents: '&id, exerciseId, resetAt, [exerciseId+resetAt], createdAt'
 };
 
@@ -294,6 +335,44 @@ class TinyTrainDatabase extends Dexie {
 						exercise.source = inferExerciseSource(
 							exercise.normalizedName || exercise.name || '',
 							exercise.source
+						);
+					});
+			});
+		this.version(7)
+			.stores(SYNC_SAFE_STORES)
+			.upgrade(async (transaction) => {
+				await transaction
+					.table('workoutSessions')
+					.toCollection()
+					.modify((session: Partial<WorkoutSession>) => {
+						if (!session.dayKey) {
+							session.dayKey = toDayKey(session.startedAt ?? session.createdAt ?? new Date());
+						}
+
+						if (!session.startedAt) {
+							delete session.startedAt;
+						}
+					});
+
+				await transaction
+					.table('sessionSets')
+					.toCollection()
+					.modify((sessionSet: Partial<SessionSet>) => {
+						sessionSet.side = normalizeSessionSetSide(sessionSet.side);
+						sessionSet.weight = toOptionalNumber(sessionSet.weight);
+						sessionSet.reps = toOptionalNumber(sessionSet.reps);
+						sessionSet.rir = toOptionalNumber(sessionSet.rir);
+						sessionSet.weightInput = toStoredInputValue(
+							typeof sessionSet.weightInput === 'string' ? sessionSet.weightInput : undefined,
+							sessionSet.weight
+						);
+						sessionSet.repsInput = toStoredInputValue(
+							typeof sessionSet.repsInput === 'string' ? sessionSet.repsInput : undefined,
+							sessionSet.reps
+						);
+						sessionSet.rirInput = toStoredInputValue(
+							typeof sessionSet.rirInput === 'string' ? sessionSet.rirInput : undefined,
+							sessionSet.rir
 						);
 					});
 			});
@@ -470,9 +549,261 @@ function toOptionalNumber(value: unknown) {
 	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function toStoredInputValue(rawValue?: string, numericValue?: number) {
+	if (typeof rawValue === 'string') {
+		return rawValue;
+	}
+
+	return typeof numericValue === 'number' && Number.isFinite(numericValue) ? `${numericValue}` : '';
+}
+
+function toParsedInputValue(rawValue: string) {
+	if (!rawValue.trim()) {
+		return undefined;
+	}
+
+	const nextValue = Number(rawValue.trim());
+
+	return Number.isFinite(nextValue) ? nextValue : undefined;
+}
+
+function normalizeSessionSetSide(side: unknown): SessionSetSide {
+	return side === 'left' || side === 'right' || side === 'bilateral' ? side : 'bilateral';
+}
+
+function hasInputValue(value?: string) {
+	return typeof value === 'string' && value.trim().length > 0;
+}
+
+function hasAnySetValue(
+	sessionSet: Pick<SessionSet, 'weight' | 'reps' | 'rir' | 'weightInput' | 'repsInput' | 'rirInput'>
+) {
+	return (
+		hasInputValue(sessionSet.weightInput) ||
+		hasInputValue(sessionSet.repsInput) ||
+		hasInputValue(sessionSet.rirInput) ||
+		(typeof sessionSet.weight === 'number' && Number.isFinite(sessionSet.weight)) ||
+		(typeof sessionSet.reps === 'number' && Number.isFinite(sessionSet.reps)) ||
+		(typeof sessionSet.rir === 'number' && Number.isFinite(sessionSet.rir))
+	);
+}
+
+function getSessionSortTime(session: Pick<WorkoutSession, 'startedAt' | 'createdAt'>) {
+	return toValidDate(session.startedAt ?? session.createdAt).getTime();
+}
+
+function getExerciseHistorySortTime(
+	entry: Pick<ExerciseHistoryEntry, 'performedAt' | 'startedAt' | 'completedAt' | 'dayKey'>
+) {
+	return toValidDate(
+		entry.performedAt ?? entry.startedAt ?? entry.completedAt ?? `${entry.dayKey}T12:00:00`
+	).getTime();
+}
+
+function compareSessionRows(
+	first: Pick<WorkoutSession, 'id' | 'startedAt' | 'createdAt'>,
+	second: Pick<WorkoutSession, 'id' | 'startedAt' | 'createdAt'>
+) {
+	return (
+		getSessionSortTime(first) - getSessionSortTime(second) || first.id.localeCompare(second.id)
+	);
+}
+
+function getSessionExerciseSortTime(
+	sessionExercise: Pick<SessionExercise, 'performedAt'>,
+	session: Pick<WorkoutSession, 'startedAt' | 'createdAt'>
+) {
+	return toValidDate(
+		sessionExercise.performedAt || session.startedAt || session.createdAt
+	).getTime();
+}
+
+function compareHistoricalSessionExerciseMatches(
+	first: HistoricalSessionExerciseMatch,
+	second: HistoricalSessionExerciseMatch
+) {
+	return (
+		getSessionExerciseSortTime(first.sessionExercise, first.session) -
+			getSessionExerciseSortTime(second.sessionExercise, second.session) ||
+		first.sessionExercise.id.localeCompare(second.sessionExercise.id)
+	);
+}
+
+async function listEquivalentExerciseIds(exerciseId: string) {
+	const exercise = await db.exercises.get(exerciseId);
+
+	if (!exercise) {
+		return [exerciseId];
+	}
+
+	const normalizedName = normalizeName(exercise.normalizedName || exercise.name);
+
+	if (!normalizedName) {
+		return [exerciseId];
+	}
+
+	const matchingExercises = await db.exercises
+		.where('normalizedName')
+		.equals(normalizedName)
+		.toArray();
+
+	return [
+		...new Set([exerciseId, ...matchingExercises.map((matchingExercise) => matchingExercise.id)])
+	];
+}
+
+async function listHistoricalSessionExerciseMatches(
+	exerciseId: string
+): Promise<HistoricalSessionExerciseMatch[]> {
+	const exercise = await db.exercises.get(exerciseId);
+	const equivalentExerciseIds = await listEquivalentExerciseIds(exerciseId);
+	const normalizedName = exercise ? normalizeName(exercise.normalizedName || exercise.name) : '';
+	const [idMatchedSessionExercises, nameMatchedSessionExercises] = await Promise.all([
+		equivalentExerciseIds.length === 0
+			? Promise.resolve([])
+			: equivalentExerciseIds.length === 1
+				? db.sessionExercises.where('exerciseId').equals(equivalentExerciseIds[0]).toArray()
+				: db.sessionExercises.where('exerciseId').anyOf(equivalentExerciseIds).toArray(),
+		normalizedName
+			? db.sessionExercises
+					.toArray()
+					.then((rows) =>
+						rows.filter(
+							(sessionExercise) =>
+								normalizeName(sessionExercise.exerciseNameSnapshot) === normalizedName
+						)
+					)
+			: Promise.resolve([])
+	]);
+	const sessionExercises = [
+		...new Map(
+			[...idMatchedSessionExercises, ...nameMatchedSessionExercises].map((sessionExercise) => [
+				sessionExercise.id,
+				sessionExercise
+			])
+		).values()
+	];
+
+	if (sessionExercises.length === 0) {
+		return [];
+	}
+
+	const sessionIds = [
+		...new Set(sessionExercises.map((sessionExercise) => sessionExercise.sessionId))
+	];
+	const [sessions, sessionSets] = await Promise.all([
+		db.workoutSessions.bulkGet(sessionIds),
+		db.sessionSets
+			.where('sessionExerciseId')
+			.anyOf(sessionExercises.map((sessionExercise) => sessionExercise.id))
+			.toArray()
+			.then((rows) => rows.map(withSessionSetDefaults))
+	]);
+	const sessionById = new Map(sessions.filter(isDefined).map((session) => [session.id, session]));
+	const setsBySessionExerciseId = new Map<string, SessionSet[]>();
+
+	for (const sessionSet of sessionSets) {
+		const rows = setsBySessionExerciseId.get(sessionSet.sessionExerciseId) ?? [];
+		rows.push(sessionSet);
+		setsBySessionExerciseId.set(sessionSet.sessionExerciseId, rows);
+	}
+
+	return sessionExercises
+		.flatMap((sessionExercise) => {
+			const session = sessionById.get(sessionExercise.sessionId);
+
+			if (!session || session.status === 'planned') {
+				return [];
+			}
+
+			return [
+				{
+					session,
+					sessionExercise,
+					sets: (setsBySessionExerciseId.get(sessionExercise.id) ?? []).sort(compareSessionSetRows)
+				}
+			];
+		})
+		.sort((first, second) => compareHistoricalSessionExerciseMatches(second, first));
+}
+
+async function getPreferredExerciseByNormalizedNames(normalizedNames: string[]) {
+	const uniqueNormalizedNames = [...new Set(normalizedNames.filter(Boolean))];
+
+	if (uniqueNormalizedNames.length === 0) {
+		return new Map<string, Exercise>();
+	}
+
+	const matchingExercises = await db.exercises
+		.where('normalizedName')
+		.anyOf(uniqueNormalizedNames)
+		.toArray();
+	const exercisesByNormalizedName = new Map<string, Exercise[]>();
+
+	for (const exercise of matchingExercises) {
+		const rows = exercisesByNormalizedName.get(exercise.normalizedName) ?? [];
+		rows.push(exercise);
+		exercisesByNormalizedName.set(exercise.normalizedName, rows);
+	}
+
+	return new Map(
+		uniqueNormalizedNames.flatMap((normalizedName) => {
+			const preferredExercise = pickPreferredExercise(
+				exercisesByNormalizedName.get(normalizedName) ?? []
+			);
+
+			return preferredExercise ? ([[normalizedName, preferredExercise]] as const) : [];
+		})
+	);
+}
+
+function getSessionSetSideOrder(side: SessionSetSide) {
+	switch (side) {
+		case 'right':
+			return 1;
+		case 'left':
+			return 2;
+		default:
+			return 0;
+	}
+}
+
+function compareSessionSetRows(
+	first: Pick<SessionSet, 'id' | 'order' | 'side'>,
+	second: Pick<SessionSet, 'id' | 'order' | 'side'>
+) {
+	if (first.order !== second.order) {
+		return first.order - second.order;
+	}
+
+	return (
+		getSessionSetSideOrder(normalizeSessionSetSide(first.side)) -
+			getSessionSetSideOrder(normalizeSessionSetSide(second.side)) ||
+		first.id.localeCompare(second.id)
+	);
+}
+
+function getSessionSetLabel(sessionSet: Pick<SessionSet, 'order' | 'side'>) {
+	const side = normalizeSessionSetSide(sessionSet.side);
+
+	if (side === 'bilateral') {
+		return `Set ${String(sessionSet.order).padStart(2, '0')}`;
+	}
+
+	return `${side === 'right' ? 'R' : 'L'}${sessionSet.order}`;
+}
+
+function getSessionSetKey(sessionSet: Pick<SessionSet, 'order' | 'side'>) {
+	return `${sessionSet.order}:${normalizeSessionSetSide(sessionSet.side)}`;
+}
+
 function withSessionSetDefaults(sessionSet: SessionSet): SessionSet {
 	return {
 		...sessionSet,
+		side: normalizeSessionSetSide(sessionSet.side),
+		weightInput: toStoredInputValue(sessionSet.weightInput, toOptionalNumber(sessionSet.weight)),
+		repsInput: toStoredInputValue(sessionSet.repsInput, toOptionalNumber(sessionSet.reps)),
+		rirInput: toStoredInputValue(sessionSet.rirInput, toOptionalNumber(sessionSet.rir)),
 		weight: toOptionalNumber(sessionSet.weight),
 		reps: toOptionalNumber(sessionSet.reps),
 		rir: toOptionalNumber(sessionSet.rir)
@@ -501,112 +832,150 @@ async function listSessionExerciseDetails(sessionId: string): Promise<SessionExe
 
 	return sessionExercises.map((sessionExercise) => ({
 		...sessionExercise,
-		sets: (setsBySessionExerciseId.get(sessionExercise.id) ?? []).sort(
-			(first, second) => first.order - second.order
-		)
+		sets: (setsBySessionExerciseId.get(sessionExercise.id) ?? []).sort(compareSessionSetRows)
 	}));
 }
 
-function compareHigherIsBetter(current?: number, previous?: number) {
-	if (typeof current !== 'number' || !Number.isFinite(current)) {
-		return null;
-	}
-
-	if (typeof previous !== 'number' || !Number.isFinite(previous)) {
-		return null;
-	}
-
-	if (current > previous) {
-		return 1;
-	}
-
-	if (current < previous) {
-		return -1;
-	}
-
-	return 0;
+function formatSignedDelta(diff: number) {
+	return `${diff > 0 ? '+' : ''}${Number(diff.toFixed(2))}`;
 }
 
-function compareSessionSet(currentSet: SessionSet, previousSet: SessionSet) {
-	const comparisons = [
-		compareHigherIsBetter(currentSet.weight, previousSet.weight),
-		compareHigherIsBetter(currentSet.reps, previousSet.reps)
-	].filter((comparison): comparison is -1 | 0 | 1 => comparison !== null);
-
-	if (comparisons.length === 0) {
-		return 'matched';
+function createFieldDelta(current?: number, previous?: number): SessionFieldDelta {
+	if (
+		typeof current !== 'number' ||
+		!Number.isFinite(current) ||
+		typeof previous !== 'number' ||
+		!Number.isFinite(previous)
+	) {
+		return {
+			state: 'empty',
+			label: ''
+		};
 	}
 
-	const hasImprovement = comparisons.includes(1);
-	const hasRegression = comparisons.includes(-1);
+	const diff = Number((current - previous).toFixed(2));
 
-	if (hasImprovement && !hasRegression) {
-		return 'improved';
+	if (diff > 0) {
+		return {
+			state: 'improved',
+			label: formatSignedDelta(diff)
+		};
 	}
 
-	if (hasRegression && !hasImprovement) {
-		return 'regressed';
+	if (diff < 0) {
+		return {
+			state: 'regressed',
+			label: formatSignedDelta(diff)
+		};
 	}
 
-	return 'matched';
+	return {
+		state: 'matched',
+		label: ''
+	};
+}
+
+function toSessionSetReference(
+	entry: ExerciseHistoryEntry,
+	sessionSet: SessionSet
+): SessionSetReference {
+	return {
+		sessionId: entry.sessionId,
+		startedAt: entry.startedAt,
+		completedAt: entry.completedAt,
+		order: sessionSet.order,
+		side: sessionSet.side,
+		weight: sessionSet.weight,
+		reps: sessionSet.reps,
+		rir: sessionSet.rir
+	};
+}
+
+function buildPreviousReferenceBySetKey(
+	currentExercise: SessionExerciseDetail,
+	history: ExerciseHistoryEntry[]
+) {
+	const referenceBySetKey = new Map<string, SessionSetReference>();
+
+	for (const currentSet of currentExercise.sets) {
+		const setKey = getSessionSetKey(currentSet);
+
+		if (referenceBySetKey.has(setKey)) {
+			continue;
+		}
+
+		for (const historyEntry of history) {
+			const previousSet = historyEntry.sets.find(
+				(candidate) => getSessionSetKey(candidate) === setKey && hasAnySetValue(candidate)
+			);
+
+			if (!previousSet) {
+				continue;
+			}
+
+			referenceBySetKey.set(setKey, toSessionSetReference(historyEntry, previousSet));
+			break;
+		}
+	}
+
+	return referenceBySetKey;
+}
+
+function getSessionSetOrderCount(sessionSets: Array<Pick<SessionSet, 'order'>>) {
+	return sessionSets.reduce((highestOrder, sessionSet) => {
+		return Math.max(highestOrder, sessionSet.order);
+	}, 0);
+}
+
+function findLatestHistoryEntryWithSeedRows(history: ExerciseHistoryEntry[]) {
+	return history.find((entry) => getSessionSetOrderCount(entry.sets) > 0) ?? null;
 }
 
 function summarizeExerciseProgress(
 	currentExercise: SessionExerciseDetail,
-	previousPerformance: Pick<ExerciseHistoryEntry, 'sets'> | null
+	previousReferenceBySetKey: Map<string, SessionSetReference>
 ) {
-	if (!previousPerformance) {
+	if (previousReferenceBySetKey.size === 0) {
 		return {
 			progressStatus: 'new' as const,
 			progressSummary: 'First logged performance for this exercise.'
 		};
 	}
 
-	const comparedSetCount = Math.min(currentExercise.sets.length, previousPerformance.sets.length);
-	let improvedComparableSetCount = 0;
-	let regressedComparableSetCount = 0;
+	let improvedFieldCount = 0;
+	let regressedFieldCount = 0;
 
-	for (let index = 0; index < comparedSetCount; index += 1) {
-		const comparison = compareSessionSet(
-			currentExercise.sets[index],
-			previousPerformance.sets[index]
-		);
+	for (const currentSet of currentExercise.sets) {
+		const previousReference = previousReferenceBySetKey.get(getSessionSetKey(currentSet));
 
-		if (comparison === 'improved') {
-			improvedComparableSetCount += 1;
+		if (!previousReference) {
 			continue;
 		}
 
-		if (comparison === 'regressed') {
-			regressedComparableSetCount += 1;
+		for (const fieldDelta of [
+			createFieldDelta(currentSet.weight, previousReference.weight),
+			createFieldDelta(currentSet.reps, previousReference.reps),
+			createFieldDelta(currentSet.rir, previousReference.rir)
+		]) {
+			if (fieldDelta.state === 'improved') {
+				improvedFieldCount += 1;
+				continue;
+			}
+
+			if (fieldDelta.state === 'regressed') {
+				regressedFieldCount += 1;
+			}
 		}
 	}
 
-	const addedSetCount = Math.max(currentExercise.sets.length - previousPerformance.sets.length, 0);
-	const removedSetCount = Math.max(
-		previousPerformance.sets.length - currentExercise.sets.length,
-		0
-	);
 	const summaryParts: string[] = [];
 
-	if (improvedComparableSetCount > 0) {
-		summaryParts.push(
-			`${improvedComparableSetCount} stronger set${improvedComparableSetCount === 1 ? '' : 's'}`
-		);
+	if (improvedFieldCount > 0) {
+		summaryParts.push(`${improvedFieldCount} higher field${improvedFieldCount === 1 ? '' : 's'}`);
 	}
 
-	if (regressedComparableSetCount > 0) {
-		summaryParts.push(
-			`${regressedComparableSetCount} lower set${regressedComparableSetCount === 1 ? '' : 's'}`
-		);
-	}
-
-	if (addedSetCount > 0) {
-		summaryParts.push(`${addedSetCount} extra set${addedSetCount === 1 ? '' : 's'}`);
-	}
-
-	if (removedSetCount > 0) {
-		summaryParts.push(`${removedSetCount} fewer set${removedSetCount === 1 ? '' : 's'}`);
+	if (regressedFieldCount > 0) {
+		summaryParts.push(`${regressedFieldCount} lower field${regressedFieldCount === 1 ? '' : 's'}`);
 	}
 
 	if (summaryParts.length === 0) {
@@ -616,20 +985,14 @@ function summarizeExerciseProgress(
 		};
 	}
 
-	if (
-		improvedComparableSetCount + addedSetCount > 0 &&
-		regressedComparableSetCount + removedSetCount === 0
-	) {
+	if (improvedFieldCount > 0 && regressedFieldCount === 0) {
 		return {
 			progressStatus: 'improved' as const,
 			progressSummary: summaryParts.join(', ')
 		};
 	}
 
-	if (
-		regressedComparableSetCount + removedSetCount > 0 &&
-		improvedComparableSetCount + addedSetCount === 0
-	) {
+	if (regressedFieldCount > 0 && improvedFieldCount === 0) {
 		return {
 			progressStatus: 'regressed' as const,
 			progressSummary: summaryParts.join(', ')
@@ -645,15 +1008,17 @@ function summarizeExerciseProgress(
 async function getLatestExerciseHistoryEntries(
 	exerciseIds: string[],
 	currentSessionId: string,
-	beforeStartedAt: string
+	beforeSessionAt: number
 ) {
 	const uniqueExerciseIds = [...new Set(exerciseIds)];
 	const previousEntries = await Promise.all(
 		uniqueExerciseIds.map(async (exerciseId) => {
-			const previousEntry =
-				(await listExerciseHistory(exerciseId)).find(
-					(entry) => entry.sessionId !== currentSessionId && entry.startedAt < beforeStartedAt
-				) ?? null;
+			const history = (await listExerciseHistory(exerciseId)).filter(
+				(entry) =>
+					entry.sessionId !== currentSessionId &&
+					getExerciseHistorySortTime(entry) < beforeSessionAt
+			);
+			const previousEntry = findLatestHistoryEntryWithSeedRows(history) ?? history[0] ?? null;
 
 			return [exerciseId, previousEntry] as const;
 		})
@@ -698,7 +1063,7 @@ function summarizeSession(
 ): SessionSummary {
 	return {
 		...session,
-		dayKey: session.dayKey || toDayKey(session.startedAt || session.createdAt),
+		dayKey: session.dayKey || toDayKey(session.startedAt ?? session.createdAt),
 		totalExercises: sessionExercises.length,
 		totalSets: sessionSets.length
 	};
@@ -820,21 +1185,33 @@ export async function listCustomExerciseItems(): Promise<ExerciseListItem[]> {
 		db.sessionExercises.where('exerciseId').anyOf(exerciseIds).toArray(),
 		db.exerciseResetEvents.where('exerciseId').anyOf(exerciseIds).toArray()
 	]);
+	const sessionIds = [
+		...new Set(sessionExercises.map((sessionExercise) => sessionExercise.sessionId))
+	];
+	const sessions = sessionIds.length === 0 ? [] : await db.workoutSessions.bulkGet(sessionIds);
+	const sessionById = new Map(sessions.filter(isDefined).map((session) => [session.id, session]));
 
 	const historyByExerciseId = new Map<string, Set<string>>();
 	const lastPerformedAtByExerciseId = new Map<string, string>();
 	const latestResetAtByExerciseId = new Map<string, string>();
 
 	for (const sessionExercise of sessionExercises) {
+		const session = sessionById.get(sessionExercise.sessionId);
+
+		if (!session || session.status === 'planned') {
+			continue;
+		}
+
 		const historySessions =
 			historyByExerciseId.get(sessionExercise.exerciseId) ?? new Set<string>();
 		historySessions.add(sessionExercise.sessionId);
 		historyByExerciseId.set(sessionExercise.exerciseId, historySessions);
 
 		const currentValue = lastPerformedAtByExerciseId.get(sessionExercise.exerciseId);
+		const performedAt = session.startedAt ?? sessionExercise.performedAt;
 
-		if (!currentValue || currentValue < sessionExercise.performedAt) {
-			lastPerformedAtByExerciseId.set(sessionExercise.exerciseId, sessionExercise.performedAt);
+		if (!currentValue || currentValue < performedAt) {
+			lastPerformedAtByExerciseId.set(sessionExercise.exerciseId, performedAt);
 		}
 	}
 
@@ -979,70 +1356,18 @@ export async function listExerciseResetEvents(exerciseId: string) {
 }
 
 export async function listExerciseHistory(exerciseId: string): Promise<ExerciseHistoryEntry[]> {
-	const sessionExercises = await db.sessionExercises
-		.where('exerciseId')
-		.equals(exerciseId)
-		.toArray();
-
-	if (sessionExercises.length === 0) {
-		return [];
-	}
-
-	const sessionIds = [
-		...new Set(sessionExercises.map((sessionExercise) => sessionExercise.sessionId))
-	];
-	const [sessions, sessionSets] = await Promise.all([
-		db.workoutSessions.bulkGet(sessionIds),
-		db.sessionSets
-			.where('sessionExerciseId')
-			.anyOf(sessionExercises.map((sessionExercise) => sessionExercise.id))
-			.toArray()
-			.then((rows) => rows.map(withSessionSetDefaults))
-	]);
-	const sessionById = new Map(sessions.filter(isDefined).map((session) => [session.id, session]));
-	const setsBySessionExerciseId = new Map<string, SessionSet[]>();
-
-	for (const sessionSet of sessionSets) {
-		const rows = setsBySessionExerciseId.get(sessionSet.sessionExerciseId) ?? [];
-		rows.push(sessionSet);
-		setsBySessionExerciseId.set(sessionSet.sessionExerciseId, rows);
-	}
-
-	const historyBySessionId = new Map<string, ExerciseHistoryEntry>();
-
-	for (const sessionExercise of sessionExercises) {
-		const session = sessionById.get(sessionExercise.sessionId);
-
-		if (!session) {
-			continue;
-		}
-
-		const sets = (setsBySessionExerciseId.get(sessionExercise.id) ?? []).sort(
-			(first, second) => first.order - second.order
-		);
-		const existing = historyBySessionId.get(session.id);
-
-		if (existing) {
-			existing.sets = [...existing.sets, ...sets].sort(
-				(first, second) => first.order - second.order
-			);
-			continue;
-		}
-
-		historyBySessionId.set(session.id, {
+	return (await listHistoricalSessionExerciseMatches(exerciseId)).map(
+		({ session, sessionExercise, sets }) => ({
 			sessionId: session.id,
 			workoutId: session.workoutId,
 			workoutNameSnapshot: session.workoutNameSnapshot,
-			dayKey: session.dayKey || toDayKey(session.startedAt || session.createdAt),
+			dayKey: session.dayKey || toDayKey(session.startedAt ?? session.createdAt),
+			performedAt: sessionExercise.performedAt,
 			startedAt: session.startedAt,
 			completedAt: session.completedAt,
 			status: session.status,
 			sets
-		});
-	}
-
-	return [...historyBySessionId.values()].sort((first, second) =>
-		second.startedAt.localeCompare(first.startedAt)
+		})
 	);
 }
 
@@ -1179,6 +1504,50 @@ export async function addExerciseToWorkout(workoutId: string, exerciseId: string
 	});
 }
 
+async function syncWorkoutExercisesFromSession(sessionId: string, now = timestamp()) {
+	const session = await db.workoutSessions.get(sessionId);
+
+	if (!session) {
+		return;
+	}
+
+	const [sessionExercises, workoutExercises] = await Promise.all([
+		db.sessionExercises.where('sessionId').equals(sessionId).sortBy('order'),
+		db.workoutExercises.where('workoutId').equals(session.workoutId).toArray()
+	]);
+	const workoutExerciseByExerciseId = new Map(
+		workoutExercises.map((workoutExercise) => [workoutExercise.exerciseId, workoutExercise])
+	);
+	const sessionExerciseIdSet = new Set(
+		sessionExercises.map((sessionExercise) => sessionExercise.exerciseId)
+	);
+	const workoutExerciseIdsToDelete = workoutExercises
+		.filter((workoutExercise) => !sessionExerciseIdSet.has(workoutExercise.exerciseId))
+		.map((workoutExercise) => workoutExercise.id);
+	const nextWorkoutExercises = sessionExercises.map((sessionExercise, index) => {
+		const existingWorkoutExercise = workoutExerciseByExerciseId.get(sessionExercise.exerciseId);
+
+		return {
+			id: existingWorkoutExercise?.id ?? createId(),
+			workoutId: session.workoutId,
+			exerciseId: sessionExercise.exerciseId,
+			order: index + 1,
+			createdAt: existingWorkoutExercise?.createdAt ?? now,
+			updatedAt: now
+		} satisfies WorkoutExercise;
+	});
+
+	if (workoutExerciseIdsToDelete.length > 0) {
+		await db.workoutExercises.bulkDelete(workoutExerciseIdsToDelete);
+	}
+
+	if (nextWorkoutExercises.length > 0) {
+		await db.workoutExercises.bulkPut(nextWorkoutExercises);
+	}
+
+	await db.workouts.update(session.workoutId, { updatedAt: now });
+}
+
 export async function reorderWorkoutExercises(
 	workoutId: string,
 	orderedWorkoutExerciseIds: string[]
@@ -1278,6 +1647,251 @@ export async function removeWorkoutExercise(workoutExerciseId: string) {
 	});
 }
 
+async function getSeedSetOrderCount(exercise: Exercise, excludeSessionId?: string) {
+	const latestHistoricalMatch = (await listHistoricalSessionExerciseMatches(exercise.id)).find(
+		({ session, sets }) => session.id !== excludeSessionId && sets.length > 0
+	);
+
+	if (!latestHistoricalMatch) {
+		return 0;
+	}
+
+	return getSessionSetOrderCount(latestHistoricalMatch.sets);
+}
+
+function createSessionSetRow(
+	sessionExerciseId: string,
+	exerciseId: string,
+	order: number,
+	side: SessionSetSide,
+	now = timestamp()
+): SessionSet {
+	return {
+		id: createId(),
+		sessionExerciseId,
+		exerciseId,
+		order,
+		side,
+		weightInput: '',
+		repsInput: '',
+		rirInput: '',
+		createdAt: now,
+		updatedAt: now
+	};
+}
+
+function buildSeedSessionSetRows(
+	sessionExerciseId: string,
+	exerciseId: string,
+	orderCount: number,
+	unilateral: boolean,
+	now = timestamp()
+) {
+	const sessionSets: SessionSet[] = [];
+
+	for (let order = 1; order <= orderCount; order += 1) {
+		if (unilateral) {
+			sessionSets.push(createSessionSetRow(sessionExerciseId, exerciseId, order, 'right', now));
+			sessionSets.push(createSessionSetRow(sessionExerciseId, exerciseId, order, 'left', now));
+			continue;
+		}
+
+		sessionSets.push(createSessionSetRow(sessionExerciseId, exerciseId, order, 'bilateral', now));
+	}
+
+	return sessionSets;
+}
+
+async function buildSessionSeedSetRows(
+	sessionExerciseId: string,
+	exercise: Exercise,
+	now = timestamp(),
+	excludeSessionId?: string
+) {
+	const orderCount = await getSeedSetOrderCount(exercise, excludeSessionId);
+
+	return buildSeedSessionSetRows(
+		sessionExerciseId,
+		exercise.id,
+		orderCount,
+		exercise.unilateral,
+		now
+	);
+}
+
+async function ensureEditableSessionSeedRows(
+	session: WorkoutSession,
+	sessionExercises: SessionExerciseDetail[]
+) {
+	if (session.status === 'completed' || session.status === 'abandoned') {
+		return sessionExercises;
+	}
+
+	const missingSeedRows = sessionExercises.filter(
+		(sessionExercise) => sessionExercise.sets.length === 0
+	);
+
+	if (missingSeedRows.length === 0) {
+		return sessionExercises;
+	}
+
+	const exerciseById = new Map(
+		(
+			await db.exercises.bulkGet(
+				missingSeedRows.map((sessionExercise) => sessionExercise.exerciseId)
+			)
+		)
+			.filter(isDefined)
+			.map((exercise) => {
+				const nextExercise = withExerciseDefaults(exercise);
+				return [nextExercise.id, nextExercise] as const;
+			})
+	);
+	const now = timestamp();
+	const seedRowsBySessionExerciseId = new Map(
+		await Promise.all(
+			missingSeedRows.map(async (sessionExercise) => {
+				const exercise = exerciseById.get(sessionExercise.exerciseId);
+
+				if (!exercise) {
+					return [sessionExercise.id, [] as SessionSet[]] as const;
+				}
+
+				return [
+					sessionExercise.id,
+					await buildSessionSeedSetRows(sessionExercise.id, exercise, now, session.id)
+				] as const;
+			})
+		)
+	);
+	const seededSessionExerciseIds = [...seedRowsBySessionExerciseId.entries()]
+		.filter(([, sessionSets]) => sessionSets.length > 0)
+		.map(([sessionExerciseId]) => sessionExerciseId);
+
+	if (seededSessionExerciseIds.length === 0) {
+		return sessionExercises;
+	}
+
+	await db.transaction('rw', db.sessionSets, db.sessionExercises, db.workoutSessions, async () => {
+		await db.sessionSets.bulkAdd(
+			seededSessionExerciseIds.flatMap(
+				(sessionExerciseId) => seedRowsBySessionExerciseId.get(sessionExerciseId) ?? []
+			)
+		);
+		await Promise.all(
+			seededSessionExerciseIds.map((sessionExerciseId) =>
+				db.sessionExercises.update(sessionExerciseId, { updatedAt: now })
+			)
+		);
+		await db.workoutSessions.update(session.id, { updatedAt: now });
+	});
+
+	return listSessionExerciseDetails(session.id);
+}
+
+async function deleteWorkoutSessionRows(sessionId: string) {
+	const session = await db.workoutSessions.get(sessionId);
+
+	if (!session) {
+		return null;
+	}
+
+	const sessionExercises = await db.sessionExercises.where('sessionId').equals(sessionId).toArray();
+	const sessionExerciseIds = sessionExercises.map((sessionExercise) => sessionExercise.id);
+	const sessionSets =
+		sessionExerciseIds.length === 0
+			? []
+			: await db.sessionSets.where('sessionExerciseId').anyOf(sessionExerciseIds).toArray();
+
+	if (sessionSets.length > 0) {
+		await db.sessionSets.bulkDelete(sessionSets.map((sessionSet) => sessionSet.id));
+	}
+
+	if (sessionExerciseIds.length > 0) {
+		await db.sessionExercises.bulkDelete(sessionExerciseIds);
+	}
+
+	await db.workoutSessions.delete(sessionId);
+
+	return session;
+}
+
+async function updateSessionSetInputs(
+	sessionSetId: string,
+	field: SessionInputField,
+	rawValue: string
+) {
+	const sessionSet = await db.sessionSets.get(sessionSetId);
+
+	if (!sessionSet) {
+		throw new Error('Set not found.');
+	}
+
+	const nextSet = withSessionSetDefaults(sessionSet);
+	const parsedValue = toParsedInputValue(rawValue);
+	const updatedAt = timestamp();
+
+	if (field === 'weight') {
+		nextSet.weightInput = rawValue;
+		nextSet.weight = parsedValue;
+	} else if (field === 'reps') {
+		nextSet.repsInput = rawValue;
+		nextSet.reps = parsedValue;
+	} else {
+		nextSet.rirInput = rawValue;
+		nextSet.rir = parsedValue;
+	}
+
+	nextSet.updatedAt = updatedAt;
+	await db.sessionSets.put(nextSet);
+
+	return nextSet;
+}
+
+export async function cleanupStaleSessions(todayDayKey = toDayKey(new Date())) {
+	if (!db.cloud.currentUser.value?.isLoggedIn) {
+		return;
+	}
+
+	const [plannedSessions, runningSessions] = await Promise.all([
+		db.workoutSessions.where('status').equals('planned').toArray(),
+		db.workoutSessions.where('status').equals('in_progress').toArray()
+	]);
+	const stalePlannedSessions = plannedSessions.filter((session) => session.dayKey < todayDayKey);
+	const staleRunningSessions = runningSessions.filter((session) => session.dayKey < todayDayKey);
+
+	if (stalePlannedSessions.length === 0 && staleRunningSessions.length === 0) {
+		return;
+	}
+
+	const now = timestamp();
+
+	await db.transaction('rw', db.workoutSessions, db.sessionExercises, db.sessionSets, async () => {
+		for (const stalePlannedSession of stalePlannedSessions) {
+			await deleteWorkoutSessionRows(stalePlannedSession.id);
+		}
+
+		for (const staleRunningSession of staleRunningSessions) {
+			await db.workoutSessions.update(staleRunningSession.id, {
+				status: 'abandoned',
+				completedAt: now,
+				updatedAt: now
+			});
+		}
+	});
+}
+
+export async function getCurrentInProgressSession() {
+	const sessions = await db.workoutSessions.where('status').equals('in_progress').toArray();
+	const latestSession = sessions.sort((first, second) => compareSessionRows(second, first)).at(0);
+
+	if (!latestSession) {
+		return null;
+	}
+
+	return (await getSessionSummariesByIds([latestSession.id])).get(latestSession.id) ?? null;
+}
+
 export async function listSessionSummariesForMonth(monthDate: Date) {
 	const start = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
 	const end = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0);
@@ -1287,13 +1901,13 @@ export async function listSessionSummariesForMonth(monthDate: Date) {
 		.toArray();
 
 	return [...(await getSessionSummariesByIds(sessions.map((session) => session.id))).values()].sort(
-		(first, second) => first.startedAt.localeCompare(second.startedAt)
+		(first, second) => compareSessionRows(first, second)
 	);
 }
 
 export async function getDayOverview(dayKey: string): Promise<DayOverview> {
-	const sessions = await db.workoutSessions.where('dayKey').equals(dayKey).sortBy('startedAt');
-	const latestSession = sessions.at(-1) ?? null;
+	const sessions = await db.workoutSessions.where('dayKey').equals(dayKey).toArray();
+	const latestSession = sessions.sort(compareSessionRows).at(-1) ?? null;
 
 	if (!latestSession) {
 		return {
@@ -1310,6 +1924,510 @@ export async function getDayOverview(dayKey: string): Promise<DayOverview> {
 	};
 }
 
+export async function scheduleWorkoutSession(workoutId: string, dayKey: string) {
+	requireLoggedInUser();
+
+	const todayDayKey = toDayKey(new Date());
+
+	if (dayKey !== todayDayKey) {
+		throw new Error('You can only schedule a workout for today.');
+	}
+
+	await cleanupStaleSessions(todayDayKey);
+
+	const existingSession = (await db.workoutSessions.where('dayKey').equals(dayKey).toArray()).find(
+		(session) =>
+			session.status === 'planned' ||
+			session.status === 'in_progress' ||
+			session.status === 'completed' ||
+			session.status === 'abandoned'
+	);
+
+	if (existingSession) {
+		throw new Error('A session already exists for today.');
+	}
+
+	const workout = await db.workouts.get(workoutId);
+
+	if (!workout || workout.archived) {
+		throw new Error('Workout not found.');
+	}
+
+	const workoutExercises = await listWorkoutExercises(workoutId);
+	const createdAt = timestamp();
+	const session: WorkoutSession = {
+		id: createId(),
+		workoutId,
+		workoutNameSnapshot: workout.name,
+		dayKey,
+		status: 'planned',
+		createdAt,
+		updatedAt: createdAt
+	};
+	const sessionExercises: SessionExercise[] = workoutExercises.map((workoutExercise, index) => ({
+		id: createId(),
+		sessionId: session.id,
+		workoutId,
+		exerciseId: workoutExercise.exercise.id,
+		exerciseNameSnapshot: workoutExercise.exercise.name,
+		order: index + 1,
+		performedAt: createdAt,
+		createdAt,
+		updatedAt: createdAt
+	}));
+	const sessionSets = (
+		await Promise.all(
+			sessionExercises.map((sessionExercise, index) =>
+				buildSessionSeedSetRows(sessionExercise.id, workoutExercises[index].exercise, createdAt)
+			)
+		)
+	).flat();
+
+	await db.transaction(
+		'rw',
+		db.workoutSessions,
+		db.sessionExercises,
+		db.sessionSets,
+		db.workouts,
+		async () => {
+			await db.workoutSessions.add(session);
+
+			if (sessionExercises.length > 0) {
+				await db.sessionExercises.bulkAdd(sessionExercises);
+			}
+
+			if (sessionSets.length > 0) {
+				await db.sessionSets.bulkAdd(sessionSets);
+			}
+
+			await db.workouts.update(workoutId, { updatedAt: createdAt });
+		}
+	);
+
+	return summarizeSession(session, sessionExercises, sessionSets);
+}
+
+export async function startWorkoutSession(sessionId: string) {
+	requireLoggedInUser();
+
+	const session = await db.workoutSessions.get(sessionId);
+
+	if (!session) {
+		throw new Error('Session not found.');
+	}
+
+	if (session.status === 'completed' || session.status === 'abandoned') {
+		return summarizeSession(
+			session,
+			await db.sessionExercises.where('sessionId').equals(sessionId).toArray(),
+			(await listSessionExerciseDetails(sessionId)).flatMap(
+				(sessionExercise) => sessionExercise.sets
+			)
+		);
+	}
+
+	if (session.status === 'in_progress' && session.startedAt) {
+		return summarizeSession(
+			session,
+			await db.sessionExercises.where('sessionId').equals(sessionId).toArray(),
+			(await listSessionExerciseDetails(sessionId)).flatMap(
+				(sessionExercise) => sessionExercise.sets
+			)
+		);
+	}
+
+	const now = timestamp();
+
+	await db.transaction('rw', db.workoutSessions, db.sessionExercises, async () => {
+		await db.workoutSessions.update(sessionId, {
+			status: 'in_progress',
+			startedAt: now,
+			updatedAt: now
+		});
+
+		const sessionExercises = await db.sessionExercises
+			.where('sessionId')
+			.equals(sessionId)
+			.toArray();
+
+		if (sessionExercises.length > 0) {
+			await Promise.all(
+				sessionExercises.map((sessionExercise) =>
+					db.sessionExercises.update(sessionExercise.id, {
+						performedAt: now,
+						updatedAt: now
+					})
+				)
+			);
+		}
+	});
+
+	const nextSession = await db.workoutSessions.get(sessionId);
+	const nextSessionExercises = await db.sessionExercises
+		.where('sessionId')
+		.equals(sessionId)
+		.toArray();
+	const nextSessionSets = (await listSessionExerciseDetails(sessionId)).flatMap(
+		(sessionExercise) => sessionExercise.sets
+	);
+
+	if (!nextSession) {
+		throw new Error('Session not found.');
+	}
+
+	return summarizeSession(nextSession, nextSessionExercises, nextSessionSets);
+}
+
+export async function reorderSessionExercises(
+	sessionId: string,
+	orderedSessionExerciseIds: string[]
+) {
+	requireLoggedInUser();
+
+	await db.transaction('rw', db.sessionExercises, db.workoutSessions, async () => {
+		const sessionExercises = await db.sessionExercises
+			.where('sessionId')
+			.equals(sessionId)
+			.toArray();
+		const sessionExerciseById = new Map(
+			sessionExercises.map((sessionExercise) => [sessionExercise.id, sessionExercise])
+		);
+		const orderedIds = orderedSessionExerciseIds.filter((id) => sessionExerciseById.has(id));
+		const orderedIdSet = new Set(orderedIds);
+		const missingIds = sessionExercises
+			.filter((sessionExercise) => !orderedIdSet.has(sessionExercise.id))
+			.sort((first, second) => first.order - second.order)
+			.map((sessionExercise) => sessionExercise.id);
+		const nextIds = [...orderedIds, ...missingIds];
+		const now = timestamp();
+
+		await Promise.all(
+			nextIds.map((id, index) =>
+				db.sessionExercises.update(id, {
+					order: index + 1,
+					updatedAt: now
+				})
+			)
+		);
+		await db.workoutSessions.update(sessionId, { updatedAt: now });
+	});
+}
+
+export async function replaceSessionExercise(sessionExerciseId: string, exerciseId: string) {
+	requireLoggedInUser();
+
+	const sessionExercise = await db.sessionExercises.get(sessionExerciseId);
+
+	if (!sessionExercise) {
+		throw new Error('Exercise not found in this session.');
+	}
+
+	const [session, exercise, sessionExercises] = await Promise.all([
+		db.workoutSessions.get(sessionExercise.sessionId),
+		getExercise(exerciseId),
+		db.sessionExercises.where('sessionId').equals(sessionExercise.sessionId).toArray()
+	]);
+
+	if (!session) {
+		throw new Error('Session not found.');
+	}
+
+	if (!exercise) {
+		throw new Error('Exercise not found.');
+	}
+
+	if (
+		sessionExercises.some(
+			(candidate) => candidate.id !== sessionExerciseId && candidate.exerciseId === exerciseId
+		)
+	) {
+		throw new Error('That exercise is already in this session.');
+	}
+
+	const now = timestamp();
+	const seedSets = await buildSessionSeedSetRows(sessionExerciseId, exercise, now, session.id);
+
+	await db.transaction('rw', db.sessionExercises, db.sessionSets, db.workoutSessions, async () => {
+		const currentSets = await db.sessionSets
+			.where('sessionExerciseId')
+			.equals(sessionExerciseId)
+			.toArray();
+
+		if (currentSets.length > 0) {
+			await db.sessionSets.bulkDelete(currentSets.map((sessionSet) => sessionSet.id));
+		}
+
+		await db.sessionExercises.update(sessionExerciseId, {
+			exerciseId: exercise.id,
+			exerciseNameSnapshot: exercise.name,
+			updatedAt: now
+		});
+
+		if (seedSets.length > 0) {
+			await db.sessionSets.bulkAdd(seedSets);
+		}
+
+		await db.workoutSessions.update(session.id, { updatedAt: now });
+	});
+}
+
+export async function removeSessionExercise(sessionExerciseId: string) {
+	requireLoggedInUser();
+
+	const sessionExercise = await db.sessionExercises.get(sessionExerciseId);
+
+	if (!sessionExercise) {
+		return;
+	}
+
+	await db.transaction('rw', db.sessionExercises, db.sessionSets, db.workoutSessions, async () => {
+		const currentSets = await db.sessionSets
+			.where('sessionExerciseId')
+			.equals(sessionExerciseId)
+			.toArray();
+
+		if (currentSets.length > 0) {
+			await db.sessionSets.bulkDelete(currentSets.map((sessionSet) => sessionSet.id));
+		}
+
+		await db.sessionExercises.delete(sessionExerciseId);
+
+		const remainingSessionExercises = await db.sessionExercises
+			.where('sessionId')
+			.equals(sessionExercise.sessionId)
+			.sortBy('order');
+		const now = timestamp();
+
+		await Promise.all(
+			remainingSessionExercises.map((remainingSessionExercise, index) =>
+				db.sessionExercises.update(remainingSessionExercise.id, {
+					order: index + 1,
+					updatedAt: now
+				})
+			)
+		);
+		await db.workoutSessions.update(sessionExercise.sessionId, { updatedAt: now });
+	});
+}
+
+export async function addExerciseToSession(sessionId: string, exerciseId: string) {
+	requireLoggedInUser();
+
+	const [session, exercise] = await Promise.all([
+		db.workoutSessions.get(sessionId),
+		getExercise(exerciseId)
+	]);
+
+	if (!session) {
+		throw new Error('Session not found.');
+	}
+
+	if (!exercise) {
+		throw new Error('Exercise not found.');
+	}
+
+	const existingSessionExercise = await db.sessionExercises
+		.where('sessionId')
+		.equals(sessionId)
+		.toArray()
+		.then((rows) => rows.find((row) => row.exerciseId === exerciseId));
+
+	if (existingSessionExercise) {
+		throw new Error('That exercise is already in this session.');
+	}
+
+	const existingSessionExercises = await db.sessionExercises
+		.where('sessionId')
+		.equals(sessionId)
+		.toArray();
+	const nextOrder =
+		existingSessionExercises.reduce(
+			(highestOrder, currentSessionExercise) =>
+				Math.max(highestOrder, currentSessionExercise.order),
+			0
+		) + 1;
+	const now = timestamp();
+	const sessionExercise: SessionExercise = {
+		id: createId(),
+		sessionId,
+		workoutId: session.workoutId,
+		exerciseId: exercise.id,
+		exerciseNameSnapshot: exercise.name,
+		order: nextOrder,
+		performedAt: session.startedAt ?? now,
+		createdAt: now,
+		updatedAt: now
+	};
+	const seedSets = await buildSessionSeedSetRows(sessionExercise.id, exercise, now, session.id);
+
+	await db.transaction('rw', db.sessionExercises, db.sessionSets, db.workoutSessions, async () => {
+		await db.sessionExercises.add(sessionExercise);
+
+		if (seedSets.length > 0) {
+			await db.sessionSets.bulkAdd(seedSets);
+		}
+
+		await db.workoutSessions.update(sessionId, { updatedAt: now });
+	});
+
+	return sessionExercise;
+}
+
+export async function addSessionSetRow(sessionExerciseId: string) {
+	requireLoggedInUser();
+
+	const sessionExercise = await db.sessionExercises.get(sessionExerciseId);
+
+	if (!sessionExercise) {
+		throw new Error('Exercise not found in this session.');
+	}
+
+	const exercise = await getExercise(sessionExercise.exerciseId);
+
+	if (!exercise) {
+		throw new Error('Exercise not found.');
+	}
+
+	const currentSets = await db.sessionSets
+		.where('sessionExerciseId')
+		.equals(sessionExerciseId)
+		.toArray();
+	const nextOrder =
+		currentSets.reduce((highestOrder, currentSet) => Math.max(highestOrder, currentSet.order), 0) +
+		1;
+	const now = timestamp();
+	const nextSets = buildSeedSessionSetRows(
+		sessionExerciseId,
+		sessionExercise.exerciseId,
+		1,
+		exercise.unilateral,
+		now
+	).map((sessionSet) => ({
+		...sessionSet,
+		order: nextOrder
+	}));
+
+	await db.transaction('rw', db.sessionSets, db.sessionExercises, db.workoutSessions, async () => {
+		await db.sessionSets.bulkAdd(nextSets);
+		await db.sessionExercises.update(sessionExerciseId, { updatedAt: now });
+		await db.workoutSessions.update(sessionExercise.sessionId, { updatedAt: now });
+	});
+
+	return nextSets.map(withSessionSetDefaults).sort(compareSessionSetRows);
+}
+
+export async function updateSessionSetInput(
+	sessionSetId: string,
+	field: SessionInputField,
+	rawValue: string
+) {
+	requireLoggedInUser();
+
+	return updateSessionSetInputs(sessionSetId, field, rawValue);
+}
+
+export async function resetSessionInputs(sessionId: string) {
+	requireLoggedInUser();
+
+	const session = await db.workoutSessions.get(sessionId);
+
+	if (!session) {
+		throw new Error('Session not found.');
+	}
+
+	const workoutExercises = await listWorkoutExercises(session.workoutId);
+	const now = timestamp();
+	const nextSessionExercises: SessionExercise[] = workoutExercises.map(
+		(workoutExercise, index) => ({
+			id: createId(),
+			sessionId,
+			workoutId: session.workoutId,
+			exerciseId: workoutExercise.exercise.id,
+			exerciseNameSnapshot: workoutExercise.exercise.name,
+			order: index + 1,
+			performedAt: session.startedAt ?? now,
+			createdAt: now,
+			updatedAt: now
+		})
+	);
+	const nextSessionSets = (
+		await Promise.all(
+			nextSessionExercises.map((sessionExercise, index) =>
+				buildSessionSeedSetRows(
+					sessionExercise.id,
+					workoutExercises[index].exercise,
+					now,
+					sessionId
+				)
+			)
+		)
+	).flat();
+
+	await db.transaction('rw', db.sessionSets, db.sessionExercises, db.workoutSessions, async () => {
+		const sessionExercises = await db.sessionExercises
+			.where('sessionId')
+			.equals(sessionId)
+			.toArray();
+		const sessionExerciseIds = sessionExercises.map((sessionExercise) => sessionExercise.id);
+
+		if (sessionExerciseIds.length > 0) {
+			const sessionSets = await db.sessionSets
+				.where('sessionExerciseId')
+				.anyOf(sessionExerciseIds)
+				.toArray();
+
+			if (sessionSets.length > 0) {
+				await db.sessionSets.bulkDelete(sessionSets.map((sessionSet) => sessionSet.id));
+			}
+
+			await db.sessionExercises.bulkDelete(sessionExerciseIds);
+		}
+
+		if (nextSessionExercises.length > 0) {
+			await db.sessionExercises.bulkAdd(nextSessionExercises);
+		}
+
+		if (nextSessionSets.length > 0) {
+			await db.sessionSets.bulkAdd(nextSessionSets);
+		}
+
+		await db.workoutSessions.update(sessionId, { updatedAt: now });
+	});
+}
+
+export async function completeWorkoutSession(sessionId: string) {
+	requireLoggedInUser();
+
+	const session = await db.workoutSessions.get(sessionId);
+
+	if (!session) {
+		throw new Error('Session not found.');
+	}
+
+	if (session.status === 'completed' || session.status === 'abandoned') {
+		return;
+	}
+
+	const now = timestamp();
+
+	await db.transaction(
+		'rw',
+		db.workoutSessions,
+		db.sessionExercises,
+		db.workoutExercises,
+		db.workouts,
+		async () => {
+			await syncWorkoutExercisesFromSession(sessionId, now);
+			await db.workoutSessions.update(sessionId, {
+				status: 'completed',
+				startedAt: session.startedAt ?? now,
+				completedAt: now,
+				updatedAt: now
+			});
+		}
+	);
+}
+
 export async function getSessionOverview(sessionId: string): Promise<SessionOverview | null> {
 	const session = await db.workoutSessions.get(sessionId);
 
@@ -1317,7 +2435,8 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 		return null;
 	}
 
-	const [sessionExercises, previousSession] = await Promise.all([
+	const currentSessionAt = getSessionSortTime(session);
+	const [sessionExercises, previousSession, exercises] = await Promise.all([
 		listSessionExerciseDetails(sessionId),
 		db.workoutSessions
 			.where('workoutId')
@@ -1326,10 +2445,20 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 			.then(
 				(sessions) =>
 					sessions
-						.filter((candidate) => candidate.startedAt < session.startedAt)
-						.sort((first, second) => first.startedAt.localeCompare(second.startedAt))
+						.filter(
+							(candidate) =>
+								candidate.id !== session.id &&
+								candidate.status !== 'planned' &&
+								getSessionSortTime(candidate) < currentSessionAt
+						)
+						.sort(compareSessionRows)
 						.at(-1) ?? null
+			),
+		db.exercises.bulkGet(
+			(await db.sessionExercises.where('sessionId').equals(sessionId).toArray()).map(
+				(sessionExercise) => sessionExercise.exerciseId
 			)
+		)
 	]);
 	const sessionSets = sessionExercises.flatMap((sessionExercise) => sessionExercise.sets);
 	const previousExercises = previousSession
@@ -1342,13 +2471,34 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 				previousExercises.flatMap((sessionExercise) => sessionExercise.sets)
 			)
 		: null;
+	const exerciseById = new Map(
+		exercises.filter(isDefined).map((exercise) => {
+			const nextExercise = withExerciseDefaults(exercise);
+			return [nextExercise.id, nextExercise] as const;
+		})
+	);
+	const historyEntriesByExerciseId = new Map(
+		await Promise.all(
+			[...new Set(sessionExercises.map((sessionExercise) => sessionExercise.exerciseId))].map(
+				async (exerciseId) =>
+					[
+						exerciseId,
+						(await listExerciseHistory(exerciseId)).filter(
+							(entry) =>
+								entry.sessionId !== session.id &&
+								getExerciseHistorySortTime(entry) < currentSessionAt
+						)
+					] as const
+			)
+		)
+	);
 	const previousPerformanceByExerciseId = await getLatestExerciseHistoryEntries(
 		sessionExercises.map((sessionExercise) => sessionExercise.exerciseId),
 		session.id,
-		session.startedAt
+		currentSessionAt
 	);
 	const progress =
-		previousPerformanceByExerciseId.size === 0
+		sessionExercises.length === 0
 			? null
 			: {
 					improvedExercises: 0,
@@ -1357,13 +2507,30 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 					mixedExercises: 0,
 					newExercises: 0
 				};
-	const exercises = sessionExercises.map((sessionExercise) => {
+	const nextExercises = sessionExercises.map((sessionExercise) => {
+		const historyEntries = historyEntriesByExerciseId.get(sessionExercise.exerciseId) ?? [];
+		const previousReferenceBySetKey = buildPreviousReferenceBySetKey(
+			sessionExercise,
+			historyEntries
+		);
 		const previousPerformance =
 			previousPerformanceByExerciseId.get(sessionExercise.exerciseId) ?? null;
 		const { progressStatus, progressSummary } = summarizeExerciseProgress(
 			sessionExercise,
-			previousPerformance
+			previousReferenceBySetKey
 		);
+		const sets = sessionExercise.sets.map((sessionSet) => {
+			const previousReference = previousReferenceBySetKey.get(getSessionSetKey(sessionSet)) ?? null;
+
+			return {
+				...sessionSet,
+				label: getSessionSetLabel(sessionSet),
+				previousReference,
+				weightDelta: createFieldDelta(sessionSet.weight, previousReference?.weight),
+				repsDelta: createFieldDelta(sessionSet.reps, previousReference?.reps),
+				rirDelta: createFieldDelta(sessionSet.rir, previousReference?.rir)
+			};
+		});
 
 		if (progress) {
 			switch (progressStatus) {
@@ -1386,9 +2553,11 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 
 		return {
 			...sessionExercise,
+			exercise: exerciseById.get(sessionExercise.exerciseId) ?? null,
 			previousPerformance,
 			progressStatus,
-			progressSummary
+			progressSummary,
+			sets
 		};
 	});
 
@@ -1396,8 +2565,20 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 		summary: summarizeSession(session, sessionExercises, sessionSets),
 		previousSummary,
 		progress,
-		exercises
+		exercises: nextExercises
 	};
+}
+
+export async function getEditableSession(sessionId: string) {
+	const session = await db.workoutSessions.get(sessionId);
+
+	if (!session) {
+		return null;
+	}
+
+	await ensureEditableSessionSeedRows(session, await listSessionExerciseDetails(sessionId));
+
+	return getSessionOverview(sessionId);
 }
 
 export async function deleteWorkoutSession(sessionId: string) {
@@ -1410,31 +2591,12 @@ export async function deleteWorkoutSession(sessionId: string) {
 		db.sessionSets,
 		db.workouts,
 		async () => {
-			const session = await db.workoutSessions.get(sessionId);
+			const session = await deleteWorkoutSessionRows(sessionId);
 
 			if (!session) {
 				return;
 			}
 
-			const sessionExercises = await db.sessionExercises
-				.where('sessionId')
-				.equals(sessionId)
-				.toArray();
-			const sessionExerciseIds = sessionExercises.map((sessionExercise) => sessionExercise.id);
-			const sessionSets =
-				sessionExerciseIds.length === 0
-					? []
-					: await db.sessionSets.where('sessionExerciseId').anyOf(sessionExerciseIds).toArray();
-
-			if (sessionSets.length > 0) {
-				await db.sessionSets.bulkDelete(sessionSets.map((sessionSet) => sessionSet.id));
-			}
-
-			if (sessionExerciseIds.length > 0) {
-				await db.sessionExercises.bulkDelete(sessionExerciseIds);
-			}
-
-			await db.workoutSessions.delete(sessionId);
 			await db.workouts.update(session.workoutId, { updatedAt: timestamp() });
 		}
 	);
@@ -1500,22 +2662,28 @@ const EXAMPLE_IMPROVEMENT_SETS: ExampleSetSeed[][] = [
 ];
 
 async function listExampleBaselineExercises() {
-	const baselineExerciseIds = EXAMPLE_EXERCISE_NAMES.map((name) =>
-		createBaselineExerciseId(normalizeName(name))
+	const preferredExerciseByNormalizedName = await getPreferredExerciseByNormalizedNames(
+		EXAMPLE_EXERCISE_NAMES.map((name) => normalizeName(name))
 	);
-	const exercises = (await db.exercises.bulkGet(baselineExerciseIds)).filter(isDefined);
-	const exerciseById = new Map(exercises.map((exercise) => [exercise.id, exercise]));
 
-	return baselineExerciseIds.map((exerciseId) => exerciseById.get(exerciseId)).filter(isDefined);
+	return EXAMPLE_EXERCISE_NAMES.map((name) =>
+		preferredExerciseByNormalizedName.get(normalizeName(name))
+	).filter(isDefined);
 }
 
 async function normalizeExampleSessionExerciseIds(sessionId: string) {
 	const sessionExercises = await db.sessionExercises.where('sessionId').equals(sessionId).toArray();
+	const preferredExerciseByNormalizedName = await getPreferredExerciseByNormalizedNames(
+		sessionExercises.map((sessionExercise) => normalizeName(sessionExercise.exerciseNameSnapshot))
+	);
 	const exerciseIdsBySessionExerciseId = new Map(
-		sessionExercises.map((sessionExercise) => [
-			sessionExercise.id,
-			createBaselineExerciseId(normalizeName(sessionExercise.exerciseNameSnapshot))
-		])
+		sessionExercises.flatMap((sessionExercise) => {
+			const preferredExercise = preferredExerciseByNormalizedName.get(
+				normalizeName(sessionExercise.exerciseNameSnapshot)
+			);
+
+			return preferredExercise ? ([[sessionExercise.id, preferredExercise.id]] as const) : [];
+		})
 	);
 	const now = timestamp();
 
@@ -1642,6 +2810,10 @@ async function seedExampleSession(seed: ExampleSessionSeed): Promise<BackfillSee
 				sessionExerciseId: sessionExercise.id,
 				exerciseId: sessionExercise.exerciseId,
 				order: setIndex + 1,
+				side: 'bilateral' as const,
+				weightInput: toStoredInputValue(undefined, set.weight),
+				repsInput: toStoredInputValue(undefined, set.reps),
+				rirInput: toStoredInputValue(undefined, set.rir),
 				weight: set.weight,
 				reps: set.reps,
 				rir: set.rir,

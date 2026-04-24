@@ -113,15 +113,15 @@
 			<div
 				class="mt-5 grid grid-cols-7 gap-1 text-center text-[11px] font-medium tracking-[0.18em] text-zinc-500 uppercase"
 			>
-				{#each weekdayLabels as label}
+				{#each weekdayLabels as label (label)}
 					<div class="py-1">{label}</div>
 				{/each}
 			</div>
 
 			<div class="mt-2 grid gap-1">
-				{#each weeks as week}
+				{#each weeks as week (week[0].dayKey)}
 					<div class="grid grid-cols-7 gap-1">
-						{#each week as cell}
+						{#each week as cell (cell.dayKey)}
 							<button
 								class={`relative aspect-square rounded-lg border text-left transition ${
 									cell.dayKey === selectedDayKey

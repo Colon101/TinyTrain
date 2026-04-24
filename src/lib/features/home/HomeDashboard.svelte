@@ -1,6 +1,9 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
-	import type { DayOverview, SessionSummary } from '$lib/db';
+	import { SvelteDate, SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import type { DayOverview, SessionSummary, Workout } from '$lib/db';
 	import { toDayKey } from '$lib/db';
 	import InstallPrompt from '$lib/InstallPrompt.svelte';
 	import ProfileMenu from '$lib/features/app/ProfileMenu.svelte';
@@ -17,6 +20,7 @@
 	import DayOverviewPanel from './DayOverviewPanel.svelte';
 	import DayPickerSheet from './DayPickerSheet.svelte';
 	import HomeCalendar from './HomeCalendar.svelte';
+	import WorkoutPickerSheet from './WorkoutPickerSheet.svelte';
 
 	type DatabaseApi = typeof import('$lib/db');
 	type SessionCache = Record<string, SessionSummary[]>;
@@ -27,23 +31,29 @@
 	let api = $state<DatabaseApi | null>(null);
 	let currentUser = $state<CloudUser>({ isLoading: true });
 	let isLoading = $state(true);
+	let isMutating = $state(false);
 	let errorMessage = $state('');
 	let selectedDayKey = $state(toDayKey(new Date()));
 	let visibleWeekDate = $state(startOfWeek(new Date()));
 	let pickerMonthDate = $state(startOfMonth(new Date()));
 	let isDayPickerOpen = $state(false);
+	let isWorkoutPickerOpen = $state(false);
 	let weekSlideDirection = $state<-1 | 0 | 1>(0);
 	let sessionsByMonthKey = $state<SessionCache>({});
 	let dayOverview = $state<DayOverview | null>(null);
+	let currentSession = $state<SessionSummary | null>(null);
+	let workouts = $state<Workout[]>([]);
 
+	let todayDayKey = $derived(toDayKey(new Date()));
 	let sessionByDayKey = $derived.by(() => {
-		const nextMap = new Map<string, SessionSummary>();
+		const nextMap = new SvelteMap<string, SessionSummary>();
+		const getSortValue = (session: SessionSummary) => session.startedAt ?? session.createdAt;
 
 		for (const monthSessions of Object.values(sessionsByMonthKey)) {
 			for (const session of monthSessions) {
 				const existing = nextMap.get(session.dayKey);
 
-				if (!existing || existing.startedAt < session.startedAt) {
+				if (!existing || getSortValue(existing) < getSortValue(session)) {
 					nextMap.set(session.dayKey, session);
 				}
 			}
@@ -65,11 +75,11 @@
 				}
 
 				api = dbApi;
+				await dbApi.cleanupStaleSessions(todayDayKey);
 				currentUserSubscription = dbApi.db.cloud.currentUser.subscribe((nextUser) => {
 					currentUser = nextUser;
 				});
-				await ensureWeekLoaded(visibleWeekDate);
-				dayOverview = await dbApi.getDayOverview(selectedDayKey);
+				await refreshSelectedDay();
 			} catch (error) {
 				errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
 			} finally {
@@ -83,6 +93,19 @@
 		};
 	});
 
+	async function reloadMonth(monthDate: Date) {
+		if (!api) {
+			return;
+		}
+
+		const monthKey = getMonthCacheKey(monthDate);
+		const sessions = await api.listSessionSummariesForMonth(monthDate);
+		sessionsByMonthKey = {
+			...sessionsByMonthKey,
+			[monthKey]: sessions
+		};
+	}
+
 	async function ensureMonthLoaded(monthDate: Date) {
 		if (!api) {
 			return;
@@ -94,24 +117,53 @@
 			return;
 		}
 
-		const sessions = await api.listSessionSummariesForMonth(monthDate);
-		sessionsByMonthKey = {
-			...sessionsByMonthKey,
-			[monthKey]: sessions
-		};
+		await reloadMonth(monthDate);
 	}
 
 	async function ensureWeekLoaded(weekDate: Date) {
-		const monthStarts = new Map<string, Date>();
+		const monthKeys = new SvelteSet<string>();
+		const monthDates: Date[] = [];
 
 		for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
-			const dayDate = new Date(weekDate);
+			const dayDate = new SvelteDate(weekDate);
 			dayDate.setDate(weekDate.getDate() + dayIndex);
 			const monthDate = startOfMonth(dayDate);
-			monthStarts.set(getMonthCacheKey(monthDate), monthDate);
+			const monthKey = getMonthCacheKey(monthDate);
+
+			if (!monthKeys.has(monthKey)) {
+				monthKeys.add(monthKey);
+				monthDates.push(monthDate);
+			}
 		}
 
-		await Promise.all([...monthStarts.values()].map((monthDate) => ensureMonthLoaded(monthDate)));
+		await Promise.all(monthDates.map((monthDate) => ensureMonthLoaded(monthDate)));
+	}
+
+	async function refreshSelectedDay() {
+		if (!api) {
+			return;
+		}
+
+		await api.cleanupStaleSessions(todayDayKey);
+		await ensureWeekLoaded(visibleWeekDate);
+		dayOverview = await api.getDayOverview(selectedDayKey);
+		currentSession = await api.getCurrentInProgressSession();
+		workouts = await api.listWorkouts();
+	}
+
+	async function runMutation(action: () => Promise<void>) {
+		isMutating = true;
+		errorMessage = '';
+
+		try {
+			await action();
+			sessionsByMonthKey = {};
+			await refreshSelectedDay();
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
+		} finally {
+			isMutating = false;
+		}
 	}
 
 	async function updateSelectedDay(dayKey: string, nextSlideDirection: -1 | 0 | 1 = 0) {
@@ -126,8 +178,7 @@
 		weekSlideDirection = nextSlideDirection;
 
 		try {
-			await ensureWeekLoaded(nextWeekDate);
-			dayOverview = await api.getDayOverview(dayKey);
+			await refreshSelectedDay();
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
 		}
@@ -162,6 +213,45 @@
 		const nextMonthDate = addMonths(pickerMonthDate, 1);
 		pickerMonthDate = nextMonthDate;
 		void ensureMonthLoaded(nextMonthDate);
+	}
+
+	function openWorkoutPicker() {
+		if (workouts.length === 0) {
+			void goto(resolve('/workouts'));
+			return;
+		}
+
+		isWorkoutPickerOpen = true;
+	}
+
+	function closeWorkoutPicker() {
+		isWorkoutPickerOpen = false;
+	}
+
+	function scheduleWorkout(workoutId: string) {
+		const dbApi = api;
+
+		if (!dbApi) {
+			return;
+		}
+
+		void runMutation(async () => {
+			await dbApi.scheduleWorkoutSession(workoutId, selectedDayKey);
+			isWorkoutPickerOpen = false;
+		});
+	}
+
+	function startSession(sessionId: string) {
+		const dbApi = api;
+
+		if (!dbApi) {
+			return;
+		}
+
+		void runMutation(async () => {
+			await dbApi.startWorkoutSession(sessionId);
+			await goto(resolve('/sessions/[sessionId]', { sessionId }));
+		});
 	}
 </script>
 
@@ -206,12 +296,19 @@
 			onShiftWeek={shiftWeek}
 		/>
 
-		<DayOverviewPanel overview={dayOverview} />
+		<DayOverviewPanel
+			overview={dayOverview}
+			{currentSession}
+			isTodaySelected={selectedDayKey === todayDayKey}
+			isBusy={isMutating}
+			onOpenScheduleWorkout={openWorkoutPicker}
+			onStartSession={startSession}
+		/>
 
 		<div class="mt-auto grid gap-3 pt-4">
 			<a
 				class="flex min-h-12 items-center justify-between rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950"
-				href="/workouts"
+				href={resolve('/workouts')}
 			>
 				<span class="flex items-center gap-3">
 					<Icon name="dumbbell" class="h-5 w-5" />
@@ -221,7 +318,7 @@
 			</a>
 			<a
 				class="flex min-h-12 items-center justify-between rounded-lg border border-white/10 bg-white/[0.04] px-4 text-base font-semibold text-white"
-				href="/exercises"
+				href={resolve('/exercises')}
 			>
 				<span class="flex items-center gap-3">
 					<Icon name="activity" class="h-5 w-5 text-emerald-200" />
@@ -244,5 +341,14 @@
 		onClose={closeDayPicker}
 		onPreviousMonth={showPreviousPickerMonth}
 		onNextMonth={showNextPickerMonth}
+	/>
+{/if}
+
+{#if isWorkoutPickerOpen}
+	<WorkoutPickerSheet
+		{workouts}
+		isSaving={isMutating}
+		onClose={closeWorkoutPicker}
+		onPickWorkout={scheduleWorkout}
 	/>
 {/if}

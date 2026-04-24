@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import type { ExerciseDetail, ExerciseListItem } from '$lib/db';
 	import {
@@ -240,7 +241,7 @@
 				</p>
 				{#if selectedDetail.resetEvents.length > 0}
 					<div class="mt-4 grid gap-3">
-						{#each selectedDetail.resetEvents as resetEvent}
+						{#each selectedDetail.resetEvents as resetEvent (resetEvent.id)}
 							<div class="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3">
 								<p class="text-sm font-medium text-white">Form reset recorded</p>
 								<p class="mt-1 text-sm text-zinc-400">
@@ -264,10 +265,10 @@
 
 				{#if selectedDetail.history.length > 0}
 					<div class="mt-4 grid gap-3">
-						{#each selectedDetail.history as entry}
+						{#each selectedDetail.history as entry (entry.sessionId)}
 							<a
 								class="block rounded-lg border border-white/10 bg-white/[0.03] px-4 py-4 transition hover:border-emerald-300/50"
-								href={`/sessions/${entry.sessionId}`}
+								href={resolve('/sessions/[sessionId]', { sessionId: entry.sessionId })}
 							>
 								<div class="flex items-start justify-between gap-3">
 									<div>
@@ -280,7 +281,7 @@
 								</div>
 
 								<div class="mt-3 flex flex-wrap gap-2">
-									{#each entry.sets as set}
+									{#each entry.sets as set (set.id)}
 										<span
 											class="rounded-full bg-white/[0.06] px-3 py-1 text-xs font-medium text-zinc-200"
 										>
@@ -358,7 +359,7 @@
 			</p>
 			{#if items.length > 0}
 				<div class="mt-4 grid gap-3">
-					{#each items as item}
+					{#each items as item (item.exercise.id)}
 						<button
 							class="flex min-h-16 items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-4 text-left transition hover:border-emerald-300/50"
 							type="button"

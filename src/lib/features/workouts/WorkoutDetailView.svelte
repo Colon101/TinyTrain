@@ -16,7 +16,6 @@
 		dragPreview,
 		draggedWorkoutExerciseId,
 		draggedWorkoutExercise,
-		onBack,
 		onOpenPicker,
 		onRemoveExercise,
 		onDragPointerDown,
@@ -31,7 +30,6 @@
 		dragPreview: DragPreview | null;
 		draggedWorkoutExerciseId: string;
 		draggedWorkoutExercise: WorkoutExerciseWithExercise | null;
-		onBack: () => void;
 		onOpenPicker: () => void;
 		onRemoveExercise: (workoutExerciseId: string) => void;
 		onDragPointerDown: (event: PointerEvent, workoutExerciseId: string) => void;
@@ -42,25 +40,17 @@
 	} = $props();
 </script>
 
-<section class="flex flex-1 flex-col">
-	<div class="flex items-start justify-between gap-4 border-b border-white/10 pb-5">
-		<div>
-			<button
-				class="flex min-h-10 items-center gap-2 rounded-lg border border-white/10 px-3 text-sm font-medium text-zinc-300"
-				type="button"
-				onclick={onBack}
-			>
-				<Icon name="arrow-left" class="h-4 w-4" />
-				Back
-			</button>
-			<h1 class="mt-4 text-3xl font-semibold text-white">{selectedWorkout.name}</h1>
+<section class="box-border flex min-w-0 flex-1 flex-col px-1">
+	<div class="flex items-start justify-between gap-3 border-b border-white/10 pb-5">
+		<div class="min-w-0 flex-1">
+			<h1 class="text-3xl font-semibold text-white">{selectedWorkout.name}</h1>
 			<p class="mt-2 text-sm leading-6 text-zinc-400">
 				Reorder the movement list and keep the template clean.
 			</p>
 		</div>
 
 		<button
-			class="flex min-h-11 items-center gap-2 rounded-lg bg-emerald-300 px-4 text-sm font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
+			class="flex min-h-11 shrink-0 items-center gap-2 rounded-lg bg-emerald-300 px-4 text-sm font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
 			type="button"
 			disabled={isSaving}
 			onclick={onOpenPicker}
@@ -75,7 +65,7 @@
 
 		{#if workoutExercises.length > 0}
 			<div class="mt-4 grid gap-3">
-				{#each workoutExercises as workoutExercise}
+				{#each workoutExercises as workoutExercise (workoutExercise.id)}
 					<div
 						class={`rounded-lg border border-white/10 bg-white/[0.03] px-4 py-4 ${
 							workoutExercise.id === draggedWorkoutExerciseId ? 'opacity-40' : ''
@@ -84,8 +74,9 @@
 					>
 						<div class="flex items-center gap-3">
 							<button
-								class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-400"
+								class="flex h-10 w-10 shrink-0 touch-none items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-400 select-none"
 								type="button"
+								aria-label="Reorder exercise"
 								onpointerdown={(event) => onDragPointerDown(event, workoutExercise.id)}
 								onpointermove={onDragPointerMove}
 								onpointerup={onDragPointerUp}

@@ -25,9 +25,9 @@
 	} = $props();
 </script>
 
-<section class="flex flex-1 flex-col">
-	<div class="flex items-start justify-between gap-4 border-b border-white/10 pb-5">
-		<div>
+<section class="box-border flex min-w-0 flex-1 flex-col px-1">
+	<div class="flex items-start justify-between gap-3 border-b border-white/10 pb-5">
+		<div class="min-w-0 flex-1">
 			<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">Builder</p>
 			<h1 class="mt-2 text-3xl font-semibold text-white">Workouts</h1>
 			<p class="mt-2 text-sm leading-6 text-zinc-400">
@@ -36,7 +36,7 @@
 		</div>
 
 		<button
-			class="flex min-h-11 items-center gap-2 rounded-lg bg-emerald-300 px-4 text-sm font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
+			class="flex min-h-11 shrink-0 items-center gap-2 rounded-lg bg-emerald-300 px-4 text-sm font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
 			type="button"
 			disabled={isSaving}
 			onclick={onStartCreate}
@@ -87,7 +87,7 @@
 
 		{#if workouts.length > 0}
 			<div class="mt-4 grid gap-3">
-				{#each workouts as workout}
+				{#each workouts as workout (workout.id)}
 					<button
 						class="flex min-h-16 items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-4 text-left transition hover:border-emerald-300/50"
 						type="button"

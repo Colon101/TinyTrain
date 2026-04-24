@@ -22,7 +22,15 @@ export function formatTimestamp(value?: string | null) {
 	return date.toLocaleString();
 }
 
-export function formatDuration(startedAt: string, completedAt?: string, nowMs = Date.now()) {
+export function formatDuration(
+	startedAt?: string | null,
+	completedAt?: string,
+	nowMs = Date.now()
+) {
+	if (!startedAt) {
+		return '0m';
+	}
+
 	const startMs = new Date(startedAt).getTime();
 	const endMs = completedAt ? new Date(completedAt).getTime() : nowMs;
 
@@ -87,6 +95,23 @@ export function formatSessionTime(startedAt?: string | null) {
 	return new Intl.DateTimeFormat('en-US', {
 		hour: 'numeric',
 		minute: '2-digit'
+	}).format(date);
+}
+
+export function formatSessionDate(startedAt?: string | null) {
+	if (!startedAt) {
+		return 'Unknown date';
+	}
+
+	const date = new Date(startedAt);
+
+	if (!isValidDate(date)) {
+		return 'Unknown date';
+	}
+
+	return new Intl.DateTimeFormat('en-US', {
+		month: 'short',
+		day: 'numeric'
 	}).format(date);
 }
 

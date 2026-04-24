@@ -76,7 +76,7 @@
 			in:fly={{ x: slideDirection >= 0 ? 20 : -20, duration: 160 }}
 			out:fly={{ x: slideDirection >= 0 ? -20 : 20, duration: 160 }}
 		>
-			{#each weekCells as cell}
+			{#each weekCells as cell (cell.dayKey)}
 				<button
 					class="relative flex min-h-[52px] flex-col items-center justify-center rounded-lg px-1 text-zinc-400 transition hover:text-white"
 					type="button"
@@ -87,7 +87,7 @@
 					})}
 					onclick={() => onSelectDay(cell.dayKey)}
 				>
-					<span class="text-[10px] font-medium uppercase tracking-[0.18em] opacity-70">
+					<span class="text-[10px] font-medium tracking-[0.18em] uppercase opacity-70">
 						{cell.date.toLocaleDateString(undefined, { weekday: 'narrow' })}
 					</span>
 					<span

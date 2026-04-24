@@ -1,14 +1,10 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import AccountSync from '$lib/AccountSync.svelte';
 	import InstallPrompt from '$lib/InstallPrompt.svelte';
 
-	type DatabaseApi = typeof import('$lib/db');
-	type CloudUser = {
-		isLoggedIn?: boolean;
-		isLoading?: boolean;
-	};
 	type SubscriptionLike = {
 		unsubscribe(): void;
 	};
@@ -26,7 +22,7 @@
 
 			currentUserSubscription = api.db.cloud.currentUser.subscribe((nextUser) => {
 				if (nextUser.isLoggedIn) {
-					void goto('/', { replaceState: true });
+					void goto(resolve('/'), { replaceState: true });
 				}
 			});
 

@@ -1,8 +1,11 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
+	import type { SessionOverview } from '$lib/db';
 	import ProfileMenu from '$lib/features/app/ProfileMenu.svelte';
+	import { formatDuration } from '$lib/features/sessions/session-format';
 	import type { CloudUser } from '$lib/features/app/user';
 	import Icon from '$lib/ui/Icon.svelte';
 
@@ -10,6 +13,10 @@
 	type SubscriptionLike = {
 		unsubscribe(): void;
 	};
+	type SessionTimerSummary = Pick<
+		SessionOverview['summary'],
+		'status' | 'startedAt' | 'completedAt' | 'workoutNameSnapshot'
+	>;
 
 	const CALLBACK_TIMEOUT_MS = 15000;
 
@@ -21,6 +28,13 @@
 	let callbackTimedOut = $state(false);
 	let isHandlingOAuthCallback = $derived(page.url.searchParams.has('dxc-auth'));
 	let isHomePage = $derived(page.url.pathname === '/');
+	let nowMs = $state(Date.now());
+	let sessionOverviewMatch = $derived(page.url.pathname.match(/^\/sessions\/[^/]+$/));
+	let sessionMatch = $derived(page.url.pathname.match(/^\/sessions\/([^/]+)/));
+	let sessionTimer = $state<SessionTimerSummary | null>(null);
+	let showSessionTimer = $derived(
+		Boolean(sessionTimer?.status === 'in_progress' && sessionTimer.startedAt)
+	);
 
 	onMount(() => {
 		let disposed = false;
@@ -53,7 +67,7 @@
 					clearCallbackTimeout();
 
 					if (!nextUser.isLoggedIn) {
-						void goto('/login', { replaceState: true });
+						void goto(resolve('/login'), { replaceState: true });
 						return;
 					}
 
@@ -85,18 +99,91 @@
 		};
 	});
 
-	function goBack() {
-		if (window.history.length > 1) {
-			window.history.back();
+	$effect(() => {
+		const sessionId = sessionMatch?.[1];
+		let cancelled = false;
+
+		sessionTimer = null;
+
+		if (!sessionId || isCheckingAuth || Boolean(authError)) {
 			return;
 		}
 
-		void goto('/');
+		void (async () => {
+			try {
+				const api = (await import('$lib/db')) as DatabaseApi;
+				const overview = await api.getEditableSession(sessionId);
+
+				if (!cancelled) {
+					sessionTimer = overview?.summary ?? null;
+				}
+			} catch {
+				if (!cancelled) {
+					sessionTimer = null;
+				}
+			}
+		})();
+
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	$effect(() => {
+		let intervalId: ReturnType<typeof setInterval> | null = null;
+
+		if (showSessionTimer) {
+			nowMs = Date.now();
+			intervalId = setInterval(() => {
+				nowMs = Date.now();
+			}, 1000);
+		}
+
+		return () => {
+			if (intervalId) {
+				clearInterval(intervalId);
+			}
+		};
+	});
+
+	function goBack() {
+		void goto(resolve(getParentPath(page.url.pathname)));
+	}
+
+	function getParentPath(pathname: string) {
+		if (pathname === '/workouts' || pathname === '/exercises') {
+			return '/';
+		}
+
+		if (pathname === '/workouts/new') {
+			return '/workouts';
+		}
+
+		const workoutDetailMatch = pathname.match(/^\/workouts\/[^/]+$/);
+
+		if (workoutDetailMatch) {
+			return '/workouts';
+		}
+
+		const sessionExerciseParentMatch = pathname.match(/^\/sessions\/([^/]+)\/exercises\/[^/]+$/);
+
+		if (sessionExerciseParentMatch) {
+			return `/sessions/${sessionExerciseParentMatch[1]}`;
+		}
+
+		const sessionParentMatch = pathname.match(/^\/sessions\/[^/]+$/);
+
+		if (sessionParentMatch) {
+			return '/';
+		}
+
+		const parentPath = pathname.replace(/\/+$/, '').replace(/\/[^/]+$/, '');
+		return parentPath || '/';
 	}
 </script>
 
 <main
-	class="mx-auto flex min-h-svh w-full max-w-[430px] flex-col bg-[#080b0d] px-4 py-4 text-zinc-100"
+	class="mx-auto box-border flex min-h-svh w-full max-w-[430px] flex-col bg-[#080b0d] px-4 py-4 text-zinc-100"
 >
 	{#if isCheckingAuth}
 		<section class="flex flex-1 flex-col justify-center">
@@ -116,7 +203,7 @@
 			<p class="mt-3 text-sm leading-6 text-red-200">{authError}</p>
 			<a
 				class="mt-6 flex min-h-12 items-center justify-center rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950"
-				href="/login"
+				href={resolve('/login')}
 			>
 				Back to login
 			</a>
@@ -128,17 +215,35 @@
 		</section>
 	{:else}
 		{#if !isHomePage}
-			<header class="flex items-center justify-between pb-3">
-				<button
-					class="flex min-h-10 items-center gap-2 rounded-lg border border-white/10 px-3 text-sm font-medium text-zinc-300"
-					type="button"
-					onclick={goBack}
-					aria-label="Go back"
-				>
-					<Icon name="arrow-left" class="h-4 w-4" />
-				</button>
+			<header class="flex min-w-0 items-center gap-2 pb-3">
+				<div class="flex min-w-0 flex-1 items-center gap-2">
+					<button
+						class="flex min-h-10 shrink-0 items-center gap-2 rounded-lg border border-white/10 px-3 text-sm font-medium text-zinc-300"
+						type="button"
+						onclick={goBack}
+						aria-label="Go back"
+					>
+						<Icon name="arrow-left" class="h-4 w-4" />
+					</button>
 
-				<ProfileMenu user={currentUser} />
+					{#if sessionOverviewMatch && sessionTimer?.workoutNameSnapshot}
+						<h1 class="min-w-0 truncate text-base font-semibold text-white">
+							{sessionTimer.workoutNameSnapshot}
+						</h1>
+					{/if}
+				</div>
+
+				<div class="flex shrink-0 items-center gap-2">
+					{#if showSessionTimer}
+						<div
+							class="inline-flex min-h-10 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 text-xs font-semibold text-zinc-200"
+						>
+							<Icon name="clock-3" class="h-3.5 w-3.5 text-zinc-500" />
+							{formatDuration(sessionTimer?.startedAt, sessionTimer?.completedAt, nowMs)}
+						</div>
+					{/if}
+					<ProfileMenu user={currentUser} />
+				</div>
 			</header>
 		{/if}
 

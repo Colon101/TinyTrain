@@ -4,7 +4,6 @@ minimalist offline first experience PWA application made to improve quality of t
 
 single file relational database describes the entire experience
 
-
 # sv
 
 Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).

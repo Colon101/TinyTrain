@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import Icon from '$lib/ui/Icon.svelte';
 
@@ -107,13 +108,13 @@
 		<div class="mt-5 grid gap-3">
 			<a
 				class="flex min-h-11 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-white"
-				href={`/sessions/${result.sessionId}`}
+				href={resolve('/sessions/[sessionId]', { sessionId: result.sessionId })}
 			>
 				Open {resultLabel}
 			</a>
 			<a
 				class="flex min-h-11 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-white"
-				href="/"
+				href={resolve('/')}
 			>
 				Open home
 			</a>
