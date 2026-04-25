@@ -43,7 +43,9 @@
 <section class="box-border flex min-w-0 flex-1 flex-col px-1">
 	<div class="flex items-start justify-between gap-3 border-b border-white/10 pb-5">
 		<div class="min-w-0 flex-1">
-			<h1 class="text-3xl font-semibold text-white">{selectedWorkout.name}</h1>
+			<h1 class="text-3xl leading-tight font-semibold break-words text-white">
+				{selectedWorkout.name}
+			</h1>
 			<p class="mt-2 text-sm leading-6 text-zinc-400">
 				Reorder the movement list and keep the template clean.
 			</p>
@@ -86,7 +88,7 @@
 							</button>
 
 							<div class="min-w-0 flex-1">
-								<p class="truncate text-base font-semibold text-white">
+								<p class="line-clamp-2 text-base leading-5 font-semibold break-words text-white">
 									{workoutExercise.exercise.name}
 								</p>
 								<p class="mt-1 text-sm text-zinc-400">
@@ -120,7 +122,9 @@
 			class="pointer-events-none fixed z-30 rounded-lg border border-emerald-300/40 bg-[#11171a] px-4 py-4 shadow-[0_20px_60px_rgba(0,0,0,0.45)]"
 			style={`left:${dragPreview.x}px; top:${dragPreview.y}px; width:${dragPreview.width}px;`}
 		>
-			<p class="text-base font-semibold text-white">{draggedWorkoutExercise.exercise.name}</p>
+			<p class="line-clamp-2 text-base leading-5 font-semibold break-words text-white">
+				{draggedWorkoutExercise.exercise.name}
+			</p>
 			<p class="mt-1 text-sm text-zinc-400">
 				{draggedWorkoutExercise.exercise.unilateral ? 'Unilateral' : 'Bilateral'}
 			</p>

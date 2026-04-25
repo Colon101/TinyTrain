@@ -133,7 +133,7 @@
 	function syncNow() {
 		void runAction(async (dbApi) => {
 			await dbApi.syncNow();
-			actionMessage = 'Sync checked.';
+			window.location.reload();
 		});
 	}
 

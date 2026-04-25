@@ -458,7 +458,8 @@ export async function logoutFromCloud() {
 
 export async function syncNow() {
 	await ensureDbOpen();
-	await db.cloud.sync();
+	await db.cloud.sync({ wait: true, purpose: 'push' });
+	await db.cloud.sync({ wait: true, purpose: 'pull' });
 }
 
 function canAttemptCloudSync() {

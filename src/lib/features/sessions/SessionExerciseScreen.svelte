@@ -414,15 +414,22 @@
 
 		void (async () => {
 			try {
-				await Promise.all(
-					values.map(([field, rawValue]) =>
-						requireApi().updateSessionSetInput(sessionSet.id, field, rawValue)
-					)
-				);
+				let updatedSet: Awaited<ReturnType<DatabaseApi['updateSessionSetInput']>> | null = null;
+
+				for (const [field, rawValue] of values) {
+					updatedSet = await requireApi().updateSessionSetInput(sessionSet.id, field, rawValue);
+				}
+
 				for (const [field, version] of versions) {
 					if (inputVersions.get(`${sessionSet.id}:${field}`) !== version) {
 						return;
 					}
+				}
+
+				if (updatedSet) {
+					updateOverviewSet(sessionSet.id, (currentSet) =>
+						rebuildSetOverview(currentSet, updatedSet)
+					);
 				}
 			} catch (error) {
 				errorMessage = getErrorMessage(error);
@@ -738,7 +745,9 @@
 					<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
 						Exercise {exerciseIndex + 1} / {overview.exercises.length}
 					</p>
-					<h1 class="mt-1.5 truncate text-2xl font-semibold text-white">
+					<h1
+						class="mt-1.5 line-clamp-2 text-2xl leading-tight font-semibold break-words text-white"
+					>
 						{activeExercise.exerciseNameSnapshot}
 					</h1>
 					<p class="mt-1.5 text-xs leading-5 text-zinc-400">
