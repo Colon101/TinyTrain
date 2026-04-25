@@ -18,6 +18,10 @@
 	type DatabaseApi = typeof import('$lib/db');
 	type PickerMode = 'add' | 'swap';
 
+	const setEditorGridClass = 'grid grid-cols-[3.2rem_repeat(3,minmax(0,1fr))_2rem] gap-2';
+	const setInputBaseClass =
+		'h-10 w-full rounded-md border px-2 py-0 text-center text-[1.0625rem] leading-none font-semibold outline-none placeholder:text-zinc-500';
+
 	let {
 		sessionId,
 		sessionExerciseId
@@ -257,7 +261,7 @@
 
 	function getFieldInputClass(state: SessionFieldDelta['state']) {
 		if (state === 'improved') {
-			return 'border-emerald-500 bg-white text-black';
+			return 'border-2 border-emerald-500 bg-white text-black';
 		}
 
 		if (state === 'regressed') {
@@ -812,7 +816,7 @@
 		<section class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1 pr-1">
 			{#if activeExercise.sets.length > 0}
 				<div
-					class="mb-1.5 grid grid-cols-[3.1rem_repeat(3,minmax(0,1fr))_2rem] gap-1.5 px-1 text-[9px] font-semibold tracking-[0.16em] text-zinc-500 uppercase"
+					class={`${setEditorGridClass} mb-1.5 px-2.5 text-[10px] font-semibold tracking-[0.16em] text-zinc-500 uppercase`}
 				>
 					<span>Set</span>
 					<span class="text-center">Weight</span>
@@ -824,7 +828,7 @@
 				<div class="grid gap-1.5">
 					{#each activeExercise.sets as set (set.id)}
 						<div
-							class="grid grid-cols-[3.1rem_repeat(3,minmax(0,1fr))_2rem] gap-1.5 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2"
+							class={`${setEditorGridClass} items-center rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2`}
 						>
 							<div class="flex min-w-0 items-center justify-center">
 								<button
@@ -834,18 +838,18 @@
 									disabled={!set.previousReference || isSaving}
 									onclick={() => autofillPreviousSet(set)}
 								>
-									<p class="text-[9px] font-semibold tracking-[0.16em] text-zinc-500 uppercase">
+									<p class="text-[10px] font-semibold tracking-[0.16em] text-zinc-500 uppercase">
 										Set
 									</p>
-									<p class="mt-1 text-lg font-bold text-white tabular-nums">
+									<p class="mt-1 text-xl font-bold text-white tabular-nums">
 										{formatSetBadgeValue(set.side, set.order)}
 									</p>
 								</button>
 							</div>
 
-							<div class="relative">
+							<div class="relative w-full max-w-[7.25rem] justify-self-center">
 								<input
-									class={`h-9 w-full rounded-md border px-2 text-center text-xs outline-none placeholder:text-zinc-500 ${getFieldInputClass(set.weightDelta.state)}`}
+									class={`${setInputBaseClass} ${getFieldInputClass(set.weightDelta.state)}`}
 									type="text"
 									inputmode="decimal"
 									enterkeyhint="next"
@@ -857,16 +861,16 @@
 								/>
 								{#if set.weightDelta.label}
 									<span
-										class={`pointer-events-none absolute bottom-1.5 left-2 text-[8px] leading-none font-semibold ${getDeltaToneClass(set.weightDelta.state)}`}
+										class={`pointer-events-none absolute bottom-1 left-2 text-[9px] leading-none font-semibold ${getDeltaToneClass(set.weightDelta.state)}`}
 									>
 										{set.weightDelta.label}
 									</span>
 								{/if}
 							</div>
 
-							<div class="relative">
+							<div class="relative w-full max-w-[7.25rem] justify-self-center">
 								<input
-									class={`h-9 w-full rounded-md border px-2 text-center text-xs outline-none placeholder:text-zinc-500 ${getFieldInputClass(set.repsDelta.state)}`}
+									class={`${setInputBaseClass} ${getFieldInputClass(set.repsDelta.state)}`}
 									type="text"
 									inputmode="numeric"
 									pattern="[0-9]*"
@@ -879,16 +883,16 @@
 								/>
 								{#if set.repsDelta.label}
 									<span
-										class={`pointer-events-none absolute bottom-1.5 left-2 text-[8px] leading-none font-semibold ${getDeltaToneClass(set.repsDelta.state)}`}
+										class={`pointer-events-none absolute bottom-1 left-2 text-[9px] leading-none font-semibold ${getDeltaToneClass(set.repsDelta.state)}`}
 									>
 										{set.repsDelta.label}
 									</span>
 								{/if}
 							</div>
 
-							<div class="relative">
+							<div class="relative w-full max-w-[7.25rem] justify-self-center">
 								<input
-									class={`h-9 w-full rounded-md border px-2 text-center text-xs outline-none placeholder:text-zinc-500 ${getFieldInputClass(set.rirDelta.state)}`}
+									class={`${setInputBaseClass} ${getFieldInputClass(set.rirDelta.state)}`}
 									type="text"
 									inputmode="numeric"
 									pattern="[0-9]*"
@@ -901,7 +905,7 @@
 								/>
 								{#if set.rirDelta.label}
 									<span
-										class={`pointer-events-none absolute bottom-1.5 left-2 text-[8px] leading-none font-semibold ${getDeltaToneClass(set.rirDelta.state)}`}
+										class={`pointer-events-none absolute bottom-1 left-2 text-[9px] leading-none font-semibold ${getDeltaToneClass(set.rirDelta.state)}`}
 									>
 										{set.rirDelta.label}
 									</span>
@@ -910,7 +914,7 @@
 
 							<div class="flex items-center justify-center">
 								<button
-									class="flex h-8 w-8 items-center justify-center rounded-md border border-white/10 text-zinc-400 transition hover:border-red-300/50 hover:bg-red-400/10 hover:text-red-100 disabled:opacity-50"
+									class="flex h-10 w-8 items-center justify-center rounded-md text-zinc-400 transition hover:bg-red-400/10 hover:text-red-100 disabled:opacity-50"
 									type="button"
 									title={activeExercise.exercise?.unilateral ? 'Remove set pair' : 'Remove set'}
 									disabled={isSaving}

@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { SvelteDate } from 'svelte/reactivity';
+	import { resolve } from '$app/paths';
 	import Icon from '$lib/ui/Icon.svelte';
 	import type {
 		BackfillWorkoutSessionInput,
@@ -81,7 +83,7 @@
 	});
 
 	function getDefaultDayKey() {
-		const date = new Date();
+		const date = new SvelteDate();
 		date.setDate(date.getDate() - 1);
 
 		return [
@@ -311,7 +313,7 @@
 			</div>
 			<a
 				class="mt-4 flex min-h-11 items-center justify-center gap-2 rounded-lg bg-emerald-300 px-4 text-sm font-bold text-zinc-950"
-				href="/workouts"
+				href={resolve('/workouts')}
 			>
 				<Icon name="dumbbell" class="h-4 w-4" />
 				Open workouts
@@ -529,7 +531,7 @@
 					{#if savedSessionId}
 						<a
 							class="flex min-h-11 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-white"
-							href={`/sessions/${savedSessionId}`}
+							href={resolve('/sessions/[sessionId]', { sessionId: savedSessionId })}
 						>
 							Open saved session
 						</a>

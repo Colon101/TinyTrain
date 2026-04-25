@@ -29,7 +29,6 @@
 	let isHandlingOAuthCallback = $derived(page.url.searchParams.has('dxc-auth'));
 	let isHomePage = $derived(page.url.pathname === '/');
 	let nowMs = $state(Date.now());
-	let sessionOverviewMatch = $derived(page.url.pathname.match(/^\/sessions\/[^/]+$/));
 	let sessionMatch = $derived(page.url.pathname.match(/^\/sessions\/([^/]+)/));
 	let sessionTimer = $state<SessionTimerSummary | null>(null);
 	let showSessionTimer = $derived(

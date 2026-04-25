@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import type { SessionExerciseOverview, SessionSetOverview, SessionStatus } from '$lib/db';
 	import Icon from '$lib/ui/Icon.svelte';
@@ -60,7 +61,13 @@
 				class="min-w-0 flex-1 text-left"
 				type="button"
 				disabled={status === 'planned'}
-				onclick={() => goto(`/sessions/${sessionId}/exercises/${sessionExercise.id}`)}
+				onclick={() =>
+					goto(
+						resolve('/sessions/[sessionId]/exercises/[sessionExerciseId]', {
+							sessionId,
+							sessionExerciseId: sessionExercise.id
+						})
+					)}
 			>
 				<p class="line-clamp-2 text-base leading-5 font-semibold break-words text-white">
 					{sessionExercise.exerciseNameSnapshot}
