@@ -231,7 +231,7 @@
 	{:else}
 		{#if !isHomePage}
 			<header
-				class="absolute inset-x-0 top-0 z-20 flex min-w-0 items-center gap-2 border-b border-white/[0.07] bg-[#080b0d]/35 px-4 pt-3 pb-3 shadow-[0_18px_36px_rgba(0,0,0,0.22)] backdrop-blur-3xl [backdrop-filter:blur(28px)_saturate(1.35)]"
+				class="absolute inset-x-0 top-0 z-20 flex min-w-0 items-center gap-2 border-b border-white/[0.07] bg-[#080b0d]/35 px-4 pt-3.5 pb-3 shadow-[0_18px_36px_rgba(0,0,0,0.22)] backdrop-blur-3xl [backdrop-filter:blur(28px)_saturate(1.35)]"
 			>
 				<div class="flex min-w-0 flex-1 items-center gap-2">
 					<button
