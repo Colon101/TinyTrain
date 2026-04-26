@@ -11,6 +11,7 @@
 	} = $props();
 
 	let isInProgress = $derived(overview.summary.status === 'in_progress');
+	let isPlanned = $derived(overview.summary.status === 'planned');
 	let durationText = $derived(
 		overview.summary.startedAt && overview.summary.status !== 'planned'
 			? formatDuration(overview.summary.startedAt, overview.summary.completedAt, nowMs)
@@ -27,8 +28,12 @@
 				{overview.summary.workoutNameSnapshot}
 			</h1> -->
 			<p class="pt-3 mt-2 text-sm leading-6 text-zinc-400">
-				{formatDayHeading(overview.summary.dayKey)} at
-				{formatSessionTime(overview.summary.startedAt ?? overview.summary.createdAt)}
+				{formatDayHeading(overview.summary.dayKey)}
+				{#if isPlanned}
+					<span class="text-zinc-600"> · </span>Not started
+				{:else}
+					at {formatSessionTime(overview.summary.startedAt)}
+				{/if}
 				{#if durationText}
 					<span class="text-zinc-600"> · </span>{durationText}
 				{/if}
@@ -46,9 +51,7 @@
 			</p>
 			<p class="mt-2 text-sm font-semibold text-white">
 				{formatDayHeading(overview.previousSummary.dayKey)} at
-				{formatSessionTime(
-					overview.previousSummary.startedAt ?? overview.previousSummary.createdAt
-				)}
+				{formatSessionTime(overview.previousSummary.startedAt)}
 			</p>
 		</a>
 	{/if} -->

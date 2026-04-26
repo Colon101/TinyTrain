@@ -2,6 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
 	import { SvelteDate, SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import type { DayOverview, SessionSummary, Workout } from '$lib/db';
@@ -46,7 +47,8 @@
 	let workouts = $state<Workout[]>([]);
 
 	let todayDayKey = $derived(toDayKey(new Date()));
-	let urlDayKey = $derived(getUrlDayKey(page.url.searchParams.get('date')));
+	let urlDateParam = $derived(page.url.searchParams.get('date'));
+	let urlDayKey = $derived(getUrlDayKey(urlDateParam));
 	let sessionByDayKey = $derived.by(() => {
 		const nextMap = new SvelteMap<string, SessionSummary>();
 		const getSortValue = (session: SessionSummary) => session.startedAt ?? session.createdAt;
@@ -65,8 +67,10 @@
 	});
 
 	$effect(() => {
-		if (urlDayKey && urlDayKey !== selectedDayKey) {
-			void updateSelectedDay(urlDayKey, 0, false);
+		const nextDayKey = urlDayKey ?? todayDayKey;
+
+		if (nextDayKey !== untrack(() => selectedDayKey)) {
+			void updateSelectedDay(nextDayKey, 0, false);
 		}
 	});
 

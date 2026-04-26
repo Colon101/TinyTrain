@@ -37,6 +37,8 @@ type CacheUrlsMessage = {
 	urls?: unknown;
 };
 
+let currentDeploymentPromise: Promise<boolean> | undefined;
+
 async function fetchFresh(request: Request | string) {
 	const response = await fetch(request, { cache: 'no-store' });
 
@@ -78,6 +80,11 @@ async function hasCurrentDeployment(cache: Cache) {
 	const latestId = await readDeploymentId(latestResponse);
 
 	return Boolean(cachedId && latestId && cachedId === latestId);
+}
+
+function hasVerifiedCurrentDeployment(cache: Cache) {
+	currentDeploymentPromise ??= hasCurrentDeployment(cache).catch(() => true);
+	return currentDeploymentPromise;
 }
 
 function cacheResponse(event: FetchEvent, cache: Cache, request: Request, response: Response) {
@@ -194,14 +201,9 @@ self.addEventListener('fetch', (event) => {
 			return fetchFresh(event.request);
 		}
 
-		// Check the deploy UUID before trusting the cache. If the check fails,
+		// Check the deploy UUID once before trusting the cache. If the check fails,
 		// assume we're offline and let the cache carry the app.
-		let canUseCache: boolean;
-		try {
-			canUseCache = await hasCurrentDeployment(cache);
-		} catch {
-			canUseCache = true;
-		}
+		const canUseCache = await hasVerifiedCurrentDeployment(cache);
 
 		if (canUseCache) {
 			const cached = await getCachedResponse(cache, event.request, url);

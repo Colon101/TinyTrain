@@ -120,10 +120,13 @@ function drawHeader(
 	previousOverview: SessionOverview | null
 ) {
 	const { summary } = overview;
-	const startedAt = summary.startedAt ?? summary.createdAt;
 	const statsY = OUTER_PADDING + 112;
 	const currentVolume = getSessionVolume(overview);
 	const previousVolume = previousOverview ? getSessionVolume(previousOverview) : null;
+	const headingLine =
+		summary.status === 'planned'
+			? `${formatDayHeading(summary.dayKey)} · Not started`
+			: `${formatDayHeading(summary.dayKey)} at ${formatSessionTime(summary.startedAt)}`;
 
 	drawText(ctx, 'TinyTrain', { x: OUTER_PADDING, y: OUTER_PADDING }, '700 18px Inter, system-ui', {
 		color: COLORS.emerald
@@ -140,7 +143,7 @@ function drawHeader(
 	);
 	drawText(
 		ctx,
-		`${formatDayHeading(summary.dayKey)} at ${formatSessionTime(startedAt)}`,
+		headingLine,
 		{ x: OUTER_PADDING, y: OUTER_PADDING + 76 },
 		'500 17px Inter, system-ui',
 		{ color: COLORS.muted }

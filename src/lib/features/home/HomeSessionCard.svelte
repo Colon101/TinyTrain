@@ -23,7 +23,6 @@
 	} = $props();
 
 	let isPlanned = $derived(session.status === 'planned');
-	let displayTime = $derived(session.startedAt ?? session.createdAt);
 
 	function getStatusIconName() {
 		if (session.status === 'completed') {
@@ -58,7 +57,7 @@
 	<div class={`flex items-start justify-between gap-4 ${label ? 'mt-2' : ''}`}>
 		<div class="min-w-0">
 			<p class="text-sm font-medium text-zinc-400">
-				{isPlanned ? 'Scheduled' : formatSessionTime(displayTime)}
+				{isPlanned ? 'Scheduled' : formatSessionTime(session.startedAt)}
 			</p>
 			<h2 class="mt-1 truncate text-xl font-semibold text-white">{session.workoutNameSnapshot}</h2>
 		</div>
