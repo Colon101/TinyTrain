@@ -19,7 +19,7 @@
 </script>
 
 <div class={isInProgress ? 'pb-3' : 'pb-5'}>
-	<div class="min-w-0 pr-14">
+	<div class="min-w-0 pr-12">
 		{#if isInProgress}
 			<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">Exercises</p>
 		{:else}

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import { SvelteDate, SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import type { DayOverview, SessionSummary, Workout } from '$lib/db';
@@ -45,6 +46,7 @@
 	let workouts = $state<Workout[]>([]);
 
 	let todayDayKey = $derived(toDayKey(new Date()));
+	let urlDayKey = $derived(getUrlDayKey(page.url.searchParams.get('date')));
 	let sessionByDayKey = $derived.by(() => {
 		const nextMap = new SvelteMap<string, SessionSummary>();
 		const getSortValue = (session: SessionSummary) => session.startedAt ?? session.createdAt;
@@ -60,6 +62,12 @@
 		}
 
 		return nextMap;
+	});
+
+	$effect(() => {
+		if (urlDayKey && urlDayKey !== selectedDayKey) {
+			void updateSelectedDay(urlDayKey, 0, false);
+		}
 	});
 
 	onMount(() => {
@@ -166,8 +174,44 @@
 		}
 	}
 
-	async function updateSelectedDay(dayKey: string, nextSlideDirection: -1 | 0 | 1 = 0) {
+	function getUrlDayKey(value: string | null) {
+		if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+			return null;
+		}
+
+		return toDayKey(fromDayKey(value)) === value ? value : null;
+	}
+
+	function updateSelectedDateUrl(dayKey: string) {
+		const nextDateParam = dayKey === todayDayKey ? null : dayKey;
+
+		if (page.url.searchParams.get('date') === nextDateParam) {
+			return;
+		}
+
+		const nextUrl = new URL(page.url);
+		if (nextDateParam) {
+			nextUrl.searchParams.set('date', nextDateParam);
+		} else {
+			nextUrl.searchParams.delete('date');
+		}
+		void goto(`${nextUrl.pathname}${nextUrl.search}`, {
+			keepFocus: true,
+			noScroll: true,
+			replaceState: true
+		});
+	}
+
+	async function updateSelectedDay(
+		dayKey: string,
+		nextSlideDirection: -1 | 0 | 1 = 0,
+		shouldUpdateUrl = true
+	) {
 		if (!api) {
+			selectedDayKey = dayKey;
+			visibleWeekDate = startOfWeek(fromDayKey(dayKey));
+			pickerMonthDate = startOfMonth(fromDayKey(dayKey));
+			weekSlideDirection = nextSlideDirection;
 			return;
 		}
 
@@ -176,6 +220,10 @@
 		visibleWeekDate = nextWeekDate;
 		pickerMonthDate = startOfMonth(fromDayKey(dayKey));
 		weekSlideDirection = nextSlideDirection;
+
+		if (shouldUpdateUrl) {
+			updateSelectedDateUrl(dayKey);
+		}
 
 		try {
 			await refreshSelectedDay();

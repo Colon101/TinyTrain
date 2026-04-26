@@ -63,12 +63,12 @@
 			<h2 class="mt-1 truncate text-xl font-semibold text-white">{session.workoutNameSnapshot}</h2>
 		</div>
 
-		<span
+		<!-- <span
 			class="inline-flex items-center gap-2 rounded-full bg-white/[0.05] px-3 py-1 text-xs font-medium text-zinc-200"
 		>
 			<Icon name={getStatusIconName()} class={`h-3.5 w-3.5 ${getStatusIconTone()}`} />
 			{formatSessionStatus(session.status)}
-		</span>
+		</span> -->
 	</div>
 
 	<div class="mt-4 grid grid-cols-3 gap-3 border-t border-white/10 pt-4">

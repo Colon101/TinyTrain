@@ -51,7 +51,7 @@
 	function getNumberComparison(current: number, previous: number | null) {
 		if (previous === null) {
 			return {
-				comparison: 'No previous session',
+				comparison: '',
 				tone: 'neutral' as const
 			};
 		}
@@ -60,7 +60,7 @@
 
 		if (diff === 0) {
 			return {
-				comparison: 'Same as previous',
+				comparison: '',
 				tone: 'neutral' as const
 			};
 		}
@@ -95,8 +95,8 @@
 	}
 </script>
 
-{#if overview.summary.status !== 'in_progress'}
-	<section class="border-y border-white/10 py-5">
+<section class="border-y border-white/10 py-5">
+	{#if overview.summary.status == 'completed' || overview.summary.status === 'abandoned'} 
 		<div class="grid grid-cols-2 gap-x-5 gap-y-5">
 			{#each metrics as metric (metric.label)}
 				<div>
@@ -112,6 +112,7 @@
 				</div>
 			{/each}
 		</div>
+		{/if}
 
 		{#if overview.summary.status === 'planned'}
 			<button
@@ -124,4 +125,3 @@
 			</button>
 		{/if}
 	</section>
-{/if}

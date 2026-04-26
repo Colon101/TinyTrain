@@ -16,7 +16,7 @@
 	};
 	type SessionTimerSummary = Pick<
 		SessionOverview['summary'],
-		'status' | 'startedAt' | 'completedAt' | 'workoutNameSnapshot'
+		'id' | 'status' | 'startedAt' | 'completedAt' | 'workoutNameSnapshot' | 'dayKey'
 	>;
 
 	const CALLBACK_TIMEOUT_MS = 15000;
@@ -40,6 +40,7 @@
 	let showSessionStatus = $derived(
 		Boolean(sessionTimer && sessionTimer.status !== 'planned' && !showSessionTimer)
 	);
+	let todayDayKey = $derived(getDayKey(new Date()));
 
 	onMount(() => {
 		let disposed = false;
@@ -135,6 +136,17 @@
 	});
 
 	$effect(() => {
+		const sessionId = sessionMatch?.[1];
+		const timerSummary = isSessionOverviewPage
+			? $sessionOverviewActions?.timerSummary
+			: null;
+
+		if (timerSummary && timerSummary.id === sessionId) {
+			sessionTimer = timerSummary;
+		}
+	});
+
+	$effect(() => {
 		let intervalId: ReturnType<typeof setInterval> | null = null;
 
 		if (showSessionTimer) {
@@ -163,12 +175,32 @@
 	}
 
 	function goBack() {
-		void goto(resolve(getParentPath(page.url.pathname)));
+		void goto(resolveParentPath(getParentPath(page.url.pathname)));
 	}
 
-	function getParentPath(pathname: string): '/' | '/workouts' | `/sessions/${string}` {
+	function getHomePath(dayKey?: string) {
+		return dayKey && dayKey !== todayDayKey ? `/?date=${encodeURIComponent(dayKey)}` : '/';
+	}
+
+	function getDayKey(date: Date) {
+		return [
+			String(date.getFullYear()).padStart(4, '0'),
+			String(date.getMonth() + 1).padStart(2, '0'),
+			String(date.getDate()).padStart(2, '0')
+		].join('-');
+	}
+
+	function resolveParentPath(path: string) {
+		if (path.startsWith('/?')) {
+			return `${resolve('/')}${path.slice(1)}`;
+		}
+
+		return resolve(path as '/' | '/workouts' | `/sessions/${string}`);
+	}
+
+	function getParentPath(pathname: string): string {
 		if (pathname === '/workouts' || pathname === '/exercises') {
-			return '/';
+			return getHomePath(page.url.searchParams.get('date') ?? undefined);
 		}
 
 		if (pathname === '/workouts/new') {
@@ -190,10 +222,10 @@
 		const sessionParentMatch = pathname.match(/^\/sessions\/[^/]+$/);
 
 		if (sessionParentMatch) {
-			return '/';
+			return getHomePath(sessionTimer?.dayKey);
 		}
 
-		return '/';
+		return getHomePath(page.url.searchParams.get('date') ?? undefined);
 	}
 </script>
 

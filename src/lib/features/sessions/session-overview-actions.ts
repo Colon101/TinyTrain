@@ -1,8 +1,14 @@
 import { writable } from 'svelte/store';
-import type { SessionStatus } from '$lib/db';
+import type { SessionOverview, SessionStatus } from '$lib/db';
+
+export type SessionOverviewTimerSummary = Pick<
+	SessionOverview['summary'],
+	'id' | 'status' | 'startedAt' | 'completedAt' | 'workoutNameSnapshot' | 'dayKey'
+>;
 
 export type SessionOverviewActions = {
 	status: SessionStatus;
+	timerSummary: SessionOverviewTimerSummary;
 	isSaving: boolean;
 	isSharingSession: boolean;
 	onShareSession: () => void | Promise<void>;

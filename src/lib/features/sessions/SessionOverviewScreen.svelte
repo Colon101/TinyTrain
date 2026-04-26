@@ -332,10 +332,15 @@
 		}
 
 		const summaryId = overview.summary.id;
+		const summaryDayKey = overview.summary.dayKey;
 
 		void runMutation(async () => {
 			await requireApi().deleteWorkoutSession(summaryId);
-			await goto(resolve('/'), { replaceState: true });
+			const todayDayKey = new Date().toLocaleDateString('sv-SE');
+			const homePath = summaryDayKey === todayDayKey ? '/' : `/?date=${encodeURIComponent(summaryDayKey)}`;
+			await goto(homePath === '/' ? resolve('/') : `${resolve('/')}${homePath.slice(1)}`, {
+				replaceState: true
+			});
 		});
 	}
 
@@ -741,6 +746,7 @@
 
 		setSessionOverviewActions({
 			status: overview.summary.status,
+			timerSummary: overview.summary,
 			isSaving,
 			isSharingSession,
 			onShareSession: handleShareSession,
