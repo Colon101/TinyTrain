@@ -90,6 +90,8 @@ export type WorkoutExerciseWithExercise = WorkoutExercise & {
 export type SessionSummary = WorkoutSession & {
 	totalExercises: number;
 	totalSets: number;
+	totalReps: number;
+	totalVolume: number;
 };
 
 export type DayOverview = {
@@ -1110,11 +1112,31 @@ function summarizeSession(
 	sessionExercises: SessionExercise[],
 	sessionSets: SessionSet[]
 ): SessionSummary {
+	const totalReps = sessionSets.reduce((total, sessionSet) => {
+		return typeof sessionSet.reps === 'number' && Number.isFinite(sessionSet.reps)
+			? total + sessionSet.reps
+			: total;
+	}, 0);
+	const totalVolume = sessionSets.reduce((total, sessionSet) => {
+		if (
+			typeof sessionSet.weight !== 'number' ||
+			!Number.isFinite(sessionSet.weight) ||
+			typeof sessionSet.reps !== 'number' ||
+			!Number.isFinite(sessionSet.reps)
+		) {
+			return total;
+		}
+
+		return total + sessionSet.weight * sessionSet.reps;
+	}, 0);
+
 	return {
 		...session,
 		dayKey: session.dayKey || toDayKey(session.startedAt ?? session.createdAt),
 		totalExercises: sessionExercises.length,
-		totalSets: sessionSets.length
+		totalSets: sessionSets.length,
+		totalReps,
+		totalVolume
 	};
 }
 

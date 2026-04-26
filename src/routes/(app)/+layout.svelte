@@ -5,7 +5,7 @@
 	import { onMount } from 'svelte';
 	import type { SessionOverview } from '$lib/db';
 	import ProfileMenu from '$lib/features/app/ProfileMenu.svelte';
-	import { formatDuration } from '$lib/features/sessions/session-format';
+	import { formatDuration, formatSessionStatus } from '$lib/features/sessions/session-format';
 	import type { CloudUser } from '$lib/features/app/user';
 	import Icon from '$lib/ui/Icon.svelte';
 
@@ -33,6 +33,9 @@
 	let sessionTimer = $state<SessionTimerSummary | null>(null);
 	let showSessionTimer = $derived(
 		Boolean(sessionTimer?.status === 'in_progress' && sessionTimer.startedAt)
+	);
+	let showSessionStatus = $derived(
+		Boolean(sessionTimer && sessionTimer.status !== 'planned' && !showSessionTimer)
 	);
 
 	onMount(() => {
@@ -149,7 +152,7 @@
 		void goto(resolve(getParentPath(page.url.pathname)));
 	}
 
-	function getParentPath(pathname: string) {
+	function getParentPath(pathname: string): '/' | '/workouts' | `/sessions/${string}` {
 		if (pathname === '/workouts' || pathname === '/exercises') {
 			return '/';
 		}
@@ -176,8 +179,7 @@
 			return '/';
 		}
 
-		const parentPath = pathname.replace(/\/+$/, '').replace(/\/[^/]+$/, '');
-		return parentPath || '/';
+		return '/';
 	}
 </script>
 
@@ -239,6 +241,29 @@
 						>
 							<Icon name="clock-3" class="h-3.5 w-3.5 text-zinc-500" />
 							{formatDuration(sessionTimer?.startedAt, sessionTimer?.completedAt, nowMs)}
+						</div>
+					{/if}
+					{#if showSessionStatus && sessionTimer}
+						<div
+							class={`inline-flex min-h-10 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 text-xs font-semibold ${
+								sessionTimer.status === 'completed'
+									? 'text-emerald-200'
+									: sessionTimer.status === 'abandoned'
+										? 'text-red-200'
+										: 'text-zinc-200'
+							}`}
+						>
+							<Icon
+								name={sessionTimer.status === 'completed' ? 'check-circle' : 'activity'}
+								class={`h-3.5 w-3.5 ${
+									sessionTimer.status === 'completed'
+										? 'text-emerald-300'
+										: sessionTimer.status === 'abandoned'
+											? 'text-red-300'
+											: 'text-zinc-500'
+								}`}
+							/>
+							{formatSessionStatus(sessionTimer.status)}
 						</div>
 					{/if}
 					<ProfileMenu user={currentUser} />

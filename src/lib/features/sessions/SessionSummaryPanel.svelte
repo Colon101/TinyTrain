@@ -1,61 +1,116 @@
 <script lang="ts">
 	import type { SessionOverview } from '$lib/db';
-	import Icon from '$lib/ui/Icon.svelte';
-	import { formatDuration, formatSessionStatus } from './session-format';
+
+	type ProgressTone = 'positive' | 'negative' | 'neutral';
+	type SummaryMetric = {
+		label: string;
+		value: string;
+		comparison: string;
+		tone: ProgressTone;
+	};
 
 	let {
 		overview,
-		nowMs,
 		isSaving,
 		onStartSession
 	}: {
 		overview: SessionOverview;
-		nowMs: number;
 		isSaving: boolean;
 		onStartSession: () => void;
 	} = $props();
+
+	let metrics = $derived(createSummaryMetrics(overview));
+
+	function createSummaryMetrics(overview: SessionOverview): SummaryMetric[] {
+		const { summary, previousSummary } = overview;
+
+		return [
+			{
+				label: 'Volume',
+				value: formatNumber(summary.totalVolume),
+				...getNumberComparison(summary.totalVolume, previousSummary?.totalVolume ?? null)
+			},
+			{
+				label: 'Exercises',
+				value: formatNumber(summary.totalExercises),
+				...getNumberComparison(summary.totalExercises, previousSummary?.totalExercises ?? null)
+			},
+			{
+				label: 'Sets',
+				value: formatNumber(summary.totalSets),
+				...getNumberComparison(summary.totalSets, previousSummary?.totalSets ?? null)
+			},
+			{
+				label: 'Reps',
+				value: formatNumber(summary.totalReps),
+				...getNumberComparison(summary.totalReps, previousSummary?.totalReps ?? null)
+			}
+		];
+	}
+
+	function getNumberComparison(current: number, previous: number | null) {
+		if (previous === null) {
+			return {
+				comparison: 'No previous session',
+				tone: 'neutral' as const
+			};
+		}
+
+		const diff = current - previous;
+
+		if (diff === 0) {
+			return {
+				comparison: 'Same as previous',
+				tone: 'neutral' as const
+			};
+		}
+
+		return {
+			comparison: formatSignedNumber(diff),
+			tone: diff > 0 ? ('positive' as const) : ('negative' as const)
+		};
+	}
+
+	function formatNumber(value: number) {
+		return new Intl.NumberFormat('en-US', {
+			maximumFractionDigits: value % 1 === 0 ? 0 : 1
+		}).format(value);
+	}
+
+	function formatSignedNumber(value: number) {
+		const prefix = value > 0 ? '+' : '';
+		return `${prefix}${formatNumber(value)}`;
+	}
+
+	function getToneClass(tone: ProgressTone) {
+		if (tone === 'positive') {
+			return 'text-emerald-300';
+		}
+
+		if (tone === 'negative') {
+			return 'text-red-300';
+		}
+
+		return 'text-zinc-500';
+	}
 </script>
 
 {#if overview.summary.status !== 'in_progress'}
 	<section class="border-y border-white/10 py-5">
-		{#if overview.summary.status !== 'planned'}
-			<div class="flex items-start justify-between gap-3">
+		<div class="grid grid-cols-2 gap-x-5 gap-y-5">
+			{#each metrics as metric}
 				<div>
-					<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">Status</p>
-					<div class="mt-2 flex items-center gap-2 text-base font-semibold text-white">
-						<Icon
-							name={overview.summary.status === 'completed' ? 'check-circle' : 'activity'}
-							class={`h-4 w-4 ${
-								overview.summary.status === 'completed'
-									? 'text-emerald-300'
-									: overview.summary.status === 'abandoned'
-										? 'text-red-300'
-										: 'text-amber-300'
-							}`}
-						/>
-						{formatSessionStatus(overview.summary.status)}
+					<p class="text-xs font-semibold tracking-[0.16em] text-zinc-500 uppercase">
+						{metric.label}
+					</p>
+					<div class="mt-1.5 flex min-h-8 items-baseline justify-between gap-2">
+						<p class="min-w-0 text-lg font-semibold text-white">{metric.value}</p>
+						<p class={`shrink-0 text-sm font-semibold ${getToneClass(metric.tone)}`}>
+							{metric.comparison}
+						</p>
 					</div>
 				</div>
-
-				<div class="text-right">
-					<p class="text-xs font-semibold tracking-[0.18em] text-zinc-500 uppercase">Duration</p>
-					<p class="mt-2 flex items-center justify-end gap-2 text-base font-semibold text-white">
-						<Icon name="clock-3" class="h-4 w-4 text-zinc-500" />
-						{formatDuration(overview.summary.startedAt, overview.summary.completedAt, nowMs)}
-					</p>
-				</div>
-			</div>
-		{/if}
-
-		<div class={`${overview.summary.status === 'planned' ? '' : 'mt-4'} grid grid-cols-2 gap-3`}>
-			<div>
-				<p class="text-xs font-medium tracking-[0.16em] text-zinc-500 uppercase">Exercises</p>
-				<p class="mt-2 text-sm font-medium text-zinc-200">{overview.summary.totalExercises}</p>
-			</div>
-			<div>
-				<p class="text-xs font-medium tracking-[0.16em] text-zinc-500 uppercase">Sets</p>
-				<p class="mt-2 text-sm font-medium text-zinc-200">{overview.summary.totalSets}</p>
-			</div>
+			{/each}
 		</div>
 
 		{#if overview.summary.status === 'planned'}

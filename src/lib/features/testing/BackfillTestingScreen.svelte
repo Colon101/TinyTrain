@@ -531,7 +531,7 @@
 					{#if savedSessionId}
 						<a
 							class="flex min-h-11 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-white"
-							href={resolve('/sessions/[sessionId]', { sessionId: savedSessionId })}
+							href={resolve('/(app)/sessions/[sessionId]', { sessionId: savedSessionId })}
 						>
 							Open saved session
 						</a>

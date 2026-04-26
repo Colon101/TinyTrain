@@ -268,7 +268,7 @@
 						{#each selectedDetail.history as entry (entry.sessionId)}
 							<a
 								class="block rounded-lg border border-white/10 bg-white/[0.03] px-4 py-4 transition hover:border-emerald-300/50"
-								href={resolve('/sessions/[sessionId]', { sessionId: entry.sessionId })}
+								href={resolve('/(app)/sessions/[sessionId]', { sessionId: entry.sessionId })}
 							>
 								<div class="flex items-start justify-between gap-3">
 									<div>

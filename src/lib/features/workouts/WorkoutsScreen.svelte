@@ -204,7 +204,7 @@
 			isCreatingWorkout = false;
 			pageMode = 'detail';
 			await loadPageData(workout.id);
-			await goto(resolve('/workouts/[workoutId]', { workoutId: workout.id }), {
+			await goto(resolve('/(app)/workouts/[workoutId]', { workoutId: workout.id }), {
 				keepFocus: true
 			});
 		});
@@ -215,7 +215,7 @@
 		pageMode = 'detail';
 		closeExercisePicker();
 		void loadSelectedWorkoutExercises();
-		void goto(resolve('/workouts/[workoutId]', { workoutId }), { keepFocus: true });
+		void goto(resolve('/(app)/workouts/[workoutId]', { workoutId }), { keepFocus: true });
 	}
 
 	function openExercisePicker() {

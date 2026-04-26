@@ -10,6 +10,7 @@
 	import SessionSummaryPanel from './SessionSummaryPanel.svelte';
 	import { formatDayHeading } from './session-format';
 	import { hasLoggedValues } from './session-overview';
+	import { shareOrDownloadSessionImage } from './session-share-image';
 
 	type DatabaseApi = typeof import('$lib/db');
 	type PickerMode = 'add' | 'swap';
@@ -41,6 +42,7 @@
 	let exercises = $state<Exercise[]>([]);
 	let isLoading = $state(true);
 	let isSaving = $state(false);
+	let isSharingSession = $state(false);
 	let errorMessage = $state('');
 	let nowMs = $state(Date.now());
 	let isExercisePickerOpen = $state(false);
@@ -371,6 +373,32 @@
 		void runMutation(async () => {
 			await requireApi().completeWorkoutSession(summaryId);
 		});
+	}
+
+	async function handleShareSession() {
+		if (!overview || overview.summary.status !== 'completed' || isSharingSession) {
+			return;
+		}
+
+		isSharingSession = true;
+		errorMessage = '';
+		isSessionMenuOpen = false;
+
+		try {
+			const previousOverview = overview.previousSummary
+				? await requireApi().getEditableSession(overview.previousSummary.id)
+				: null;
+
+			await shareOrDownloadSessionImage(overview, nowMs, previousOverview);
+		} catch (error) {
+			if (error instanceof DOMException && error.name === 'AbortError') {
+				return;
+			}
+
+			errorMessage = getErrorMessage(error);
+		} finally {
+			isSharingSession = false;
+		}
 	}
 
 	function handleRemoveSessionExercise(sessionExerciseId: string) {
@@ -711,15 +739,18 @@
 	{:else}
 		<SessionOverviewHeader
 			{overview}
+			{nowMs}
 			{isSaving}
+			{isSharingSession}
 			{isSessionMenuOpen}
 			onToggleSessionMenu={() => (isSessionMenuOpen = !isSessionMenuOpen)}
+			onShareSession={handleShareSession}
 			onEndSession={handleEndSession}
 			onResetSession={handleResetSession}
 			onDeleteSession={handleDeleteSession}
 		/>
 
-		<SessionSummaryPanel {overview} {nowMs} {isSaving} onStartSession={handleStartSession} />
+		<SessionSummaryPanel {overview} {isSaving} onStartSession={handleStartSession} />
 
 		<SessionExerciseList
 			{sessionId}

@@ -250,7 +250,7 @@
 
 		void runMutation(async () => {
 			await dbApi.startWorkoutSession(sessionId);
-			await goto(resolve('/sessions/[sessionId]', { sessionId }));
+			await goto(resolve('/(app)/sessions/[sessionId]', { sessionId }));
 		});
 	}
 </script>
