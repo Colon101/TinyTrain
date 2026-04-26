@@ -21,6 +21,7 @@ const CACHE = `cache-${version}`;
 const APP_SHELL = '/';
 const DEPLOYMENT_MANIFEST = '/deployment.json';
 const DEV = import.meta.env.DEV;
+const LOG_PREFIX = '[TinyTrain service worker]';
 
 const ASSETS = [
 	...build, // the app itself
@@ -71,6 +72,8 @@ async function readDeploymentId(response: Response | undefined) {
 }
 
 async function hasCurrentDeployment(cache: Cache) {
+	console.info(`${LOG_PREFIX} checking for cache update`);
+
 	const [cachedResponse, latestResponse] = await Promise.all([
 		cache.match(DEPLOYMENT_MANIFEST),
 		fetchFresh(`${DEPLOYMENT_MANIFEST}?sw-update=${Date.now()}`)
@@ -79,11 +82,24 @@ async function hasCurrentDeployment(cache: Cache) {
 	const cachedId = await readDeploymentId(cachedResponse);
 	const latestId = await readDeploymentId(latestResponse);
 
-	return Boolean(cachedId && latestId && cachedId === latestId);
+	const hasCurrentDeployment = Boolean(cachedId && latestId && cachedId === latestId);
+
+	console.info(
+		hasCurrentDeployment
+			? `${LOG_PREFIX} cache is current`
+			: `${LOG_PREFIX} newer deployment found, skipping cache for this load`,
+		{ cachedId, latestId }
+	);
+
+	return hasCurrentDeployment;
 }
 
 function hasVerifiedCurrentDeployment(cache: Cache) {
-	currentDeploymentPromise ??= hasCurrentDeployment(cache).catch(() => true);
+	currentDeploymentPromise ??= hasCurrentDeployment(cache).catch((error: unknown) => {
+		console.info(`${LOG_PREFIX} cache update check failed, trusting cache`, error);
+		return true;
+	});
+
 	return currentDeploymentPromise;
 }
 
