@@ -63,7 +63,7 @@
 				disabled={status === 'planned'}
 				onclick={() =>
 					goto(
-						resolve('/sessions/[sessionId]/exercises/[sessionExerciseId]', {
+						resolve('/(app)/sessions/[sessionId]/exercises/[sessionExerciseId]', {
 							sessionId,
 							sessionExerciseId: sessionExercise.id
 						})

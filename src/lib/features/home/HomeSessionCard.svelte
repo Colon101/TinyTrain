@@ -92,7 +92,7 @@
 	<div class="mt-4 flex gap-2">
 		<a
 			class="flex min-h-11 flex-1 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] px-4 text-sm font-semibold text-white"
-			href={resolve('/sessions/[sessionId]', { sessionId: session.id })}
+			href={resolve('/(app)/sessions/[sessionId]', { sessionId: session.id })}
 		>
 			Open session
 		</a>

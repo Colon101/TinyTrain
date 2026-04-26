@@ -13,7 +13,7 @@
 	} from '$lib/db';
 	import ExercisePickerSheet from '$lib/features/workouts/ExercisePickerSheet.svelte';
 	import Icon from '$lib/ui/Icon.svelte';
-	import { formatSessionStatus, formatSessionTime } from './session-format';
+	// import { formatSessionStatus, formatSessionTime } from './session-format';
 
 	type DatabaseApi = typeof import('$lib/db');
 	type PickerMode = 'add' | 'swap';
@@ -539,7 +539,7 @@
 
 					if (addedExercise) {
 						await goto(
-							resolve('/sessions/[sessionId]/exercises/[sessionExerciseId]', {
+							resolve('/(app)/sessions/[sessionId]/exercises/[sessionExerciseId]', {
 								sessionId,
 								sessionExerciseId: addedExercise.id
 							}),
@@ -573,7 +573,7 @@
 
 					if (addedExercise) {
 						await goto(
-							resolve('/sessions/[sessionId]/exercises/[sessionExerciseId]', {
+							resolve('/(app)/sessions/[sessionId]/exercises/[sessionExerciseId]', {
 								sessionId,
 								sessionExerciseId: addedExercise.id
 							}),
@@ -636,7 +636,7 @@
 			async () => {
 				if (nextRouteTarget) {
 					await goto(
-						resolve('/sessions/[sessionId]/exercises/[sessionExerciseId]', {
+						resolve('/(app)/sessions/[sessionId]/exercises/[sessionExerciseId]', {
 							sessionId,
 							sessionExerciseId: nextRouteTarget.id
 						}),
@@ -645,7 +645,7 @@
 					return;
 				}
 
-				await goto(resolve('/sessions/[sessionId]', { sessionId }), { replaceState: true });
+				await goto(resolve('/(app)/sessions/[sessionId]', { sessionId }), { replaceState: true });
 			}
 		);
 	}
@@ -660,7 +660,7 @@
 				await requireApi().completeWorkoutSession(sessionId);
 			},
 			async () => {
-				await goto(resolve('/sessions/[sessionId]', { sessionId }), { replaceState: true });
+				await goto(resolve('/(app)/sessions/[sessionId]', { sessionId }), { replaceState: true });
 			}
 		);
 	}
@@ -668,7 +668,7 @@
 	function goToNextExercise() {
 		if (nextExercise) {
 			void goto(
-				resolve('/sessions/[sessionId]/exercises/[sessionExerciseId]', {
+				resolve('/(app)/sessions/[sessionId]/exercises/[sessionExerciseId]', {
 					sessionId,
 					sessionExerciseId: nextExercise.id
 				})
@@ -679,7 +679,7 @@
 	function goToPreviousExercise() {
 		if (previousExercise) {
 			void goto(
-				resolve('/sessions/[sessionId]/exercises/[sessionExerciseId]', {
+				resolve('/(app)/sessions/[sessionId]/exercises/[sessionExerciseId]', {
 					sessionId,
 					sessionExerciseId: previousExercise.id
 				})
@@ -713,7 +713,7 @@
 			</p>
 			<a
 				class="mt-6 flex min-h-12 items-center justify-center rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950"
-				href={resolve('/sessions/[sessionId]', { sessionId })}
+				href={resolve('/(app)/sessions/[sessionId]', { sessionId })}
 			>
 				Back to session
 			</a>
@@ -736,7 +736,7 @@
 				</button>
 				<a
 					class="flex min-h-12 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] px-4 text-base font-semibold text-white"
-					href={resolve('/sessions/[sessionId]', { sessionId })}
+					href={resolve('/(app)/sessions/[sessionId]', { sessionId })}
 				>
 					Back to session
 				</a>
@@ -775,7 +775,7 @@
 						>
 							<a
 								class="rounded-lg px-3 py-2 text-left text-sm font-medium text-zinc-200"
-								href={resolve('/sessions/[sessionId]', { sessionId })}
+								href={resolve('/(app)/sessions/[sessionId]', { sessionId })}
 							>
 								Session overview
 							</a>
@@ -950,7 +950,7 @@
 		>
 			<!-- 			<a
 				class="flex min-h-10 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-white"
-				href={resolve('/sessions/[sessionId]', { sessionId })}
+				href={resolve('/(app)/sessions/[sessionId]', { sessionId })}
 			>
 				Session overview
 			</a> -->
