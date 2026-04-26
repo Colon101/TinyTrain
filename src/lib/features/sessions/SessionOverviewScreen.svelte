@@ -1,13 +1,17 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import type { Exercise, SessionExerciseOverview, SessionOverview } from '$lib/db';
 	import ExercisePickerSheet from '$lib/features/workouts/ExercisePickerSheet.svelte';
 	import SessionDragPreview from './SessionDragPreview.svelte';
 	import SessionExerciseList from './SessionExerciseList.svelte';
 	import SessionOverviewHeader from './SessionOverviewHeader.svelte';
 	import SessionSummaryPanel from './SessionSummaryPanel.svelte';
+	import {
+		clearSessionOverviewActions,
+		setSessionOverviewActions
+	} from './session-overview-actions';
 	import { formatDayHeading } from './session-format';
 	import { hasLoggedValues } from './session-overview';
 	import { shareOrDownloadSessionImage } from './session-share-image';
@@ -52,7 +56,6 @@
 	let selectedPickerExerciseIds = $state<string[]>([]);
 	let newExerciseName = $state('');
 	let isNewExerciseUnilateral = $state(false);
-	let isSessionMenuOpen = $state(false);
 	let openExerciseMenuId = $state('');
 	let draggedSessionExerciseId = $state('');
 	let dragStartSessionExerciseIds = $state<string[]>([]);
@@ -177,7 +180,6 @@
 		overview = nextOverview;
 		exercises = nextExercises;
 		nowMs = Date.now();
-		isSessionMenuOpen = false;
 		openExerciseMenuId = '';
 	}
 
@@ -382,7 +384,6 @@
 
 		isSharingSession = true;
 		errorMessage = '';
-		isSessionMenuOpen = false;
 
 		try {
 			const previousOverview = overview.previousSummary
@@ -450,6 +451,9 @@
 	}
 
 	function cacheDragDropTargets(excludedSessionExerciseId: string) {
+		const scrollArea = document.querySelector<HTMLElement>('[data-app-scroll-area]');
+		const scrollAreaBounds = scrollArea?.getBoundingClientRect() ?? null;
+
 		dragDropTargets = Array.from(
 			document.querySelectorAll<HTMLElement>('[data-session-exercise-id]')
 		).flatMap((row) => {
@@ -460,11 +464,14 @@
 			}
 
 			const bounds = row.getBoundingClientRect();
+			const midpointY = scrollArea && scrollAreaBounds
+				? bounds.top - scrollAreaBounds.top + scrollArea.scrollTop + bounds.height / 2
+				: bounds.top + window.scrollY + bounds.height / 2;
 
 			return [
 				{
 					id,
-					midpointY: bounds.top + window.scrollY + bounds.height / 2
+					midpointY
 				}
 			];
 		});
@@ -478,7 +485,11 @@
 		const nextIds = (
 			dragStartSessionExerciseIds.length ? dragStartSessionExerciseIds : getSessionExerciseIds()
 		).filter((id) => id !== draggedSessionExerciseId);
-		const pointerDocumentY = pointerY + window.scrollY;
+		const scrollArea = document.querySelector<HTMLElement>('[data-app-scroll-area]');
+		const scrollAreaBounds = scrollArea?.getBoundingClientRect() ?? null;
+		const pointerDocumentY = scrollArea && scrollAreaBounds
+			? pointerY - scrollAreaBounds.top + scrollArea.scrollTop
+			: pointerY + window.scrollY;
 		const targetSessionExerciseId = dragDropTargets.find(
 			(target) => pointerDocumentY < target.midpointY
 		)?.id;
@@ -567,13 +578,20 @@
 	}
 
 	function getDragAutoScrollStep(pointerY: number) {
-		if (pointerY < DRAG_SCROLL_EDGE_PX) {
+		const scrollBounds =
+			document.querySelector<HTMLElement>('[data-app-scroll-area]')?.getBoundingClientRect() ?? null;
+		const topEdge = scrollBounds?.top ?? 0;
+		const bottomEdge = scrollBounds?.bottom ?? window.innerHeight;
+		const topEdgeDistance = pointerY - topEdge;
+
+		if (topEdgeDistance < DRAG_SCROLL_EDGE_PX) {
 			return -Math.ceil(
-				((DRAG_SCROLL_EDGE_PX - pointerY) / DRAG_SCROLL_EDGE_PX) * DRAG_SCROLL_MAX_STEP_PX
+				((DRAG_SCROLL_EDGE_PX - topEdgeDistance) / DRAG_SCROLL_EDGE_PX) *
+					DRAG_SCROLL_MAX_STEP_PX
 			);
 		}
 
-		const bottomEdgeDistance = window.innerHeight - pointerY;
+		const bottomEdgeDistance = bottomEdge - pointerY;
 
 		if (bottomEdgeDistance < DRAG_SCROLL_EDGE_PX) {
 			return Math.ceil(
@@ -582,6 +600,17 @@
 		}
 
 		return 0;
+	}
+
+	function scrollDragContainer(scrollStep: number) {
+		const scrollArea = document.querySelector<HTMLElement>('[data-app-scroll-area]');
+
+		if (scrollArea) {
+			scrollArea.scrollBy(0, scrollStep);
+			return;
+		}
+
+		window.scrollBy(0, scrollStep);
 	}
 
 	function startDragAutoScroll(pointerY: number) {
@@ -600,7 +629,7 @@
 			const scrollStep = getDragAutoScrollStep(dragAutoScrollPointerY);
 
 			if (scrollStep !== 0) {
-				window.scrollBy(0, scrollStep);
+				scrollDragContainer(scrollStep);
 			}
 
 			dragAutoScrollFrameId = window.requestAnimationFrame(scrollFrame);
@@ -703,6 +732,27 @@
 
 		resetDrag(true);
 	}
+
+	$effect(() => {
+		if (!overview) {
+			clearSessionOverviewActions();
+			return;
+		}
+
+		setSessionOverviewActions({
+			status: overview.summary.status,
+			isSaving,
+			isSharingSession,
+			onShareSession: handleShareSession,
+			onEndSession: handleEndSession,
+			onResetSession: handleResetSession,
+			onDeleteSession: handleDeleteSession
+		});
+	});
+
+	onDestroy(() => {
+		clearSessionOverviewActions();
+	});
 </script>
 
 <section class="box-border flex min-w-0 flex-1 flex-col px-1">
@@ -737,18 +787,7 @@
 			</a>
 		</section>
 	{:else}
-		<SessionOverviewHeader
-			{overview}
-			{nowMs}
-			{isSaving}
-			{isSharingSession}
-			{isSessionMenuOpen}
-			onToggleSessionMenu={() => (isSessionMenuOpen = !isSessionMenuOpen)}
-			onShareSession={handleShareSession}
-			onEndSession={handleEndSession}
-			onResetSession={handleResetSession}
-			onDeleteSession={handleDeleteSession}
-		/>
+		<SessionOverviewHeader {overview} {nowMs} />
 
 		<SessionSummaryPanel {overview} {isSaving} onStartSession={handleStartSession} />
 

@@ -386,13 +386,20 @@
 	}
 
 	function getDragAutoScrollStep(pointerY: number) {
-		if (pointerY < DRAG_SCROLL_EDGE_PX) {
+		const scrollBounds =
+			document.querySelector<HTMLElement>('[data-app-scroll-area]')?.getBoundingClientRect() ?? null;
+		const topEdge = scrollBounds?.top ?? 0;
+		const bottomEdge = scrollBounds?.bottom ?? window.innerHeight;
+		const topEdgeDistance = pointerY - topEdge;
+
+		if (topEdgeDistance < DRAG_SCROLL_EDGE_PX) {
 			return -Math.ceil(
-				((DRAG_SCROLL_EDGE_PX - pointerY) / DRAG_SCROLL_EDGE_PX) * DRAG_SCROLL_MAX_STEP_PX
+				((DRAG_SCROLL_EDGE_PX - topEdgeDistance) / DRAG_SCROLL_EDGE_PX) *
+					DRAG_SCROLL_MAX_STEP_PX
 			);
 		}
 
-		const bottomEdgeDistance = window.innerHeight - pointerY;
+		const bottomEdgeDistance = bottomEdge - pointerY;
 
 		if (bottomEdgeDistance < DRAG_SCROLL_EDGE_PX) {
 			return Math.ceil(
@@ -401,6 +408,17 @@
 		}
 
 		return 0;
+	}
+
+	function scrollDragContainer(scrollStep: number) {
+		const scrollArea = document.querySelector<HTMLElement>('[data-app-scroll-area]');
+
+		if (scrollArea) {
+			scrollArea.scrollBy(0, scrollStep);
+			return;
+		}
+
+		window.scrollBy(0, scrollStep);
 	}
 
 	function startDragAutoScroll(pointerY: number) {
@@ -419,7 +437,7 @@
 			const scrollStep = getDragAutoScrollStep(dragAutoScrollPointerY);
 
 			if (scrollStep !== 0) {
-				window.scrollBy(0, scrollStep);
+				scrollDragContainer(scrollStep);
 				previewDraggedOrderAt(dragAutoScrollPointerY);
 			}
 

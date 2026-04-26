@@ -5,6 +5,7 @@
 	import { onMount } from 'svelte';
 	import type { SessionOverview } from '$lib/db';
 	import ProfileMenu from '$lib/features/app/ProfileMenu.svelte';
+	import { sessionOverviewActions } from '$lib/features/sessions/session-overview-actions';
 	import { formatDuration, formatSessionStatus } from '$lib/features/sessions/session-format';
 	import type { CloudUser } from '$lib/features/app/user';
 	import Icon from '$lib/ui/Icon.svelte';
@@ -30,7 +31,9 @@
 	let isHomePage = $derived(page.url.pathname === '/');
 	let nowMs = $state(Date.now());
 	let sessionMatch = $derived(page.url.pathname.match(/^\/sessions\/([^/]+)/));
+	let isSessionOverviewPage = $derived(Boolean(page.url.pathname.match(/^\/sessions\/[^/]+$/)));
 	let sessionTimer = $state<SessionTimerSummary | null>(null);
+	let isSessionActionsMenuOpen = $state(false);
 	let showSessionTimer = $derived(
 		Boolean(sessionTimer?.status === 'in_progress' && sessionTimer.startedAt)
 	);
@@ -148,6 +151,17 @@
 		};
 	});
 
+	$effect(() => {
+		if (!isSessionOverviewPage || !$sessionOverviewActions) {
+			isSessionActionsMenuOpen = false;
+		}
+	});
+
+	function runSessionAction(action: () => void | Promise<void>) {
+		isSessionActionsMenuOpen = false;
+		void action();
+	}
+
 	function goBack() {
 		void goto(resolve(getParentPath(page.url.pathname)));
 	}
@@ -184,7 +198,7 @@
 </script>
 
 <main
-	class="mx-auto box-border flex min-h-svh w-full max-w-[430px] flex-col bg-[#080b0d] px-4 py-4 text-zinc-100"
+	class="relative mx-auto box-border flex h-svh max-h-svh w-full max-w-[430px] flex-col overflow-hidden bg-[#080b0d] px-4 py-4 text-zinc-100"
 >
 	{#if isCheckingAuth}
 		<section class="flex flex-1 flex-col justify-center">
@@ -216,7 +230,7 @@
 		</section>
 	{:else}
 		{#if !isHomePage}
-			<header class="flex min-w-0 items-center gap-2 pb-3">
+			<header class="relative z-20 flex min-w-0 shrink-0 items-center gap-2 pb-3">
 				<div class="flex min-w-0 flex-1 items-center gap-2">
 					<button
 						class="flex min-h-10 shrink-0 items-center gap-2 rounded-lg border border-white/10 px-3 text-sm font-medium text-zinc-300"
@@ -271,7 +285,78 @@
 			</header>
 		{/if}
 
-		<div class="flex flex-1 flex-col pb-6">
+		{#if isSessionOverviewPage && $sessionOverviewActions}
+			<div class="pointer-events-none absolute top-18 right-4 z-30">
+				<div class="pointer-events-auto relative">
+					<button
+						class="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-[#11171a]/95 text-sm font-semibold text-zinc-300 shadow-[0_12px_30px_rgba(0,0,0,0.28)] backdrop-blur disabled:text-zinc-500"
+						type="button"
+						title="Open session menu"
+						aria-label="Open session menu"
+						aria-expanded={isSessionActionsMenuOpen}
+						disabled={$sessionOverviewActions.isSaving || $sessionOverviewActions.isSharingSession}
+						onclick={() => (isSessionActionsMenuOpen = !isSessionActionsMenuOpen)}
+					>
+						···
+					</button>
+
+					{#if isSessionActionsMenuOpen}
+						<div
+							class="absolute top-12 right-0 z-30 grid min-w-44 gap-2 rounded-lg border border-white/10 bg-[#0f1519] p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)]"
+						>
+							{#if $sessionOverviewActions.status === 'completed'}
+								<button
+									class="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-zinc-200 disabled:text-zinc-500"
+									type="button"
+									disabled={
+										$sessionOverviewActions.isSaving ||
+										$sessionOverviewActions.isSharingSession
+									}
+									onclick={() => runSessionAction($sessionOverviewActions!.onShareSession)}
+								>
+									<Icon name="share-2" class="h-4 w-4 text-emerald-200" />
+									{$sessionOverviewActions.isSharingSession ? 'Rendering image' : 'Share session'}
+								</button>
+							{/if}
+
+							{#if $sessionOverviewActions.status === 'in_progress'}
+								<button
+									class="rounded-lg px-3 py-2 text-left text-sm font-medium text-zinc-200"
+									type="button"
+									disabled={$sessionOverviewActions.isSaving}
+									onclick={() => runSessionAction($sessionOverviewActions!.onEndSession)}
+								>
+									End session
+								</button>
+								<button
+									class="rounded-lg px-3 py-2 text-left text-sm font-medium text-zinc-200"
+									type="button"
+									disabled={$sessionOverviewActions.isSaving}
+									onclick={() => runSessionAction($sessionOverviewActions!.onResetSession)}
+								>
+									Reset session
+								</button>
+							{/if}
+
+							<button
+								class="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-red-200"
+								type="button"
+								disabled={$sessionOverviewActions.isSaving}
+								onclick={() => runSessionAction($sessionOverviewActions!.onDeleteSession)}
+							>
+								<Icon name="trash-2" class="h-4 w-4 text-red-300" />
+								Delete session
+							</button>
+						</div>
+					{/if}
+				</div>
+			</div>
+		{/if}
+
+		<div
+			class="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain pb-6 pr-1 no-scrollbar"
+			data-app-scroll-area
+		>
 			{@render children()}
 		</div>
 	{/if}

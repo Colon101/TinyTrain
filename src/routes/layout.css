@@ -1,5 +1,7 @@
 @import 'tailwindcss';
-
+@utility no-scrollbar {
+  @apply [scrollbar-width:none] [&::-webkit-scrollbar]:hidden;
+}
 @layer base {
 	:root {
 		color-scheme: dark;
