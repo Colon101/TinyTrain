@@ -23,10 +23,10 @@
 		{#if isInProgress}
 			<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">Exercises</p>
 		{:else}
-			<h1 class="text-3xl font-semibold text-white">
+			<!-- <h1 class="text-3xl font-semibold text-white">
 				{overview.summary.workoutNameSnapshot}
-			</h1>
-			<p class="mt-2 text-sm leading-6 text-zinc-400">
+			</h1> -->
+			<p class="pt-3 mt-2 text-sm leading-6 text-zinc-400">
 				{formatDayHeading(overview.summary.dayKey)} at
 				{formatSessionTime(overview.summary.startedAt ?? overview.summary.createdAt)}
 				{#if durationText}

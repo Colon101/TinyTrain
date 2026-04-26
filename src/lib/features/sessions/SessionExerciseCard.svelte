@@ -41,12 +41,12 @@
 
 {#if isEditable}
 	<div
-		class="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-3"
+		class="rounded-lg border border-white/10 bg-white/3 px-3 py-3"
 		data-session-exercise-id={sessionExercise.id}
 	>
 		<div class="grid min-w-0 grid-cols-[2.25rem_minmax(0,1fr)_2.25rem] items-center gap-3">
 			<button
-				class="flex h-9 w-9 shrink-0 touch-none items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-400 select-none"
+				class="flex h-9 w-9 shrink-0 touch-none items-center justify-center rounded-full border border-white/10 bg-white/4 text-zinc-400 select-none"
 				type="button"
 				aria-label="Reorder exercise"
 				onpointerdown={(event) => onDragPointerDown(event, sessionExercise.id)}
@@ -69,7 +69,7 @@
 						})
 					)}
 			>
-				<p class="line-clamp-2 text-base leading-5 font-semibold break-words text-white">
+				<p class="line-clamp-2 text-base leading-5 font-semibold wrap-break-word text-white">
 					{sessionExercise.exerciseNameSnapshot}
 				</p>
 				<p class="mt-0.5 text-sm leading-5 text-zinc-400">
@@ -78,7 +78,7 @@
 			</button>
 
 			<button
-				class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-sm font-semibold text-zinc-300"
+				class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/4 text-sm font-semibold text-zinc-300"
 				type="button"
 				onclick={() => onToggleMenu(sessionExercise.id)}
 			>
@@ -110,8 +110,8 @@
 		<SessionSetTable sets={performedSets} variant="compact" />
 	</div>
 {:else}
-	<div class="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-4">
-		<h2 class="line-clamp-2 text-lg leading-6 font-semibold break-words text-white">
+	<div class="rounded-lg border border-white/10 bg-white/3 px-4 py-4">
+		<h2 class="line-clamp-2 text-lg leading-6 font-semibold wrap-break-word text-white">
 			{sessionExercise.exerciseNameSnapshot}
 		</h2>
 

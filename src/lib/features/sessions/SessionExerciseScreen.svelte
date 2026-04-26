@@ -813,7 +813,7 @@
 			</div> -->
 		</div>
 
-		<section class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1 pr-1">
+		<section class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1">
 			{#if activeExercise.sets.length > 0}
 				<div
 					class={`${setEditorGridClass} mb-1.5 px-2.5 text-[10px] font-semibold tracking-[0.16em] text-zinc-500 uppercase`}

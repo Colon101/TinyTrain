@@ -76,7 +76,7 @@
 
 <div class="relative" bind:this={container}>
 	<button
-		class="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/[0.06] text-sm font-semibold text-white transition hover:border-emerald-300/50 hover:bg-white/[0.1]"
+		class="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/6 text-sm font-semibold text-white transition hover:border-emerald-300/50 hover:bg-white/10"
 		type="button"
 		title="Open account menu"
 		aria-expanded={isOpen}
@@ -102,7 +102,7 @@
 
 			<div class="pt-2">
 				<button
-					class="flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] disabled:text-zinc-500"
+					class="flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-zinc-200 transition hover:bg-white/6 disabled:text-zinc-500"
 					type="button"
 					disabled={!api || isBusy}
 					onclick={syncNow}
@@ -116,7 +116,7 @@
 				</button>
 
 				<button
-					class="mt-1 flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.06] disabled:text-zinc-500"
+					class="mt-1 flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-zinc-200 transition hover:bg-white/6 disabled:text-zinc-500"
 					type="button"
 					disabled={!api || isBusy}
 					onclick={signOut}

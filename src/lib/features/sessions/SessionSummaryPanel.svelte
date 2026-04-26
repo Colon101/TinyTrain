@@ -98,7 +98,7 @@
 {#if overview.summary.status !== 'in_progress'}
 	<section class="border-y border-white/10 py-5">
 		<div class="grid grid-cols-2 gap-x-5 gap-y-5">
-			{#each metrics as metric}
+			{#each metrics as metric (metric.label)}
 				<div>
 					<p class="text-xs font-semibold tracking-[0.16em] text-zinc-500 uppercase">
 						{metric.label}

@@ -198,7 +198,7 @@
 </script>
 
 <main
-	class="relative mx-auto box-border flex h-svh max-h-svh w-full max-w-[430px] flex-col overflow-hidden bg-[#080b0d] px-4 py-4 text-zinc-100"
+	class="relative mx-auto box-border flex h-svh max-h-svh w-full max-w-107.5 flex-col overflow-hidden bg-[#080b0d] px-4 py-4 text-zinc-100"
 >
 	{#if isCheckingAuth}
 		<section class="flex flex-1 flex-col justify-center">
@@ -230,7 +230,9 @@
 		</section>
 	{:else}
 		{#if !isHomePage}
-			<header class="relative z-20 flex min-w-0 shrink-0 items-center gap-2 pb-3">
+			<header
+				class="absolute inset-x-0 top-0 z-20 flex min-w-0 items-center gap-2 border-b border-white/[0.07] bg-[#080b0d]/35 px-4 pt-3 pb-3 shadow-[0_18px_36px_rgba(0,0,0,0.22)] backdrop-blur-3xl [backdrop-filter:blur(28px)_saturate(1.35)]"
+			>
 				<div class="flex min-w-0 flex-1 items-center gap-2">
 					<button
 						class="flex min-h-10 shrink-0 items-center gap-2 rounded-lg border border-white/10 px-3 text-sm font-medium text-zinc-300"
@@ -251,7 +253,7 @@
 				<div class="flex shrink-0 items-center gap-2">
 					{#if showSessionTimer}
 						<div
-							class="inline-flex min-h-10 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 text-xs font-semibold text-zinc-200"
+							class="inline-flex min-h-10 items-center gap-2 rounded-full border border-white/10 bg-white/4 px-3 text-xs font-semibold text-zinc-200"
 						>
 							<Icon name="clock-3" class="h-3.5 w-3.5 text-zinc-500" />
 							{formatDuration(sessionTimer?.startedAt, sessionTimer?.completedAt, nowMs)}
@@ -259,7 +261,7 @@
 					{/if}
 					{#if showSessionStatus && sessionTimer}
 						<div
-							class={`inline-flex min-h-10 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 text-xs font-semibold ${
+							class={`inline-flex min-h-10 items-center gap-2 rounded-full border border-white/10 bg-white/4 px-3 text-xs font-semibold ${
 								sessionTimer.status === 'completed'
 									? 'text-emerald-200'
 									: sessionTimer.status === 'abandoned'
@@ -286,10 +288,10 @@
 		{/if}
 
 		{#if isSessionOverviewPage && $sessionOverviewActions}
-			<div class="pointer-events-none absolute top-18 right-4 z-30">
+			<div class="pointer-events-none absolute top-20 right-4 z-30">
 				<div class="pointer-events-auto relative">
 					<button
-						class="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-[#11171a]/95 text-sm font-semibold text-zinc-300 shadow-[0_12px_30px_rgba(0,0,0,0.28)] backdrop-blur disabled:text-zinc-500"
+						class="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-[#11171a]/35 text-sm font-semibold text-zinc-300 shadow-[0_12px_30px_rgba(0,0,0,0.28)] backdrop-blur-3xl [backdrop-filter:blur(24px)_saturate(1.35)] disabled:text-zinc-500"
 						type="button"
 						title="Open session menu"
 						aria-label="Open session menu"
@@ -302,7 +304,7 @@
 
 					{#if isSessionActionsMenuOpen}
 						<div
-							class="absolute top-12 right-0 z-30 grid min-w-44 gap-2 rounded-lg border border-white/10 bg-[#0f1519] p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)]"
+							class="absolute top-12 right-0 z-30 grid min-w-44 gap-2 rounded-lg border border-white/10 bg-white/6 backdrop-blur-3xl p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)]"
 						>
 							{#if $sessionOverviewActions.status === 'completed'}
 								<button
@@ -354,7 +356,9 @@
 		{/if}
 
 		<div
-			class="flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain pb-6 pr-1 no-scrollbar"
+			class={`flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto overscroll-contain pb-6 no-scrollbar ${
+				!isHomePage ? 'pt-14' : ''
+			}`}
 			data-app-scroll-area
 		>
 			{@render children()}
