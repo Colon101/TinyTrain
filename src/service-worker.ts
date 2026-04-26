@@ -141,20 +141,37 @@ async function cacheUrls(urls: unknown) {
 	);
 }
 
+async function addFilesToCache(cache: Cache) {
+	const results = await Promise.allSettled(
+		ASSETS.map(async (asset) => {
+			await cache.add(asset);
+			return asset;
+		})
+	);
+
+	const failedAssets = results
+		.map((result, index) => (result.status === 'rejected' ? ASSETS[index] : undefined))
+		.filter((asset): asset is string => Boolean(asset));
+
+	if (failedAssets.length > 0) {
+		console.info(`${LOG_PREFIX} skipped unavailable precache assets`, failedAssets);
+	}
+}
+
 self.addEventListener('install', (event) => {
 	// Create a new cache and add all files to it
-	async function addFilesToCache() {
+	async function installCache() {
 		if (DEV) {
 			await self.skipWaiting();
 			return;
 		}
 
 		const cache = await caches.open(CACHE);
-		await cache.addAll(ASSETS);
+		await addFilesToCache(cache);
 		await self.skipWaiting();
 	}
 
-	event.waitUntil(addFilesToCache());
+	event.waitUntil(installCache());
 });
 
 self.addEventListener('activate', (event) => {
