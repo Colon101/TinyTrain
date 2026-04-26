@@ -175,6 +175,7 @@
 	}
 
 	function goBack() {
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
 		void goto(resolveParentPath(getParentPath(page.url.pathname)));
 	}
 
