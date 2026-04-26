@@ -8,19 +8,16 @@
 		SessionFieldDelta,
 		SessionInputField,
 		SessionOverview,
-		SessionSetSide,
 		SessionSetOverview
 	} from '$lib/db';
 	import ExercisePickerSheet from '$lib/features/workouts/ExercisePickerSheet.svelte';
-	import Icon from '$lib/ui/Icon.svelte';
+	import SessionExerciseFooter from './SessionExerciseFooter.svelte';
+	import SessionExerciseHeader from './SessionExerciseHeader.svelte';
+	import SessionSetEditor from './SessionSetEditor.svelte';
 	// import { formatSessionStatus, formatSessionTime } from './session-format';
 
 	type DatabaseApi = typeof import('$lib/db');
 	type PickerMode = 'add' | 'swap';
-
-	const setEditorGridClass = 'grid grid-cols-[3.2rem_repeat(3,minmax(0,1fr))_2rem] gap-2';
-	const setInputBaseClass =
-		'h-10 w-full rounded-md border px-2 py-0 text-center text-[1.0625rem] leading-none font-semibold outline-none placeholder:text-zinc-500';
 
 	let {
 		sessionId,
@@ -182,10 +179,6 @@
 		return decimalParts.length === 0 ? whole : `${whole}.${decimalParts.join('')}`;
 	}
 
-	function formatPlaceholder(value?: number) {
-		return typeof value === 'number' && Number.isFinite(value) ? `${Number(value.toFixed(2))}` : '';
-	}
-
 	function formatInputValue(value?: number) {
 		return typeof value === 'number' && Number.isFinite(value) ? `${Number(value.toFixed(2))}` : '';
 	}
@@ -196,20 +189,6 @@
 		}
 
 		return field === 'reps' || field === 'rir' ? `${Math.round(value)}` : formatInputValue(value);
-	}
-
-	function formatSetBadgeValue(side: SessionSetSide, order: number) {
-		const paddedOrder = String(order).padStart(2, '0');
-
-		if (side === 'right') {
-			return `R${order}`;
-		}
-
-		if (side === 'left') {
-			return `L${order}`;
-		}
-
-		return paddedOrder;
 	}
 
 	function createFieldDelta(current?: number, previous?: number): SessionFieldDelta {
@@ -245,30 +224,6 @@
 			state: 'matched',
 			label: ''
 		};
-	}
-
-	function getDeltaToneClass(state: SessionFieldDelta['state']) {
-		if (state === 'improved') {
-			return 'text-emerald-700';
-		}
-
-		if (state === 'regressed') {
-			return 'text-red-700';
-		}
-
-		return 'text-zinc-500';
-	}
-
-	function getFieldInputClass(state: SessionFieldDelta['state']) {
-		if (state === 'improved') {
-			return 'border-2 border-emerald-500 bg-white text-black';
-		}
-
-		if (state === 'regressed') {
-			return 'border-red-500 bg-white text-black';
-		}
-
-		return 'border-zinc-300 bg-white text-black';
 	}
 
 	function rebuildSetOverview(
@@ -743,257 +698,41 @@
 			</div>
 		</section>
 	{:else}
-		<div class="sticky top-0 z-10 bg-[#080b0d] pb-3">
-			<div class="flex items-start justify-between gap-3">
-				<div class="min-w-0">
-					<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
-						Exercise {exerciseIndex + 1} / {overview.exercises.length}
-					</p>
-					<h1
-						class="mt-1.5 line-clamp-2 text-2xl leading-tight font-semibold break-words text-white"
-					>
-						{activeExercise.exerciseNameSnapshot}
-					</h1>
-					<p class="mt-1.5 text-xs leading-5 text-zinc-400">
-						{overview.summary.workoutNameSnapshot} ·
-						{activeExercise.exercise?.unilateral ? 'Unilateral' : 'Bilateral'}
-					</p>
-				</div>
+		<SessionExerciseHeader
+			{sessionId}
+			{activeExercise}
+			workoutName={overview.summary.workoutNameSnapshot}
+			{exerciseIndex}
+			totalExercises={overview.exercises.length}
+			{isSaving}
+			{isMenuOpen}
+			onToggleMenu={() => (isMenuOpen = !isMenuOpen)}
+			onAddSet={handleAddSet}
+			onSwapExercise={() => openExercisePicker('swap')}
+			onRemoveExercise={handleRemoveExercise}
+		/>
 
-				<div class="relative flex shrink-0 items-start gap-2">
-					<button
-						class="flex h-9 min-w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] px-3 text-sm font-semibold text-zinc-300"
-						type="button"
-						onclick={() => (isMenuOpen = !isMenuOpen)}
-					>
-						···
-					</button>
+		<SessionSetEditor
+			sets={activeExercise.sets}
+			{isSaving}
+			isUnilateral={Boolean(activeExercise.exercise?.unilateral)}
+			onAutofillPreviousSet={autofillPreviousSet}
+			onSetInput={handleSetInput}
+			onSetInputKeydown={handleSetInputKeydown}
+			onAddSet={handleAddSet}
+			onRemoveSet={handleRemoveSet}
+		/>
 
-					{#if isMenuOpen}
-						<div
-							class="absolute top-12 right-0 z-10 grid min-w-44 gap-2 rounded-lg border border-white/10 bg-[#0f1519] p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)]"
-						>
-							<a
-								class="rounded-lg px-3 py-2 text-left text-sm font-medium text-zinc-200"
-								href={resolve('/(app)/sessions/[sessionId]', { sessionId })}
-							>
-								Session overview
-							</a>
-							<button
-								class="rounded-lg px-3 py-2 text-left text-sm font-medium text-zinc-200"
-								type="button"
-								disabled={isSaving}
-								onclick={handleAddSet}
-							>
-								Add set
-							</button>
-							<button
-								class="rounded-lg px-3 py-2 text-left text-sm font-medium text-zinc-200"
-								type="button"
-								disabled={isSaving}
-								onclick={() => openExercisePicker('swap')}
-							>
-								Swap exercise
-							</button>
-							<button
-								class="rounded-lg px-3 py-2 text-left text-sm font-medium text-red-200"
-								type="button"
-								disabled={isSaving}
-								onclick={handleRemoveExercise}
-							>
-								Remove exercise
-							</button>
-						</div>
-					{/if}
-				</div>
-			</div>
-			<!-- 			<div class="mt-2 flex items-center justify-between gap-3 text-[11px] text-zinc-500">
-				<span>{activeExercise.sets.length} logged row{activeExercise.sets.length === 1 ? '' : 's'}</span>
-				<span>Placeholders show your last matching set</span>
-			</div> -->
-		</div>
-
-		<section class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto py-1">
-			{#if activeExercise.sets.length > 0}
-				<div
-					class={`${setEditorGridClass} mb-1.5 px-2.5 text-[10px] font-semibold tracking-[0.16em] text-zinc-500 uppercase`}
-				>
-					<span>Set</span>
-					<span class="text-center">Weight</span>
-					<span class="text-center">Reps</span>
-					<span class="text-center">RIR</span>
-					<span class="sr-only">Remove</span>
-				</div>
-
-				<div class="grid gap-1.5">
-					{#each activeExercise.sets as set (set.id)}
-						<div
-							class={`${setEditorGridClass} items-center rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2`}
-						>
-							<div class="flex min-w-0 items-center justify-center">
-								<button
-									class="flex w-full flex-col items-center justify-center rounded-md leading-none transition hover:bg-white/[0.06] disabled:opacity-50"
-									type="button"
-									title="Fill from previous session"
-									disabled={!set.previousReference || isSaving}
-									onclick={() => autofillPreviousSet(set)}
-								>
-									<p class="text-[10px] font-semibold tracking-[0.16em] text-zinc-500 uppercase">
-										Set
-									</p>
-									<p class="mt-1 text-xl font-bold text-white tabular-nums">
-										{formatSetBadgeValue(set.side, set.order)}
-									</p>
-								</button>
-							</div>
-
-							<div class="relative w-full max-w-[7.25rem] justify-self-center">
-								<input
-									class={`${setInputBaseClass} ${getFieldInputClass(set.weightDelta.state)}`}
-									type="text"
-									inputmode="decimal"
-									enterkeyhint="next"
-									data-session-set-input="true"
-									value={set.weightInput ?? ''}
-									placeholder={formatPlaceholder(set.previousReference?.weight)}
-									oninput={(event) => handleSetInput(set.id, 'weight', event)}
-									onkeydown={handleSetInputKeydown}
-								/>
-								{#if set.weightDelta.label}
-									<span
-										class={`pointer-events-none absolute bottom-1 left-2 text-[9px] leading-none font-semibold ${getDeltaToneClass(set.weightDelta.state)}`}
-									>
-										{set.weightDelta.label}
-									</span>
-								{/if}
-							</div>
-
-							<div class="relative w-full max-w-[7.25rem] justify-self-center">
-								<input
-									class={`${setInputBaseClass} ${getFieldInputClass(set.repsDelta.state)}`}
-									type="text"
-									inputmode="numeric"
-									pattern="[0-9]*"
-									enterkeyhint="next"
-									data-session-set-input="true"
-									value={set.repsInput ?? ''}
-									placeholder={formatPlaceholder(set.previousReference?.reps)}
-									oninput={(event) => handleSetInput(set.id, 'reps', event)}
-									onkeydown={handleSetInputKeydown}
-								/>
-								{#if set.repsDelta.label}
-									<span
-										class={`pointer-events-none absolute bottom-1 left-2 text-[9px] leading-none font-semibold ${getDeltaToneClass(set.repsDelta.state)}`}
-									>
-										{set.repsDelta.label}
-									</span>
-								{/if}
-							</div>
-
-							<div class="relative w-full max-w-[7.25rem] justify-self-center">
-								<input
-									class={`${setInputBaseClass} ${getFieldInputClass(set.rirDelta.state)}`}
-									type="text"
-									inputmode="numeric"
-									pattern="[0-9]*"
-									enterkeyhint="next"
-									data-session-set-input="true"
-									value={set.rirInput ?? ''}
-									placeholder={formatPlaceholder(set.previousReference?.rir)}
-									oninput={(event) => handleSetInput(set.id, 'rir', event)}
-									onkeydown={handleSetInputKeydown}
-								/>
-								{#if set.rirDelta.label}
-									<span
-										class={`pointer-events-none absolute bottom-1 left-2 text-[9px] leading-none font-semibold ${getDeltaToneClass(set.rirDelta.state)}`}
-									>
-										{set.rirDelta.label}
-									</span>
-								{/if}
-							</div>
-
-							<div class="flex items-center justify-center">
-								<button
-									class="flex h-10 w-8 items-center justify-center rounded-md text-zinc-400 transition hover:bg-red-400/10 hover:text-red-100 disabled:opacity-50"
-									type="button"
-									title={activeExercise.exercise?.unilateral ? 'Remove set pair' : 'Remove set'}
-									disabled={isSaving}
-									onclick={() => handleRemoveSet(set.id)}
-								>
-									<Icon name="x" class="h-4 w-4" />
-								</button>
-							</div>
-						</div>
-					{/each}
-				</div>
-			{:else}
-				<div
-					class="rounded-lg border border-dashed border-white/10 px-4 py-5 text-sm leading-6 text-zinc-400"
-				>
-					This exercise has no sets yet. Add a set to begin logging.
-				</div>
-			{/if}
-
-			<button
-				class="mt-2.5 flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-white disabled:text-zinc-500"
-				type="button"
-				disabled={isSaving}
-				onclick={handleAddSet}
-			>
-				<Icon name="plus" class="h-4 w-4" />
-				Add set
-			</button>
-		</section>
-
-		<div
-			class="sticky bottom-0 z-10 mt-2 grid shrink-0 gap-2.5 border-t border-white/10 bg-[#080b0d] pt-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]"
-		>
-			<!-- 			<a
-				class="flex min-h-10 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-white"
-				href={resolve('/(app)/sessions/[sessionId]', { sessionId })}
-			>
-				Session overview
-			</a> -->
-
-			<div class="grid grid-cols-2 gap-2.5">
-				<button
-					class="flex min-h-10 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-white disabled:text-zinc-500"
-					type="button"
-					disabled={isSaving || !previousExercise}
-					onclick={goToPreviousExercise}
-				>
-					Previous
-				</button>
-				<button
-					class="flex min-h-10 items-center justify-center rounded-lg bg-emerald-300 px-4 text-sm font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
-					type="button"
-					disabled={isSaving || !nextExercise}
-					onclick={goToNextExercise}
-				>
-					Next
-				</button>
-			</div>
-
-			{#if isLastExercise}
-				<button
-					class="flex min-h-10 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-white disabled:text-zinc-500"
-					type="button"
-					disabled={isSaving}
-					onclick={() => openExercisePicker('add')}
-				>
-					<Icon name="plus" class="h-4 w-4" />
-					Add exercise
-				</button>
-				<button
-					class="flex min-h-10 items-center justify-center rounded-lg bg-emerald-300 px-4 text-sm font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
-					type="button"
-					disabled={isSaving}
-					onclick={handleEndSession}
-				>
-					End session
-				</button>
-			{/if}
-		</div>
+		<SessionExerciseFooter
+			{previousExercise}
+			{nextExercise}
+			{isLastExercise}
+			{isSaving}
+			onPreviousExercise={goToPreviousExercise}
+			onNextExercise={goToNextExercise}
+			onAddExercise={() => openExercisePicker('add')}
+			onEndSession={handleEndSession}
+		/>
 	{/if}
 
 	{#if isExercisePickerOpen}
