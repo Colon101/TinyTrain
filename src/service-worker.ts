@@ -22,6 +22,7 @@ const APP_SHELL = '/';
 const DEPLOYMENT_MANIFEST = '/deployment.json';
 const DEV = import.meta.env.DEV;
 const LOG_PREFIX = '[TinyTrain service worker]';
+const CACHE_UPDATE_MESSAGE = 'TINYTRAIN_CACHE_UPDATE_CHECK';
 
 const ASSETS = [
 	...build, // the app itself
@@ -38,7 +39,17 @@ type CacheUrlsMessage = {
 	urls?: unknown;
 };
 
+type CacheUpdateMessage = {
+	type: typeof CACHE_UPDATE_MESSAGE;
+	status: 'checking' | 'current' | 'newer' | 'failed' | 'precache-skipped';
+	cachedId?: string;
+	latestId?: string;
+	error?: string;
+	failedAssets?: string[];
+};
+
 let currentDeploymentPromise: Promise<boolean> | undefined;
+let lastCacheUpdateMessage: CacheUpdateMessage | undefined;
 
 async function fetchFresh(request: Request | string) {
 	const response = await fetch(request, { cache: 'no-store' });
@@ -71,8 +82,28 @@ async function readDeploymentId(response: Response | undefined) {
 	}
 }
 
+function getErrorMessage(error: unknown) {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function announceCacheUpdate(message: Omit<CacheUpdateMessage, 'type'>) {
+	const cacheUpdateMessage = { type: CACHE_UPDATE_MESSAGE, ...message };
+	lastCacheUpdateMessage = cacheUpdateMessage;
+
+	console.info(`${LOG_PREFIX} ${message.status}`, message);
+
+	self.clients
+		.matchAll({ includeUncontrolled: true, type: 'window' })
+		.then((clients) => {
+			for (const client of clients) {
+				client.postMessage(cacheUpdateMessage);
+			}
+		})
+		.catch(() => undefined);
+}
+
 async function hasCurrentDeployment(cache: Cache) {
-	console.info(`${LOG_PREFIX} checking for cache update`);
+	announceCacheUpdate({ status: 'checking' });
 
 	const [cachedResponse, latestResponse] = await Promise.all([
 		cache.match(DEPLOYMENT_MANIFEST),
@@ -84,19 +115,22 @@ async function hasCurrentDeployment(cache: Cache) {
 
 	const hasCurrentDeployment = Boolean(cachedId && latestId && cachedId === latestId);
 
-	console.info(
-		hasCurrentDeployment
-			? `${LOG_PREFIX} cache is current`
-			: `${LOG_PREFIX} newer deployment found, skipping cache for this load`,
-		{ cachedId, latestId }
-	);
+	announceCacheUpdate({
+		status: hasCurrentDeployment ? 'current' : 'newer',
+		cachedId,
+		latestId
+	});
 
 	return hasCurrentDeployment;
 }
 
 function hasVerifiedCurrentDeployment(cache: Cache) {
 	currentDeploymentPromise ??= hasCurrentDeployment(cache).catch((error: unknown) => {
-		console.info(`${LOG_PREFIX} cache update check failed, trusting cache`, error);
+		announceCacheUpdate({
+			status: 'failed',
+			error: getErrorMessage(error)
+		});
+
 		return true;
 	});
 
@@ -154,7 +188,10 @@ async function addFilesToCache(cache: Cache) {
 		.filter((asset): asset is string => Boolean(asset));
 
 	if (failedAssets.length > 0) {
-		console.info(`${LOG_PREFIX} skipped unavailable precache assets`, failedAssets);
+		announceCacheUpdate({
+			status: 'precache-skipped',
+			failedAssets
+		});
 	}
 }
 
@@ -192,6 +229,10 @@ self.addEventListener('message', (event) => {
 
 	if (data?.type === 'CACHE_URLS') {
 		event.waitUntil(cacheUrls(data.urls));
+	}
+
+	if (data?.type === 'GET_CACHE_UPDATE_STATUS' && lastCacheUpdateMessage) {
+		event.source?.postMessage(lastCacheUpdateMessage);
 	}
 });
 

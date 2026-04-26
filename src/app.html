@@ -23,6 +23,27 @@
 
 			if ('serviceWorker' in navigator) {
 				const rootScope = new URL('/', window.location.origin).href;
+				const updateLogPrefix = '[TinyTrain update check]';
+
+				function logServiceWorkerUpdateCheck(data) {
+					if (!data || data.type !== 'TINYTRAIN_CACHE_UPDATE_CHECK') {
+						return;
+					}
+
+					const labels = {
+						checking: 'checking cache update',
+						current: 'cache is current',
+						newer: 'newer deployment found',
+						failed: 'check failed; trusting cache',
+						'precache-skipped': 'skipped unavailable precache assets'
+					};
+
+					console.info(`${updateLogPrefix} ${labels[data.status] || data.status}`, data);
+				}
+
+				navigator.serviceWorker.addEventListener('message', (event) => {
+					logServiceWorkerUpdateCheck(event.data);
+				});
 
 				function getCurrentPageCacheUrls() {
 					const urls = [window.location.href, rootScope];
@@ -49,6 +70,32 @@
 					});
 				}
 
+				function requestLastUpdateCheckStatus(registration) {
+					const worker = registration.active || navigator.serviceWorker.controller;
+
+					if (!worker) {
+						return;
+					}
+
+					worker.postMessage({ type: 'GET_CACHE_UPDATE_STATUS' });
+				}
+
+				function showVisibleUpdateCheckRequest() {
+					fetch(`/deployment.json?tinytrain-visible-update-check=${Date.now()}`, {
+						cache: 'no-store'
+					})
+						.then(async (response) => {
+							const manifest = response.ok ? await response.json() : null;
+							console.info(`${updateLogPrefix} visible network request finished`, {
+								status: response.status,
+								deploymentId: manifest && manifest.id
+							});
+						})
+						.catch((error) => {
+							console.info(`${updateLogPrefix} visible network request failed`, error);
+						});
+				}
+
 				window.addEventListener('load', () => {
 					navigator.serviceWorker
 						.getRegistrations()
@@ -66,10 +113,15 @@
 						})
 						.then((registration) => {
 							registration.update();
+							requestLastUpdateCheckStatus(registration);
 							warmServiceWorkerCache(registration);
 							return navigator.serviceWorker.ready;
 						})
-						.then(warmServiceWorkerCache)
+						.then((registration) => {
+							requestLastUpdateCheckStatus(registration);
+							warmServiceWorkerCache(registration);
+							showVisibleUpdateCheckRequest();
+						})
 						.catch(() => undefined);
 				});
 			}

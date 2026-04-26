@@ -1,6 +1,8 @@
-export function load({ params }) {
+import type { PageLoad } from './$types';
+
+export const load: PageLoad = ({ params }) => {
 	return {
 		sessionId: params.sessionId,
 		sessionExerciseId: params.sessionExerciseId
 	};
-}
+};
