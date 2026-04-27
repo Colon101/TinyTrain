@@ -63,11 +63,16 @@ async function fetchFresh(request: Request | string) {
 	return response;
 }
 
-async function getCachedResponse(cache: Cache, request: Request, url: URL) {
+async function getCachedResponse(
+	cache: Cache,
+	request: Request,
+	url: URL,
+	options: { appShellFallback?: boolean } = {}
+) {
 	return (
 		(await cache.match(request)) ??
 		(await cache.match(url.pathname)) ??
-		(request.mode === 'navigate' ? await cache.match(APP_SHELL) : undefined)
+		(options.appShellFallback && request.mode === 'navigate' ? await cache.match(APP_SHELL) : undefined)
 	);
 }
 
@@ -256,7 +261,9 @@ self.addEventListener('fetch', (event) => {
 				return response;
 			} catch (err) {
 				if (isSameOrigin) {
-					const response = await getCachedResponse(cache, event.request, url);
+					const response = await getCachedResponse(cache, event.request, url, {
+						appShellFallback: true
+					});
 
 					if (response) {
 						return response;
@@ -293,7 +300,9 @@ self.addEventListener('fetch', (event) => {
 			cacheResponse(event, cache, event.request, response);
 			return response;
 		} catch (err) {
-			const response = await getCachedResponse(cache, event.request, url);
+			const response = await getCachedResponse(cache, event.request, url, {
+				appShellFallback: true
+			});
 
 			if (response) {
 				return response;
