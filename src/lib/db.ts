@@ -1,7 +1,5 @@
-import Dexie from 'dexie';
-import dexieCloud, { type DexieCloudTable } from 'dexie-cloud-addon';
 import { browser } from '$app/environment';
-import { AUTH_BACKEND, USE_SUPABASE_FOR_MIGRATED_USERS, type StorageBackend } from './runtime-mode';
+import type { StorageBackend } from './runtime-mode';
 import {
 	getSupabaseAuthSnapshot,
 	getSupabaseSession,
@@ -230,202 +228,8 @@ type HistoricalSessionExerciseMatch = {
 	sets: SessionSet[];
 };
 
-const STORES = {
-	exercises: '&id, &normalizedName, source, archived, updatedAt',
-	workouts: '&id, &normalizedName, archived, updatedAt',
-	workoutExercises: '&id, workoutId, exerciseId, [workoutId+order], [workoutId+exerciseId]',
-	workoutSessions:
-		'&id, workoutId, dayKey, startedAt, completedAt, status, [workoutId+startedAt], [dayKey+startedAt]',
-	sessionExercises:
-		'&id, sessionId, workoutId, exerciseId, performedAt, [sessionId+order], [exerciseId+performedAt], [workoutId+performedAt]',
-	sessionSets:
-		'&id, sessionExerciseId, exerciseId, createdAt, side, [sessionExerciseId+order], [sessionExerciseId+order+side], [exerciseId+createdAt]',
-	exerciseResetEvents: '&id, exerciseId, resetAt, [exerciseId+resetAt], createdAt'
-};
-
-const SYNC_SAFE_STORES = {
-	...STORES,
-	exercises: '&id, normalizedName, source, archived, updatedAt'
-};
-
 const EXAMPLE_WORKOUT_NAME = 'Upper Builder Demo';
 const EXAMPLE_EXERCISE_NAMES = ['Barbell Bench Press', 'Wide Grip Pull-up', 'Cable Lateral Raise'];
-
-class TinyTrainDatabase extends Dexie {
-	exercises!: DexieCloudTable<Exercise, 'id'>;
-	workouts!: DexieCloudTable<Workout, 'id'>;
-	workoutExercises!: DexieCloudTable<WorkoutExercise, 'id'>;
-	workoutSessions!: DexieCloudTable<WorkoutSession, 'id'>;
-	sessionExercises!: DexieCloudTable<SessionExercise, 'id'>;
-	sessionSets!: DexieCloudTable<SessionSet, 'id'>;
-	exerciseResetEvents!: DexieCloudTable<ExerciseResetEvent, 'id'>;
-
-	constructor() {
-		super('tinytrain', { addons: [dexieCloud] });
-
-		this.version(1).stores({
-			exercises: '&id, &normalizedName, archived, updatedAt',
-			workouts: '&id, &normalizedName, archived, updatedAt',
-			workoutExercises: '&id, workoutId, exerciseId, [workoutId+order], [workoutId+exerciseId]',
-			workoutSessions: '&id, workoutId, startedAt, completedAt, status, [workoutId+startedAt]',
-			sessionExercises:
-				'&id, sessionId, workoutId, exerciseId, performedAt, [sessionId+order], [exerciseId+performedAt], [workoutId+performedAt]',
-			sessionSets:
-				'&id, sessionExerciseId, exerciseId, createdAt, [sessionExerciseId+order], [exerciseId+createdAt]'
-		});
-		this.version(2)
-			.stores({
-				exercises: '&id, &normalizedName, archived, updatedAt',
-				workouts: '&id, &normalizedName, archived, updatedAt',
-				workoutExercises: '&id, workoutId, exerciseId, [workoutId+order], [workoutId+exerciseId]',
-				workoutSessions: '&id, workoutId, startedAt, completedAt, status, [workoutId+startedAt]',
-				sessionExercises:
-					'&id, sessionId, workoutId, exerciseId, performedAt, [sessionId+order], [exerciseId+performedAt], [workoutId+performedAt]',
-				sessionSets:
-					'&id, sessionExerciseId, exerciseId, createdAt, [sessionExerciseId+order], [exerciseId+createdAt]'
-			})
-			.upgrade((transaction) => {
-				return transaction
-					.table('exercises')
-					.toCollection()
-					.modify((exercise: Partial<Exercise>) => {
-						exercise.unilateral = Boolean(exercise.unilateral);
-					});
-			});
-		this.version(3).stores({
-			exercises: '&id, &normalizedName, archived, updatedAt',
-			workouts: '&id, &normalizedName, archived, updatedAt',
-			workoutExercises: '&id, workoutId, exerciseId, [workoutId+order], [workoutId+exerciseId]',
-			workoutSessions: '&id, workoutId, startedAt, completedAt, status, [workoutId+startedAt]',
-			sessionExercises:
-				'&id, sessionId, workoutId, exerciseId, performedAt, [sessionId+order], [exerciseId+performedAt], [workoutId+performedAt]',
-			sessionSets:
-				'&id, sessionExerciseId, exerciseId, createdAt, [sessionExerciseId+order], [exerciseId+createdAt]'
-		});
-		this.version(4)
-			.stores(STORES)
-			.upgrade(async (transaction) => {
-				await transaction
-					.table('exercises')
-					.toCollection()
-					.modify((exercise: Partial<Exercise> & { name?: string; normalizedName?: string }) => {
-						exercise.unilateral = Boolean(exercise.unilateral);
-						exercise.normalizedName = normalizeName(exercise.name ?? exercise.normalizedName ?? '');
-						exercise.source = inferExerciseSource(
-							exercise.normalizedName || exercise.name || '',
-							exercise.source
-						);
-					});
-
-				await transaction
-					.table('workoutSessions')
-					.toCollection()
-					.modify((session: Partial<WorkoutSession>) => {
-						session.dayKey = toDayKey(session.startedAt ?? session.createdAt ?? new Date());
-					});
-			});
-		this.version(5)
-			.stores(STORES)
-			.upgrade(async (transaction) => {
-				await transaction
-					.table('sessionSets')
-					.toCollection()
-					.modify(
-						(
-							sessionSet: Partial<SessionSet> & {
-								weight?: unknown;
-								reps?: unknown;
-								rir?: unknown;
-							}
-						) => {
-							const weight = toOptionalNumber(sessionSet.weight);
-							const reps = toOptionalNumber(sessionSet.reps);
-							const rir = toOptionalNumber(sessionSet.rir);
-
-							if (weight === undefined) {
-								delete sessionSet.weight;
-							} else {
-								sessionSet.weight = weight;
-							}
-
-							if (reps === undefined) {
-								delete sessionSet.reps;
-							} else {
-								sessionSet.reps = reps;
-							}
-
-							if (rir === undefined) {
-								delete sessionSet.rir;
-							} else {
-								sessionSet.rir = rir;
-							}
-						}
-					);
-			});
-		this.version(6)
-			.stores(SYNC_SAFE_STORES)
-			.upgrade(async (transaction) => {
-				await transaction
-					.table('exercises')
-					.toCollection()
-					.modify((exercise: Partial<Exercise> & { name?: string; normalizedName?: string }) => {
-						exercise.normalizedName = normalizeName(exercise.name ?? exercise.normalizedName ?? '');
-						exercise.source = inferExerciseSource(
-							exercise.normalizedName || exercise.name || '',
-							exercise.source
-						);
-					});
-			});
-		this.version(7)
-			.stores(SYNC_SAFE_STORES)
-			.upgrade(async (transaction) => {
-				await transaction
-					.table('workoutSessions')
-					.toCollection()
-					.modify((session: Partial<WorkoutSession>) => {
-						if (!session.dayKey) {
-							session.dayKey = toDayKey(session.startedAt ?? session.createdAt ?? new Date());
-						}
-
-						if (!session.startedAt) {
-							delete session.startedAt;
-						}
-					});
-
-				await transaction
-					.table('sessionSets')
-					.toCollection()
-					.modify((sessionSet: Partial<SessionSet>) => {
-						sessionSet.side = normalizeSessionSetSide(sessionSet.side);
-						sessionSet.weight = toOptionalNumber(sessionSet.weight);
-						sessionSet.reps = toOptionalNumber(sessionSet.reps);
-						sessionSet.rir = toOptionalNumber(sessionSet.rir);
-						sessionSet.weightInput = toStoredInputValue(
-							typeof sessionSet.weightInput === 'string' ? sessionSet.weightInput : undefined,
-							sessionSet.weight
-						);
-						sessionSet.repsInput = toStoredInputValue(
-							typeof sessionSet.repsInput === 'string' ? sessionSet.repsInput : undefined,
-							sessionSet.reps
-						);
-						sessionSet.rirInput = toStoredInputValue(
-							typeof sessionSet.rirInput === 'string' ? sessionSet.rirInput : undefined,
-							sessionSet.rir
-						);
-					});
-			});
-
-		this.cloud.configure({
-			databaseUrl: 'https://zpai2umlq.dexie.cloud',
-			nameSuffix: false,
-			tryUseServiceWorker: false,
-			disableEagerSync: true,
-			disableWebSocket: true
-		});
-	}
-}
-
-export const legacyDb = new TinyTrainDatabase();
 
 type SubscriptionLike = {
 	unsubscribe(): void;
@@ -463,6 +267,32 @@ class ValueObservable<T> {
 	}
 }
 
+type QueryResult<T> = {
+	toArray(): Promise<T[]>;
+	first(): Promise<T | undefined>;
+	sortBy(field: string): Promise<T[]>;
+};
+
+type WhereClause<T> = {
+	equals(value: unknown): QueryResult<T>;
+	anyOf(values: unknown[]): QueryResult<T>;
+	between(lower: unknown, upper: unknown, includeLower?: boolean, includeUpper?: boolean): QueryResult<T>;
+};
+
+type DataTable<T extends { id: string }> = {
+	toArray(): Promise<T[]>;
+	get(id: string): Promise<T | undefined>;
+	bulkGet(ids: string[]): Promise<(T | undefined)[]>;
+	add(doc: T): Promise<string>;
+	bulkAdd(docs: T[]): Promise<string[]>;
+	put(doc: T): Promise<string>;
+	bulkPut(docs: T[]): Promise<string[]>;
+	update(id: string, patch: Partial<T>): Promise<number>;
+	delete(id: string): Promise<void>;
+	bulkDelete(ids: string[]): Promise<void>;
+	where(field: string): WhereClause<T>;
+};
+
 const activeUser = new ValueObservable<{
 	userId?: string;
 	name?: string;
@@ -472,18 +302,12 @@ const activeUser = new ValueObservable<{
 	isLoading?: boolean;
 }>({ isLoading: true });
 const activeSyncState = new ValueObservable<SyncStateLike>({ phase: 'initial', status: 'not-started' });
-const supabaseMigratedPrefix = 'tinytrain:supabase-migrated:';
 const supabaseHydratedPrefix = 'tinytrain:supabase-rxdb-hydrated:';
-const authFlowPreferenceKey = 'tinytrain:auth-flow';
 
-type AuthFlowPreference = 'dexie-migration' | 'supabase';
-
-let activeBackend: StorageBackend = 'dexie-cloud-legacy';
+let activeBackend: StorageBackend = 'supabase-rxdb';
 let rxDataDb: RxDexieLikeDatabase | null = null;
 let activeSupabaseUserId: string | null = null;
 let dbOpenPromise: Promise<typeof db> | null = null;
-let legacyUserSubscription: SubscriptionLike | null = null;
-let legacySyncSubscription: SubscriptionLike | null = null;
 let authBridgeStarted = false;
 let supabaseBackendActivationPromise: Promise<void> | null = null;
 let rxRuntimePromise:
@@ -519,39 +343,6 @@ function toSupabaseCloudUser() {
 	};
 }
 
-function getLocalMigratedUserId() {
-	if (!browser) {
-		return null;
-	}
-
-	for (let index = 0; index < localStorage.length; index += 1) {
-		const key = localStorage.key(index);
-
-		if (key?.startsWith(supabaseMigratedPrefix)) {
-			return key.slice(supabaseMigratedPrefix.length);
-		}
-	}
-
-	return null;
-}
-
-function setAuthFlowPreference(preference: AuthFlowPreference) {
-	if (!browser) {
-		return;
-	}
-
-	localStorage.setItem(authFlowPreferenceKey, preference);
-}
-
-function getAuthFlowPreference(): AuthFlowPreference | null {
-	if (!browser) {
-		return null;
-	}
-
-	const preference = localStorage.getItem(authFlowPreferenceKey);
-	return preference === 'dexie-migration' || preference === 'supabase' ? preference : null;
-}
-
 function hasHydratedSupabaseCache(userId: string) {
 	return browser && localStorage.getItem(`${supabaseHydratedPrefix}${userId}`) === 'true';
 }
@@ -562,36 +353,6 @@ function markSupabaseCacheHydrated(userId: string) {
 	}
 
 	localStorage.setItem(`${supabaseHydratedPrefix}${userId}`, 'true');
-}
-
-export function markSupabaseMigrationComplete(userId: string, details: Record<string, unknown>) {
-	if (!browser) {
-		return;
-	}
-
-	localStorage.setItem(
-		`${supabaseMigratedPrefix}${userId}`,
-		JSON.stringify({
-			...details,
-			completedAt: timestamp()
-		})
-	);
-	markSupabaseCacheHydrated(userId);
-	setAuthFlowPreference('supabase');
-}
-
-export function hasCompletedSupabaseMigration(userId?: string | null) {
-	if (!browser || !userId) {
-		return false;
-	}
-
-	return Boolean(localStorage.getItem(`${supabaseMigratedPrefix}${userId}`));
-}
-
-export async function activateSupabaseBackend() {
-	dbOpenPromise = null;
-	await selectBackend();
-	return db;
 }
 
 export function getActiveStorageBackend(): StorageBackend {
@@ -606,13 +367,10 @@ function startAuthBridge() {
 	authBridgeStarted = true;
 	void initializeSupabaseAuth();
 	subscribeToSupabaseAuth((snapshot) => {
-		if (activeBackend === 'supabase-rxdb' || AUTH_BACKEND === 'supabase') {
-			activeUser.set(toSupabaseCloudUser());
-		}
+		activeUser.set(toSupabaseCloudUser());
 
 		if (
 			snapshot.user &&
-			(AUTH_BACKEND === 'supabase' || getAuthFlowPreference() === 'supabase') &&
 			(activeBackend !== 'supabase-rxdb' || activeSupabaseUserId !== snapshot.user.id)
 		) {
 			activeUser.set({ isLoading: true });
@@ -629,38 +387,6 @@ function startAuthBridge() {
 				.finally(() => {
 					supabaseBackendActivationPromise = null;
 				});
-		}
-	});
-}
-
-async function hasRemoteCompletedSupabaseMigration(userId: string) {
-	const { data, error } = await supabase
-		.from('migration_status')
-		.select('status')
-		.eq('user_id', userId)
-		.maybeSingle();
-
-	if (error) {
-		console.warn('Could not read Supabase migration status.', error);
-		return false;
-	}
-
-	return data?.status === 'completed';
-}
-
-function attachLegacySubscriptions() {
-	if (legacyUserSubscription || activeBackend !== 'dexie-cloud-legacy') {
-		return;
-	}
-
-	legacyUserSubscription = legacyDb.cloud.currentUser.subscribe((nextUser) => {
-		if (activeBackend === 'dexie-cloud-legacy') {
-			activeUser.set(nextUser);
-		}
-	});
-	legacySyncSubscription = legacyDb.cloud.syncState.subscribe((nextSyncState) => {
-		if (activeBackend === 'dexie-cloud-legacy') {
-			activeSyncState.set(nextSyncState);
 		}
 	});
 }
@@ -712,57 +438,44 @@ async function openSupabaseRuntime(userId: string) {
 
 async function selectBackend() {
 	startAuthBridge();
+	const user = await getSupabaseUser();
 
-	if (AUTH_BACKEND === 'supabase') {
-		const user = await getSupabaseUser();
-
-		if (!user) {
-			activeBackend = 'supabase-rxdb';
-			activeUser.set(toSupabaseCloudUser());
-			return;
-		}
-
-		await openSupabaseRuntime(user.id);
+	if (!user) {
+		activeBackend = 'supabase-rxdb';
+		activeSupabaseUserId = null;
+		rxDataDb = null;
+		activeUser.set(toSupabaseCloudUser());
 		return;
 	}
 
-	if (USE_SUPABASE_FOR_MIGRATED_USERS) {
-		const session = await getSupabaseSession();
-		const migratedUserId = session?.user.id ?? getLocalMigratedUserId();
-		const authFlowPreference = getAuthFlowPreference();
-		const useSupabaseAuthFlow = authFlowPreference === 'supabase';
-
-		if (
-			session?.user &&
-			authFlowPreference !== 'dexie-migration' &&
-			(useSupabaseAuthFlow ||
-				hasCompletedSupabaseMigration(migratedUserId) ||
-				(await hasRemoteCompletedSupabaseMigration(session.user.id)))
-		) {
-			if (!useSupabaseAuthFlow) {
-				markSupabaseMigrationComplete(session.user.id, {
-					email: session.user.email,
-					source: 'remote-status'
-				});
-			}
-			await openSupabaseRuntime(session.user.id);
-			return;
-		}
-	}
-
-	activeBackend = 'dexie-cloud-legacy';
-	activeSupabaseUserId = null;
-	rxDataDb = null;
-	attachLegacySubscriptions();
+	await openSupabaseRuntime(user.id);
 }
 
 const cloudCompat = {
 	currentUser: activeUser,
-	syncState: activeSyncState
+	syncState: activeSyncState,
+	async sync() {
+		await syncNow();
+	}
 };
 
-export const db = new Proxy(legacyDb, {
-	get(target, prop, receiver) {
+type AppDatabase = {
+	exercises: DataTable<Exercise>;
+	workouts: DataTable<Workout>;
+	workoutExercises: DataTable<WorkoutExercise>;
+	workoutSessions: DataTable<WorkoutSession>;
+	sessionExercises: DataTable<SessionExercise>;
+	sessionSets: DataTable<SessionSet>;
+	exerciseResetEvents: DataTable<ExerciseResetEvent>;
+	cloud: typeof cloudCompat;
+	open(): Promise<AppDatabase>;
+	transaction<T>(mode: string, ...args: unknown[]): Promise<T>;
+};
+
+export const db = new Proxy(
+	{},
+	{
+	get(_target, prop) {
 		if (prop === 'cloud') {
 			return cloudCompat;
 		}
@@ -775,10 +488,14 @@ export const db = new Proxy(legacyDb, {
 			return rxDataDb[prop as keyof RxDexieLikeDatabase];
 		}
 
-		const value = Reflect.get(target, prop, receiver);
-		return typeof value === 'function' ? value.bind(target) : value;
+		if (prop === 'open') {
+			return ensureDbOpen;
+		}
+
+		return undefined;
 	}
-}) as TinyTrainDatabase;
+	}
+) as AppDatabase;
 
 export type PersistentStorageStatus = 'persisted' | 'promptable' | 'denied' | 'unsupported';
 
@@ -803,36 +520,17 @@ export async function requestPersistentStorage(): Promise<PersistentStorageStatu
 }
 
 export async function loginWithGoogle(redirectPath = '/') {
-	if (AUTH_BACKEND === 'supabase') {
-		await loginWithSupabaseGoogleForApp(redirectPath);
-		return;
-	}
-
-	await loginWithLegacyDexieGoogle(redirectPath);
-}
-
-export async function loginWithLegacyDexieGoogle(redirectPath = '/migrate/supabase') {
-	setAuthFlowPreference('dexie-migration');
-	await legacyDb.cloud.login({ provider: 'google', redirectPath });
+	await loginWithSupabaseGoogleForApp(redirectPath);
 }
 
 export async function loginWithSupabaseGoogleForApp(redirectPath = '/') {
-	setAuthFlowPreference('supabase');
 	await startSupabaseGoogleLogin(redirectPath);
 }
 
 export async function ensureDbOpen() {
 	if (!dbOpenPromise) {
 		dbOpenPromise = selectBackend()
-			.then(async () => {
-				if (activeBackend === 'supabase-rxdb') {
-					return db;
-				}
-
-				await legacyDb.open();
-				attachLegacySubscriptions();
-				return db;
-			})
+			.then(() => db)
 			.catch((error) => {
 				dbOpenPromise = null;
 				throw error;
@@ -844,50 +542,20 @@ export async function ensureDbOpen() {
 
 export async function logoutFromCloud() {
 	await ensureDbOpen();
-
-	if (activeBackend === 'supabase-rxdb' || AUTH_BACKEND === 'supabase') {
-		await logoutFromSupabase();
-		return;
-	}
-
-	await legacyDb.cloud.logout();
+	await logoutFromSupabase();
 }
 
 export async function syncNow() {
 	await ensureDbOpen();
 
-	if (activeBackend === 'supabase-rxdb' && activeSupabaseUserId) {
-		const { rxdb } = await getRxRuntime();
-		activeSyncState.set({ phase: 'pushing', status: 'syncing' });
-		await rxdb.awaitSupabaseInSync(activeSupabaseUserId);
-		activeSyncState.set({ phase: 'in-sync', status: 'synced' });
+	if (!activeSupabaseUserId) {
 		return;
 	}
 
-	await legacyDb.cloud.sync({ wait: true, purpose: 'push' });
-	await legacyDb.cloud.sync({ wait: true, purpose: 'pull' });
-}
-
-function canAttemptCloudSync() {
-	if (activeBackend === 'supabase-rxdb') {
-		return false;
-	}
-
-	return Boolean(
-		activeUser.value?.isLoggedIn && (typeof navigator === 'undefined' || navigator.onLine)
-	);
-}
-
-async function syncCloudAtSessionBoundary() {
-	if (!canAttemptCloudSync()) {
-		return;
-	}
-
-	try {
-		await db.cloud.sync({ wait: true, purpose: 'push' });
-	} catch (error) {
-		console.warn('Session boundary sync failed; changes remain queued locally.', error);
-	}
+	const { rxdb } = await getRxRuntime();
+	activeSyncState.set({ phase: 'pushing', status: 'syncing' });
+	await rxdb.awaitSupabaseInSync(activeSupabaseUserId);
+	activeSyncState.set({ phase: 'in-sync', status: 'synced' });
 }
 
 export function toDayKey(input: Date | string) {
@@ -2583,7 +2251,9 @@ export async function startWorkoutSession(sessionId: string) {
 		throw new Error('Session not found.');
 	}
 
-	await syncCloudAtSessionBoundary();
+	void syncNow().catch((error) => {
+		console.warn('Background Supabase sync failed.', error);
+	});
 
 	return summarizeSession(nextSession, nextSessionExercises, nextSessionSets);
 }
@@ -2996,7 +2666,9 @@ export async function completeWorkoutSession(sessionId: string) {
 		}
 	);
 
-	await syncCloudAtSessionBoundary();
+	void syncNow().catch((error) => {
+		console.warn('Background Supabase sync failed.', error);
+	});
 }
 
 export async function getSessionOverview(sessionId: string): Promise<SessionOverview | null> {
@@ -3295,7 +2967,9 @@ export async function createBackfillWorkoutSession(input: BackfillWorkoutSession
 		}
 	);
 
-	await syncCloudAtSessionBoundary();
+	void syncNow().catch((error) => {
+		console.warn('Background Supabase sync failed.', error);
+	});
 
 	return summarizeSession(session, sessionExercises, sessionSets);
 }

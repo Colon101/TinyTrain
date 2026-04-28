@@ -27,9 +27,7 @@
 	let isCheckingAuth = $state(true);
 	let authError = $state('');
 	let callbackTimedOut = $state(false);
-	let isHandlingOAuthCallback = $derived(
-		page.url.searchParams.has('dxc-auth') || page.url.searchParams.has('code')
-	);
+	let isHandlingOAuthCallback = $derived(page.url.searchParams.has('code'));
 	let isHomePage = $derived(page.url.pathname === '/');
 	let nowMs = $state(Date.now());
 	let sessionMatch = $derived(page.url.pathname.match(/^\/sessions\/([^/]+)/));
@@ -101,10 +99,7 @@
 					isCheckingAuth = false;
 				});
 
-				if (
-					window.location.search.includes('dxc-auth=') ||
-					window.location.search.includes('code=')
-				) {
+				if (window.location.search.includes('code=')) {
 					callbackTimeoutId = setTimeout(() => {
 						callbackTimedOut = true;
 						authError = 'Google sign-in did not finish. Try again from the sign-in page.';

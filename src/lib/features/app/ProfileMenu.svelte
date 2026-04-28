@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import Icon from '$lib/ui/Icon.svelte';
 	import type { CloudUser } from './user';
@@ -113,23 +112,12 @@
 					<span>Sync now</span>
 				</button>
 
-				{#if isSupabaseSynced}
-					<div
-						class="mt-1 flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-emerald-200"
-					>
-						<Icon name="check-circle" class="h-4 w-4" />
-						<span>Synced with Supabase</span>
-					</div>
-				{:else}
-					<a
-						class="mt-1 flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-zinc-200 transition hover:bg-white/6"
-						href={resolve('/migrate/supabase')}
-						onclick={() => (isOpen = false)}
-					>
-						<Icon name="database" class="h-4 w-4" />
-						<span>Migrate to Supabase</span>
-					</a>
-				{/if}
+				<div
+					class="mt-1 flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-emerald-200"
+				>
+					<Icon name="check-circle" class="h-4 w-4" />
+					<span>{isSupabaseSynced ? 'Synced with Supabase' : 'Supabase enabled'}</span>
+				</div>
 
 				<button
 					class="mt-1 flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-zinc-200 transition hover:bg-white/6 disabled:text-zinc-500"

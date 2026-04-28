@@ -43,7 +43,6 @@
 		"@vercel/analytics": "^2.0.1",
 		"@vercel/speed-insights": "^2.0.0",
 		"dexie": "^4.4.2",
-		"dexie-cloud-addon": "^4.4.11",
 		"rxdb": "^17.1.0"
 	},
 	"pnpm": {
