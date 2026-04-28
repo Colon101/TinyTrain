@@ -1,8 +1,9 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import Icon from '$lib/ui/Icon.svelte';
 	import type { CloudUser } from './user';
-	import { getUserAvatarUrl, getUserDisplayName, getUserInitials } from './user';
+	import { getUserDisplayName, getUserInitials } from './user';
 
 	type DatabaseApi = typeof import('$lib/db');
 
@@ -14,8 +15,8 @@
 	let actionMessage = $state('');
 	let actionError = $state('');
 	let container = $state<HTMLElement | null>(null);
+	let isSupabaseSynced = $state(false);
 
-	let avatarUrl = $derived(getUserAvatarUrl(user));
 	let displayName = $derived(getUserDisplayName(user));
 	let initials = $derived(getUserInitials(user));
 
@@ -32,6 +33,7 @@
 
 		void (async () => {
 			api = await import('$lib/db');
+			isSupabaseSynced = api.getActiveStorageBackend() === 'supabase-rxdb';
 		})();
 
 		return () => {
@@ -82,11 +84,7 @@
 		aria-expanded={isOpen}
 		onclick={() => (isOpen = !isOpen)}
 	>
-		{#if avatarUrl}
-			<img class="h-full w-full object-cover" src={avatarUrl} alt={displayName} />
-		{:else}
-			<span>{initials}</span>
-		{/if}
+		<span>{initials}</span>
 	</button>
 
 	{#if isOpen}
@@ -114,6 +112,24 @@
 					{/if}
 					<span>Sync now</span>
 				</button>
+
+				{#if isSupabaseSynced}
+					<div
+						class="mt-1 flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-emerald-200"
+					>
+						<Icon name="check-circle" class="h-4 w-4" />
+						<span>Synced with Supabase</span>
+					</div>
+				{:else}
+					<a
+						class="mt-1 flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-zinc-200 transition hover:bg-white/6"
+						href={resolve('/migrate/supabase')}
+						onclick={() => (isOpen = false)}
+					>
+						<Icon name="database" class="h-4 w-4" />
+						<span>Migrate to Supabase</span>
+					</a>
+				{/if}
 
 				<button
 					class="mt-1 flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-zinc-200 transition hover:bg-white/6 disabled:text-zinc-500"

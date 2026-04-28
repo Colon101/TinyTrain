@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  rxdb>dexie: 4.4.2
+
 importers:
 
   .:
@@ -787,9 +790,6 @@ packages:
 
   dexie-cloud-common@1.0.59:
     resolution: {integrity: sha512-XX59WK7nLU1oCvQNLK4XO4BkITo7KL2a1HHWsxr0wvDqW3ONgyUnzR+06z/RozuTMNtiDiVtAGeTNk4i9KjwZw==}
-
-  dexie@4.0.10:
-    resolution: {integrity: sha512-eM2RzuR3i+M046r2Q0Optl3pS31qTWf8aFuA7H9wnsHTwl8EPvroVLwvQene/6paAs39Tbk6fWZcn2aZaHkc/w==}
 
   dexie@4.4.2:
     resolution: {integrity: sha512-zMtV8q79EFE5U8FKZvt0Y/77PCU/Hr/RDxv1EDeo228L+m/HTbeN2AjoQm674rhQCX8n3ljK87lajt7UQuZfvw==}
@@ -2330,8 +2330,6 @@ snapshots:
     dependencies:
       lib0: 0.2.117
 
-  dexie@4.0.10: {}
-
   dexie@4.4.2: {}
 
   dunder-proto@1.0.1:
@@ -2896,7 +2894,7 @@ snapshots:
       broadcast-channel: 7.3.0
       crypto-js: 4.2.0
       custom-idle-queue: 5.0.2
-      dexie: 4.0.10
+      dexie: 4.4.2
       event-reduce-js: 6.0.0
       get-graphql-from-jsonschema: 8.1.0
       graphql: 16.13.2

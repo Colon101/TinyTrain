@@ -87,6 +87,7 @@
 				}
 
 				api = dbApi;
+				await dbApi.ensureDbOpen();
 				await dbApi.cleanupStaleSessions(todayDayKey);
 				currentUserSubscription = dbApi.db.cloud.currentUser.subscribe((nextUser) => {
 					currentUser = nextUser;

@@ -828,3 +828,75 @@ const BASELINE_EXERCISE_MAP = new Map(
 );
 
 export const BASELINE_EXERCISES = [...BASELINE_EXERCISE_MAP.values()];
+
+export const BASELINE_EXERCISE_CATALOG_TIMESTAMP = '2026-04-01T00:00:00.000Z';
+
+export function normalizeExerciseName(name: string) {
+	return name.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+}
+
+function hash32(input: string, seed: number) {
+	let hash = seed >>> 0;
+
+	for (let index = 0; index < input.length; index += 1) {
+		hash ^= input.charCodeAt(index);
+		hash = Math.imul(hash, 0x01000193);
+	}
+
+	return hash >>> 0;
+}
+
+function toHex32(value: number) {
+	return value.toString(16).padStart(8, '0');
+}
+
+export function createBaselineExerciseId(normalizedName: string) {
+	const input = `tinytrain:baseline-exercise:${normalizeExerciseName(normalizedName)}`;
+	const first = toHex32(hash32(input, 0x811c9dc5));
+	const second = toHex32(hash32(input, 0x12345678));
+	const third = toHex32(hash32(input, 0x9e3779b9));
+	const fourth = toHex32(hash32(input, 0x85ebca6b));
+
+	return `${first}-${second.slice(0, 4)}-5${second.slice(5, 8)}-a${third.slice(1, 4)}-${third.slice(4)}${fourth}`;
+}
+
+export type BaselineExerciseRow = {
+	id: string;
+	name: string;
+	normalizedName: string;
+	unilateral: boolean;
+	source: 'baseline';
+	archived: false;
+	createdAt: string;
+	updatedAt: string;
+};
+
+export const BASELINE_EXERCISE_ROWS: BaselineExerciseRow[] = BASELINE_EXERCISES.map((exercise) => {
+	const normalizedName = normalizeExerciseName(exercise.name);
+
+	return {
+		id: createBaselineExerciseId(normalizedName),
+		name: exercise.name,
+		normalizedName,
+		unilateral: exercise.unilateral,
+		source: 'baseline',
+		archived: false,
+		createdAt: BASELINE_EXERCISE_CATALOG_TIMESTAMP,
+		updatedAt: BASELINE_EXERCISE_CATALOG_TIMESTAMP
+	};
+});
+
+export const BASELINE_EXERCISE_BY_ID = new Map(
+	BASELINE_EXERCISE_ROWS.map((exercise) => [exercise.id, exercise])
+);
+export const BASELINE_EXERCISE_BY_NORMALIZED_NAME = new Map(
+	BASELINE_EXERCISE_ROWS.map((exercise) => [exercise.normalizedName, exercise])
+);
+
+export function getBaselineExerciseById(id: string) {
+	return BASELINE_EXERCISE_BY_ID.get(id) ?? null;
+}
+
+export function getBaselineExerciseByNormalizedName(normalizedName: string) {
+	return BASELINE_EXERCISE_BY_NORMALIZED_NAME.get(normalizeExerciseName(normalizedName)) ?? null;
+}

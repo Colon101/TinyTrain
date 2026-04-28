@@ -45,5 +45,10 @@
 		"dexie": "^4.4.2",
 		"dexie-cloud-addon": "^4.4.11",
 		"rxdb": "^17.1.0"
+	},
+	"pnpm": {
+		"overrides": {
+			"rxdb>dexie": "4.4.2"
+		}
 	}
 }

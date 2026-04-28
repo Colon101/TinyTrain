@@ -96,6 +96,7 @@
 				}
 
 				dbApi = api;
+				await api.ensureDbOpen();
 				await api.ensureBaselineExercises();
 				pageMode = routeWorkoutId ? 'detail' : 'workouts';
 				await loadPageData(routeWorkoutId);
