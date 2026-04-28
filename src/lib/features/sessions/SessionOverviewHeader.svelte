@@ -22,7 +22,7 @@
 <div class={isInProgress ? 'pb-3' : 'pb-5'}>
 	<div class="min-w-0 pr-12">
 		{#if isInProgress}
-			<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">Exercises</p>
+			<p class="text-md font-semibold tracking-[0.18em] text-emerald-200 uppercase pt-5 pb-3">Exercises</p>
 		{:else}
 			<!-- <h1 class="text-3xl font-semibold text-white">
 				{overview.summary.workoutNameSnapshot}

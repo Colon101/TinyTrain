@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import { onMount } from 'svelte';
 	import type { SessionExerciseOverview } from '$lib/db';
 
 	let {
@@ -11,6 +12,7 @@
 		isSaving,
 		isMenuOpen,
 		onToggleMenu,
+		onCloseMenu,
 		onAddSet,
 		onSwapExercise,
 		onRemoveExercise
@@ -23,10 +25,29 @@
 		isSaving: boolean;
 		isMenuOpen: boolean;
 		onToggleMenu: () => void;
+		onCloseMenu: () => void;
 		onAddSet: () => void;
 		onSwapExercise: () => void;
 		onRemoveExercise: () => void;
 	} = $props();
+
+	let menuContainer = $state<HTMLElement | null>(null);
+
+	onMount(() => {
+		function handlePointerDown(event: PointerEvent) {
+			const target = event.target as Node | null;
+
+			if (menuContainer && target && !menuContainer.contains(target)) {
+				onCloseMenu();
+			}
+		}
+
+		window.addEventListener('pointerdown', handlePointerDown, { capture: true });
+
+		return () => {
+			window.removeEventListener('pointerdown', handlePointerDown, { capture: true });
+		};
+	});
 </script>
 
 <div class="sticky top-0 z-10 bg-[#080b0d] pb-3">
@@ -44,7 +65,7 @@
 			</p>
 		</div>
 
-		<div class="relative flex shrink-0 items-start gap-2">
+		<div class="relative flex shrink-0 items-start gap-2" bind:this={menuContainer}>
 			<button
 				class="flex h-9 min-w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] px-3 text-sm font-semibold text-zinc-300"
 				type="button"

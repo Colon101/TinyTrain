@@ -117,6 +117,16 @@
 	onMount(() => {
 		let disposed = false;
 
+		function handlePointerDown(event: PointerEvent) {
+			const target = event.target as Element | null;
+
+			if (openExerciseMenuId && target && !target.closest('[data-exercise-card-menu]')) {
+				openExerciseMenuId = '';
+			}
+		}
+
+		window.addEventListener('pointerdown', handlePointerDown, { capture: true });
+
 		void (async () => {
 			try {
 				const dbApi = await import('$lib/db');
@@ -136,6 +146,7 @@
 
 		return () => {
 			disposed = true;
+			window.removeEventListener('pointerdown', handlePointerDown, { capture: true });
 			stopDragAutoScroll();
 			stopDragPreviewMove();
 		};
@@ -795,7 +806,9 @@
 	{:else}
 		<SessionOverviewHeader {overview} {nowMs} />
 
-		<SessionSummaryPanel {overview} {isSaving} onStartSession={handleStartSession} />
+		{#if overview.summary.status !== 'in_progress'}
+			<SessionSummaryPanel {overview} {isSaving} onStartSession={handleStartSession} />
+		{/if}
 
 		<SessionExerciseList
 			{sessionId}

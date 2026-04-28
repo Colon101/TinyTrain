@@ -34,6 +34,7 @@
 	let isSessionOverviewPage = $derived(Boolean(page.url.pathname.match(/^\/sessions\/[^/]+$/)));
 	let sessionTimer = $state<SessionTimerSummary | null>(null);
 	let isSessionActionsMenuOpen = $state(false);
+	let sessionActionsMenuContainer = $state<HTMLElement | null>(null);
 	let showSessionTimer = $derived(
 		Boolean(sessionTimer?.status === 'in_progress' && sessionTimer.startedAt)
 	);
@@ -53,6 +54,16 @@
 				callbackTimeoutId = null;
 			}
 		}
+
+		function handlePointerDown(event: PointerEvent) {
+			const target = event.target as Node | null;
+
+			if (sessionActionsMenuContainer && target && !sessionActionsMenuContainer.contains(target)) {
+				isSessionActionsMenuOpen = false;
+			}
+		}
+
+		window.addEventListener('pointerdown', handlePointerDown, { capture: true });
 
 		void (async () => {
 			try {
@@ -101,6 +112,7 @@
 		return () => {
 			disposed = true;
 			clearCallbackTimeout();
+			window.removeEventListener('pointerdown', handlePointerDown, { capture: true });
 			currentUserSubscription?.unsubscribe();
 		};
 	});
@@ -322,7 +334,7 @@
 
 		{#if isSessionOverviewPage && $sessionOverviewActions}
 			<div class="pointer-events-none absolute top-20 right-4 z-30">
-				<div class="pointer-events-auto relative">
+				<div class="pointer-events-auto relative" bind:this={sessionActionsMenuContainer}>
 					<button
 						class="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-[#11171a]/35 text-sm font-semibold text-zinc-300 shadow-[0_12px_30px_rgba(0,0,0,0.28)] backdrop-blur-3xl [backdrop-filter:blur(24px)_saturate(1.35)] disabled:text-zinc-500"
 						type="button"

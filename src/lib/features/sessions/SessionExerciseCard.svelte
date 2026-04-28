@@ -77,17 +77,19 @@
 				</p>
 			</button>
 
-			<button
-				class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/4 text-sm font-semibold text-zinc-300"
-				type="button"
-				onclick={() => onToggleMenu(sessionExercise.id)}
-			>
-				···
-			</button>
+			<div data-exercise-card-menu>
+				<button
+					class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/4 text-sm font-semibold text-zinc-300"
+					type="button"
+					onclick={() => onToggleMenu(sessionExercise.id)}
+				>
+					···
+				</button>
+			</div>
 		</div>
 
 		{#if isMenuOpen}
-			<div class="mt-3 grid gap-2 border-t border-white/10 pt-3">
+			<div class="mt-3 grid gap-2 border-t border-white/10 pt-3" data-exercise-card-menu>
 				<button
 					class="rounded-lg border border-white/10 px-3 py-2 text-left text-sm font-medium text-zinc-200"
 					type="button"

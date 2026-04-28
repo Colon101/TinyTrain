@@ -707,6 +707,7 @@
 			{isSaving}
 			{isMenuOpen}
 			onToggleMenu={() => (isMenuOpen = !isMenuOpen)}
+			onCloseMenu={() => (isMenuOpen = false)}
 			onAddSet={handleAddSet}
 			onSwapExercise={() => openExercisePicker('swap')}
 			onRemoveExercise={handleRemoveExercise}
