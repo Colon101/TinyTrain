@@ -81,7 +81,7 @@
 	<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">TinyTrain</p>
 	<h1 class="mt-2 text-3xl font-semibold text-white">Sign in</h1>
 	<p class="mt-2 text-sm leading-6 text-zinc-400">
-		Use your Supabase account.
+		Sign in to sync your workouts across devices.
 	</p>
 
 	<div class="mt-6">
@@ -91,11 +91,11 @@
 	<div class="mt-6 space-y-3">
 		<section class="border-y border-white/10 py-4">
 			<p class="text-xs font-semibold tracking-[0.16em] text-emerald-200 uppercase">
-				Supabase
+				Cloud sync
 			</p>
 			<h2 class="mt-1 text-lg font-semibold text-white">Continue to TinyTrain</h2>
 			<p class="mt-1 text-sm leading-6 text-zinc-400">
-				Your workouts sync with Supabase and stay available offline on this device.
+				Your workouts stay in sync and remain available offline on this device.
 			</p>
 			<button
 				class="mt-4 min-h-12 w-full rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
