@@ -14,7 +14,7 @@
 	let actionMessage = $state('');
 	let actionError = $state('');
 	let container = $state<HTMLElement | null>(null);
-	let isSupabaseSynced = $state(false);
+	let isCloudSynced = $state(false);
 
 	let displayName = $derived(getUserDisplayName(user));
 	let initials = $derived(getUserInitials(user));
@@ -32,7 +32,7 @@
 
 		void (async () => {
 			api = await import('$lib/db');
-			isSupabaseSynced = api.getActiveStorageBackend() === 'supabase-rxdb';
+			isCloudSynced = api.getActiveStorageBackend() === 'supabase-rxdb';
 		})();
 
 		return () => {
@@ -112,13 +112,6 @@
 					<span>Sync now</span>
 				</button>
 
-				<div
-					class="mt-1 flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-emerald-200"
-				>
-					<Icon name="check-circle" class="h-4 w-4" />
-					<span>{isSupabaseSynced ? 'Synced with Supabase' : 'Supabase enabled'}</span>
-				</div>
-
 				<button
 					class="mt-1 flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-zinc-200 transition hover:bg-white/6 disabled:text-zinc-500"
 					type="button"
@@ -129,6 +122,10 @@
 					<span>Log out</span>
 				</button>
 			</div>
+
+			{#if isCloudSynced}
+				<p class="px-3 pt-2 text-xs text-zinc-400">Synced successfully.</p>
+			{/if}
 
 			{#if actionError || actionMessage}
 				<p
