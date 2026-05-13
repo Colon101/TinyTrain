@@ -7,6 +7,7 @@
 	let {
 		sessionId,
 		overview,
+		isEditMode = false,
 		isEditable,
 		isSaving,
 		hideHeading = false,
@@ -22,6 +23,7 @@
 	}: {
 		sessionId: string;
 		overview: SessionOverview;
+		isEditMode?: boolean;
 		isEditable: boolean;
 		isSaving: boolean;
 		hideHeading?: boolean;
@@ -53,6 +55,7 @@
 					{sessionId}
 					{sessionExercise}
 					status={overview.summary.status}
+					{isEditMode}
 					{isEditable}
 					{isSaving}
 					isMenuOpen={openExerciseMenuId === sessionExercise.id}
@@ -84,6 +87,7 @@
 					{sessionId}
 					{sessionExercise}
 					status={overview.summary.status}
+					{isEditMode}
 					{isEditable}
 					{isSaving}
 					isMenuOpen={false}

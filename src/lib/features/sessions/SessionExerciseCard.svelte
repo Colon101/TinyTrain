@@ -10,6 +10,7 @@
 		sessionId,
 		sessionExercise,
 		status,
+		isEditMode = false,
 		isEditable,
 		isSaving,
 		isMenuOpen,
@@ -25,6 +26,7 @@
 		sessionId: string;
 		sessionExercise: SessionExerciseOverview;
 		status: SessionStatus;
+		isEditMode?: boolean;
 		isEditable: boolean;
 		isSaving: boolean;
 		isMenuOpen: boolean;
@@ -57,16 +59,17 @@
 				<Icon name="grip-vertical" class="h-4 w-4" />
 			</button>
 
+			<!-- eslint-disable svelte/no-navigation-without-resolve -->
 			<button
 				class="min-w-0 flex-1 text-left"
 				type="button"
 				disabled={status === 'planned'}
 				onclick={() =>
 					goto(
-						resolve('/(app)/sessions/[sessionId]/exercises/[sessionExerciseId]', {
+						`${resolve('/(app)/sessions/[sessionId]/exercises/[sessionExerciseId]', {
 							sessionId,
 							sessionExerciseId: sessionExercise.id
-						})
+						})}${isEditMode ? '?edit=1' : ''}`
 					)}
 			>
 				<p class="line-clamp-2 text-base leading-5 font-semibold wrap-break-word text-white">
@@ -76,6 +79,7 @@
 					{getExerciseSetSummary(sessionExercise, status, performedSets.length)}
 				</p>
 			</button>
+			<!-- eslint-enable svelte/no-navigation-without-resolve -->
 
 			<div data-exercise-card-menu>
 				<button

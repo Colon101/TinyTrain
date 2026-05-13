@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import type {
@@ -57,6 +58,14 @@
 	);
 	let isLastExercise = $derived(
 		exerciseIndex >= 0 && overview ? exerciseIndex === overview.exercises.length - 1 : false
+	);
+	let isEditMode = $derived(page.url.searchParams.get('edit') === '1');
+	let canEditExercise = $derived(
+		Boolean(
+			overview &&
+			(overview.summary.status === 'in_progress' ||
+				(overview.summary.status === 'completed' && isEditMode))
+		)
 	);
 	let selectedExerciseIds = $derived(
 		new Set((overview?.exercises ?? []).map((sessionExercise) => sessionExercise.exerciseId))
@@ -493,13 +502,8 @@
 					);
 
 					if (addedExercise) {
-						await goto(
-							resolve('/(app)/sessions/[sessionId]/exercises/[sessionExerciseId]', {
-								sessionId,
-								sessionExerciseId: addedExercise.id
-							}),
-							{ replaceState: true }
-						);
+						// eslint-disable-next-line svelte/no-navigation-without-resolve
+						await goto(getSessionExercisePath(addedExercise.id), { replaceState: true });
 					}
 				}
 			}
@@ -527,13 +531,8 @@
 					);
 
 					if (addedExercise) {
-						await goto(
-							resolve('/(app)/sessions/[sessionId]/exercises/[sessionExerciseId]', {
-								sessionId,
-								sessionExerciseId: addedExercise.id
-							}),
-							{ replaceState: true }
-						);
+						// eslint-disable-next-line svelte/no-navigation-without-resolve
+						await goto(getSessionExercisePath(addedExercise.id), { replaceState: true });
 					}
 				}
 			}
@@ -590,17 +589,13 @@
 			},
 			async () => {
 				if (nextRouteTarget) {
-					await goto(
-						resolve('/(app)/sessions/[sessionId]/exercises/[sessionExerciseId]', {
-							sessionId,
-							sessionExerciseId: nextRouteTarget.id
-						}),
-						{ replaceState: true }
-					);
+					// eslint-disable-next-line svelte/no-navigation-without-resolve
+					await goto(getSessionExercisePath(nextRouteTarget.id), { replaceState: true });
 					return;
 				}
 
-				await goto(resolve('/(app)/sessions/[sessionId]', { sessionId }), { replaceState: true });
+				// eslint-disable-next-line svelte/no-navigation-without-resolve
+				await goto(getSessionOverviewPath(), { replaceState: true });
 			}
 		);
 	}
@@ -620,25 +615,32 @@
 		);
 	}
 
+	function getSessionExercisePath(nextSessionExerciseId: string) {
+		const path = resolve('/(app)/sessions/[sessionId]/exercises/[sessionExerciseId]', {
+			sessionId,
+			sessionExerciseId: nextSessionExerciseId
+		});
+
+		return `${path}${isEditMode ? '?edit=1' : ''}`;
+	}
+
+	function getSessionOverviewPath() {
+		const path = resolve('/(app)/sessions/[sessionId]', { sessionId });
+
+		return `${path}${isEditMode ? '?edit=1' : ''}`;
+	}
+
 	function goToNextExercise() {
 		if (nextExercise) {
-			void goto(
-				resolve('/(app)/sessions/[sessionId]/exercises/[sessionExerciseId]', {
-					sessionId,
-					sessionExerciseId: nextExercise.id
-				})
-			);
+			// eslint-disable-next-line svelte/no-navigation-without-resolve
+			void goto(getSessionExercisePath(nextExercise.id));
 		}
 	}
 
 	function goToPreviousExercise() {
 		if (previousExercise) {
-			void goto(
-				resolve('/(app)/sessions/[sessionId]/exercises/[sessionExerciseId]', {
-					sessionId,
-					sessionExerciseId: previousExercise.id
-				})
-			);
+			// eslint-disable-next-line svelte/no-navigation-without-resolve
+			void goto(getSessionExercisePath(previousExercise.id));
 		}
 	}
 </script>
@@ -673,7 +675,7 @@
 				Back to session
 			</a>
 		</section>
-	{:else if overview.summary.status !== 'in_progress'}
+	{:else if !canEditExercise}
 		<section class="flex flex-1 flex-col justify-center">
 			<h1 class="text-3xl font-semibold text-white">{activeExercise.exerciseNameSnapshot}</h1>
 			<p class="mt-2 text-sm leading-6 text-zinc-400">
@@ -711,6 +713,7 @@
 			onAddSet={handleAddSet}
 			onSwapExercise={() => openExercisePicker('swap')}
 			onRemoveExercise={handleRemoveExercise}
+			{isEditMode}
 		/>
 
 		<SessionSetEditor
@@ -729,6 +732,7 @@
 			{nextExercise}
 			{isLastExercise}
 			{isSaving}
+			{isEditMode}
 			onPreviousExercise={goToPreviousExercise}
 			onNextExercise={goToNextExercise}
 			onAddExercise={() => openExercisePicker('add')}

@@ -7,6 +7,7 @@
 		nextExercise,
 		isLastExercise,
 		isSaving,
+		isEditMode = false,
 		onPreviousExercise,
 		onNextExercise,
 		onAddExercise,
@@ -16,6 +17,7 @@
 		nextExercise: SessionExerciseOverview | null;
 		isLastExercise: boolean;
 		isSaving: boolean;
+		isEditMode?: boolean;
 		onPreviousExercise: () => void;
 		onNextExercise: () => void;
 		onAddExercise: () => void;
@@ -55,13 +57,15 @@
 			<Icon name="plus" class="h-4 w-4" />
 			Add exercise
 		</button>
-		<button
-			class="flex min-h-10 items-center justify-center rounded-lg bg-emerald-300 px-4 text-sm font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
-			type="button"
-			disabled={isSaving}
-			onclick={onEndSession}
-		>
-			End session
-		</button>
+		{#if !isEditMode}
+			<button
+				class="flex min-h-10 items-center justify-center rounded-lg bg-emerald-300 px-4 text-sm font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
+				type="button"
+				disabled={isSaving}
+				onclick={onEndSession}
+			>
+				End session
+			</button>
+		{/if}
 	{/if}
 </div>

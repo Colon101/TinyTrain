@@ -11,6 +11,7 @@
 		totalExercises,
 		isSaving,
 		isMenuOpen,
+		isEditMode = false,
 		onToggleMenu,
 		onCloseMenu,
 		onAddSet,
@@ -24,6 +25,7 @@
 		totalExercises: number;
 		isSaving: boolean;
 		isMenuOpen: boolean;
+		isEditMode?: boolean;
 		onToggleMenu: () => void;
 		onCloseMenu: () => void;
 		onAddSet: () => void;
@@ -78,12 +80,14 @@
 				<div
 					class="absolute top-12 right-0 z-10 grid min-w-44 gap-2 rounded-lg border border-white/10 bg-[#0f1519] p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)]"
 				>
+					<!-- eslint-disable svelte/no-navigation-without-resolve -->
 					<a
 						class="rounded-lg px-3 py-2 text-left text-sm font-medium text-zinc-200"
-						href={resolve('/(app)/sessions/[sessionId]', { sessionId })}
+						href={`${resolve('/(app)/sessions/[sessionId]', { sessionId })}${isEditMode ? '?edit=1' : ''}`}
 					>
 						Session overview
 					</a>
+					<!-- eslint-enable svelte/no-navigation-without-resolve -->
 					<button
 						class="rounded-lg px-3 py-2 text-left text-sm font-medium text-zinc-200"
 						type="button"

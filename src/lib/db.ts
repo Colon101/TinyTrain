@@ -2,7 +2,6 @@ import { browser } from '$app/environment';
 import type { StorageBackend } from './runtime-mode';
 import {
 	getSupabaseAuthSnapshot,
-	getSupabaseSession,
 	getSupabaseUser,
 	initializeSupabaseAuth,
 	loginWithSupabaseGoogle as startSupabaseGoogleLogin,
@@ -276,7 +275,12 @@ type QueryResult<T> = {
 type WhereClause<T> = {
 	equals(value: unknown): QueryResult<T>;
 	anyOf(values: unknown[]): QueryResult<T>;
-	between(lower: unknown, upper: unknown, includeLower?: boolean, includeUpper?: boolean): QueryResult<T>;
+	between(
+		lower: unknown,
+		upper: unknown,
+		includeLower?: boolean,
+		includeUpper?: boolean
+	): QueryResult<T>;
 };
 
 type DataTable<T extends { id: string }> = {
@@ -301,7 +305,10 @@ const activeUser = new ValueObservable<{
 	isLoggedIn?: boolean;
 	isLoading?: boolean;
 }>({ isLoading: true });
-const activeSyncState = new ValueObservable<SyncStateLike>({ phase: 'initial', status: 'not-started' });
+const activeSyncState = new ValueObservable<SyncStateLike>({
+	phase: 'initial',
+	status: 'not-started'
+});
 const supabaseHydratedPrefix = 'tinytrain:supabase-rxdb-hydrated:';
 
 let activeBackend: StorageBackend = 'supabase-rxdb';
@@ -310,12 +317,10 @@ let activeSupabaseUserId: string | null = null;
 let dbOpenPromise: Promise<typeof db> | null = null;
 let authBridgeStarted = false;
 let supabaseBackendActivationPromise: Promise<void> | null = null;
-let rxRuntimePromise:
-	| Promise<{
-			adapter: typeof import('./rxdb-dexie-adapter');
-			rxdb: typeof import('./rxdb');
-	  }>
-	| null = null;
+let rxRuntimePromise: Promise<{
+	adapter: typeof import('./rxdb-dexie-adapter');
+	rxdb: typeof import('./rxdb');
+}> | null = null;
 
 function toSupabaseCloudUser() {
 	const snapshot = getSupabaseAuthSnapshot();
@@ -409,7 +414,7 @@ async function openSupabaseRuntime(userId: string) {
 	if (hasHydratedSupabaseCache(userId)) {
 		activeUser.set(toSupabaseCloudUser());
 		void rxdb
-			.awaitSupabaseInSync(userId)
+			.awaitSupabaseInSync(userId, { timeoutMs: 15000 })
 			.then(() => {
 				markSupabaseCacheHydrated(userId);
 				if (activeBackend === 'supabase-rxdb' && activeSupabaseUserId === userId) {
@@ -429,11 +434,25 @@ async function openSupabaseRuntime(userId: string) {
 		return;
 	}
 
-	await rxdb.awaitSupabaseInitialReplication(userId);
-	await rxdb.awaitSupabaseInSync(userId);
-	markSupabaseCacheHydrated(userId);
-	activeSyncState.set({ phase: 'in-sync', status: 'synced' });
 	activeUser.set(toSupabaseCloudUser());
+
+	try {
+		await withTimeout(
+			rxdb.awaitSupabaseInitialReplication(userId),
+			15000,
+			'Cloud sync is still loading. Open settings to upload this device or try again.'
+		);
+		await rxdb.awaitSupabaseInSync(userId, { timeoutMs: 15000 });
+		markSupabaseCacheHydrated(userId);
+		activeSyncState.set({ phase: 'in-sync', status: 'synced' });
+	} catch (error) {
+		console.warn('Initial Supabase sync did not finish in time.', error);
+		activeSyncState.set({
+			phase: 'error',
+			status: 'error',
+			error: error instanceof Error ? error : new Error('Supabase sync timed out.')
+		});
+	}
 }
 
 async function selectBackend() {
@@ -475,25 +494,25 @@ type AppDatabase = {
 export const db = new Proxy(
 	{},
 	{
-	get(_target, prop) {
-		if (prop === 'cloud') {
-			return cloudCompat;
-		}
+		get(_target, prop) {
+			if (prop === 'cloud') {
+				return cloudCompat;
+			}
 
-		if (prop === 'transaction' && activeBackend === 'supabase-rxdb' && rxDataDb) {
-			return rxDataDb.transaction.bind(rxDataDb);
-		}
+			if (prop === 'transaction' && activeBackend === 'supabase-rxdb' && rxDataDb) {
+				return rxDataDb.transaction.bind(rxDataDb);
+			}
 
-		if (activeBackend === 'supabase-rxdb' && rxDataDb && prop in rxDataDb) {
-			return rxDataDb[prop as keyof RxDexieLikeDatabase];
-		}
+			if (activeBackend === 'supabase-rxdb' && rxDataDb && prop in rxDataDb) {
+				return rxDataDb[prop as keyof RxDexieLikeDatabase];
+			}
 
-		if (prop === 'open') {
-			return ensureDbOpen;
-		}
+			if (prop === 'open') {
+				return ensureDbOpen;
+			}
 
-		return undefined;
-	}
+			return undefined;
+		}
 	}
 ) as AppDatabase;
 
@@ -552,10 +571,636 @@ export async function syncNow() {
 		return;
 	}
 
-	const { rxdb } = await getRxRuntime();
 	activeSyncState.set({ phase: 'pushing', status: 'syncing' });
-	await rxdb.awaitSupabaseInSync(activeSupabaseUserId);
-	activeSyncState.set({ phase: 'in-sync', status: 'synced' });
+
+	try {
+		const userId = activeSupabaseUserId;
+		const summary = await reconcileSupabaseDatabase(userId, 'richest');
+		const { rxdb } = await getRxRuntime();
+
+		void rxdb.awaitSupabaseInSync(userId, { timeoutMs: 15000 }).catch((error) => {
+			console.warn('Background Supabase sync confirmation failed.', error);
+		});
+
+		activeSyncState.set({ phase: 'in-sync', status: 'synced' });
+		return summary;
+	} catch (error) {
+		activeSyncState.set({
+			phase: 'error',
+			status: 'error',
+			error: error instanceof Error ? error : new Error('Cloud sync failed.')
+		});
+		throw error;
+	}
+}
+
+export type DatabaseUploadMode = 'local-preferred' | 'richest';
+
+export type DatabaseTableUploadSummary = {
+	table: string;
+	localRows: number;
+	remoteRows: number;
+	mergedRows: number;
+	uploadedRows: number;
+	localWins: number;
+	remoteWins: number;
+};
+
+export type DatabaseUploadSummary = {
+	mode: DatabaseUploadMode;
+	tables: DatabaseTableUploadSummary[];
+	localRows: number;
+	remoteRows: number;
+	mergedRows: number;
+	uploadedRows: number;
+	localWins: number;
+	remoteWins: number;
+};
+
+export type LocalDatabaseStats = {
+	workouts: number;
+	customExercises: number;
+	previousWorkouts: number;
+	sessionExercises: number;
+	sessionSets: number;
+	filledSessionSets: number;
+	lastWorkoutAt?: string;
+};
+
+type SyncableRow = {
+	id: string;
+	createdAt?: string;
+	updatedAt?: string;
+};
+
+type SupabaseTableName =
+	| 'exercises'
+	| 'workouts'
+	| 'workout_exercises'
+	| 'workout_sessions'
+	| 'session_exercises'
+	| 'session_sets'
+	| 'exercise_reset_events';
+
+type ReconcileTableOptions<T extends SyncableRow> = {
+	tableName: SupabaseTableName;
+	localTable: DataTable<T>;
+	normalize?: (row: T) => T;
+	filterLocal?: (row: T) => boolean;
+};
+
+type ReconcileWinner = 'local' | 'remote';
+
+type ReconcileChoice<T extends SyncableRow> = {
+	row: T;
+	winner: ReconcileWinner;
+};
+
+type SupabaseSyncedRow = Record<string, unknown> & {
+	id: string;
+	user_id?: string;
+	_deleted?: boolean;
+	_modified?: string;
+	updatedAt?: string;
+};
+
+function stripSupabaseSyncFields<T extends { id: string }>(row: SupabaseSyncedRow): T {
+	const doc = { ...row };
+	delete doc.user_id;
+	delete doc._deleted;
+	delete doc._modified;
+
+	return doc as T;
+}
+
+function toRemoteOptionalNumber(value: unknown) {
+	if (typeof value === 'number' && Number.isFinite(value)) {
+		return value;
+	}
+
+	if (typeof value === 'string' && value.trim()) {
+		const nextValue = Number(value);
+		return Number.isFinite(nextValue) ? nextValue : undefined;
+	}
+
+	return undefined;
+}
+
+function normalizeRemoteSessionSet(row: SessionSet): SessionSet {
+	return withSessionSetDefaults({
+		...row,
+		weight: toRemoteOptionalNumber(row.weight),
+		reps: toRemoteOptionalNumber(row.reps),
+		rir: toRemoteOptionalNumber(row.rir)
+	});
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+	let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+	const timeoutPromise = new Promise<never>((_resolve, reject) => {
+		timeoutId = setTimeout(() => {
+			reject(new Error(message));
+		}, timeoutMs);
+	});
+
+	return Promise.race([promise, timeoutPromise]).finally(() => {
+		if (timeoutId) {
+			clearTimeout(timeoutId);
+		}
+	});
+}
+
+function shouldSyncExercise(exercise: Exercise) {
+	const normalizedExercise = withExerciseDefaults(exercise);
+
+	return normalizedExercise.source !== 'baseline' && !BASELINE_EXERCISE_BY_ID.has(exercise.id);
+}
+
+function hasMeaningfulValue(value: unknown) {
+	if (value === undefined || value === null) {
+		return false;
+	}
+
+	if (typeof value === 'string') {
+		return value.trim().length > 0;
+	}
+
+	if (typeof value === 'number') {
+		return Number.isFinite(value);
+	}
+
+	if (typeof value === 'boolean') {
+		return true;
+	}
+
+	return false;
+}
+
+function getSessionSetCompletenessScore(sessionSet: SessionSet) {
+	const normalizedSessionSet = withSessionSetDefaults(sessionSet);
+	const setValueScore =
+		(Number(hasInputValue(normalizedSessionSet.weightInput)) +
+			Number(hasInputValue(normalizedSessionSet.repsInput)) +
+			Number(hasInputValue(normalizedSessionSet.rirInput))) *
+		2;
+	const numericScore =
+		Number(
+			typeof normalizedSessionSet.weight === 'number' &&
+				Number.isFinite(normalizedSessionSet.weight)
+		) +
+		Number(
+			typeof normalizedSessionSet.reps === 'number' && Number.isFinite(normalizedSessionSet.reps)
+		) +
+		Number(
+			typeof normalizedSessionSet.rir === 'number' && Number.isFinite(normalizedSessionSet.rir)
+		);
+
+	return setValueScore + numericScore;
+}
+
+function getGenericCompletenessScore(row: SyncableRow) {
+	const ignoredFields = new Set([
+		'id',
+		'user_id',
+		'_deleted',
+		'_modified',
+		'createdAt',
+		'updatedAt'
+	]);
+
+	return Object.entries(row).reduce((score, [key, value]) => {
+		if (ignoredFields.has(key)) {
+			return score;
+		}
+
+		return score + Number(hasMeaningfulValue(value));
+	}, 0);
+}
+
+function getRowCompletenessScore(tableName: SupabaseTableName, row: SyncableRow) {
+	if (tableName === 'session_sets') {
+		return getSessionSetCompletenessScore(row as SessionSet);
+	}
+
+	return getGenericCompletenessScore(row);
+}
+
+function getRowTimestamp(row: SyncableRow) {
+	const rawTimestamp =
+		row.updatedAt ??
+		row.createdAt ??
+		('resetAt' in row && typeof row.resetAt === 'string' ? row.resetAt : undefined);
+	const time = rawTimestamp ? new Date(rawTimestamp).getTime() : 0;
+
+	return Number.isFinite(time) ? time : 0;
+}
+
+function chooseReconciledRow<T extends SyncableRow>(
+	tableName: SupabaseTableName,
+	localRow: T | undefined,
+	remoteRow: T | undefined,
+	mode: DatabaseUploadMode
+): ReconcileChoice<T> | null {
+	if (localRow && !remoteRow) {
+		return { row: localRow, winner: 'local' };
+	}
+
+	if (!localRow && remoteRow) {
+		return { row: remoteRow, winner: 'remote' };
+	}
+
+	if (!localRow || !remoteRow) {
+		return null;
+	}
+
+	if (mode === 'local-preferred') {
+		return { row: localRow, winner: 'local' };
+	}
+
+	const localScore = getRowCompletenessScore(tableName, localRow);
+	const remoteScore = getRowCompletenessScore(tableName, remoteRow);
+
+	if (localScore !== remoteScore) {
+		return localScore > remoteScore
+			? { row: localRow, winner: 'local' }
+			: { row: remoteRow, winner: 'remote' };
+	}
+
+	return getRowTimestamp(localRow) >= getRowTimestamp(remoteRow)
+		? { row: localRow, winner: 'local' }
+		: { row: remoteRow, winner: 'remote' };
+}
+
+function stripUndefinedFields(row: Record<string, unknown>) {
+	const cleanRow: Record<string, unknown> = {};
+
+	for (const [key, value] of Object.entries(row)) {
+		if (value !== undefined) {
+			cleanRow[key] = value;
+		}
+	}
+
+	return cleanRow;
+}
+
+function toSupabaseUpsertRow(userId: string, row: SyncableRow) {
+	return stripUndefinedFields({
+		...row,
+		user_id: userId,
+		_deleted: false
+	});
+}
+
+async function fetchAllSupabaseRows<T extends SyncableRow>(
+	userId: string,
+	tableName: SupabaseTableName,
+	normalize: (row: T) => T = (row) => row
+) {
+	const pageSize = 1000;
+	const rows: T[] = [];
+	let from = 0;
+
+	while (true) {
+		const { data, error } = await supabase
+			.from(tableName)
+			.select('*')
+			.eq('user_id', userId)
+			.eq('_deleted', false)
+			.range(from, from + pageSize - 1);
+
+		if (error) {
+			throw error;
+		}
+
+		const pageRows = ((data ?? []) as SupabaseSyncedRow[]).map((row) =>
+			normalize(stripSupabaseSyncFields<T>(row))
+		);
+
+		rows.push(...pageRows);
+
+		if (pageRows.length < pageSize) {
+			return rows;
+		}
+
+		from += pageSize;
+	}
+}
+
+async function upsertSupabaseRows(
+	userId: string,
+	tableName: SupabaseTableName,
+	rows: SyncableRow[]
+) {
+	const pageSize = 200;
+
+	for (let index = 0; index < rows.length; index += pageSize) {
+		const pageRows = rows
+			.slice(index, index + pageSize)
+			.map((row) => toSupabaseUpsertRow(userId, row));
+
+		if (pageRows.length === 0) {
+			continue;
+		}
+
+		const { error } = await supabase.from(tableName).upsert(pageRows, { onConflict: 'id' });
+
+		if (error) {
+			throw error;
+		}
+	}
+}
+
+async function putReconciledRows<T extends SyncableRow>(table: DataTable<T>, rows: T[]) {
+	for (const row of rows) {
+		await table.put(row);
+	}
+}
+
+async function reconcileTable<T extends SyncableRow>(
+	userId: string,
+	mode: DatabaseUploadMode,
+	options: ReconcileTableOptions<T>
+): Promise<DatabaseTableUploadSummary> {
+	const normalize = options.normalize ?? ((row: T) => row);
+	const localRows = (await options.localTable.toArray())
+		.filter((row) => options.filterLocal?.(row) ?? true)
+		.map(normalize);
+	const remoteRows = await fetchAllSupabaseRows(userId, options.tableName, normalize);
+	const localRowsById = new Map(localRows.map((row) => [row.id, row]));
+	const remoteRowsById = new Map(remoteRows.map((row) => [row.id, row]));
+	const ids = [...new Set([...localRowsById.keys(), ...remoteRowsById.keys()])];
+	const mergedRows: T[] = [];
+	let localWins = 0;
+	let remoteWins = 0;
+
+	for (const id of ids) {
+		const choice = chooseReconciledRow(
+			options.tableName,
+			localRowsById.get(id),
+			remoteRowsById.get(id),
+			mode
+		);
+
+		if (!choice) {
+			continue;
+		}
+
+		mergedRows.push(choice.row);
+
+		if (choice.winner === 'local') {
+			localWins += 1;
+		} else {
+			remoteWins += 1;
+		}
+	}
+
+	await putReconciledRows(options.localTable, mergedRows);
+	await upsertSupabaseRows(userId, options.tableName, mergedRows);
+
+	return {
+		table: options.tableName,
+		localRows: localRows.length,
+		remoteRows: remoteRows.length,
+		mergedRows: mergedRows.length,
+		uploadedRows: mergedRows.length,
+		localWins,
+		remoteWins
+	};
+}
+
+async function reconcileSupabaseDatabase(userId: string, mode: DatabaseUploadMode) {
+	const tables = [
+		await reconcileTable<Exercise>(userId, mode, {
+			tableName: 'exercises',
+			localTable: db.exercises,
+			normalize: withExerciseDefaults,
+			filterLocal: shouldSyncExercise
+		}),
+		await reconcileTable<Workout>(userId, mode, {
+			tableName: 'workouts',
+			localTable: db.workouts
+		}),
+		await reconcileTable<WorkoutExercise>(userId, mode, {
+			tableName: 'workout_exercises',
+			localTable: db.workoutExercises
+		}),
+		await reconcileTable<WorkoutSession>(userId, mode, {
+			tableName: 'workout_sessions',
+			localTable: db.workoutSessions
+		}),
+		await reconcileTable<SessionExercise>(userId, mode, {
+			tableName: 'session_exercises',
+			localTable: db.sessionExercises
+		}),
+		await reconcileTable<SessionSet>(userId, mode, {
+			tableName: 'session_sets',
+			localTable: db.sessionSets,
+			normalize: normalizeRemoteSessionSet
+		}),
+		await reconcileTable<ExerciseResetEvent>(userId, mode, {
+			tableName: 'exercise_reset_events',
+			localTable: db.exerciseResetEvents
+		})
+	];
+
+	const summary = tables.reduce<DatabaseUploadSummary>(
+		(total, table) => ({
+			mode,
+			tables,
+			localRows: total.localRows + table.localRows,
+			remoteRows: total.remoteRows + table.remoteRows,
+			mergedRows: total.mergedRows + table.mergedRows,
+			uploadedRows: total.uploadedRows + table.uploadedRows,
+			localWins: total.localWins + table.localWins,
+			remoteWins: total.remoteWins + table.remoteWins
+		}),
+		{
+			mode,
+			tables,
+			localRows: 0,
+			remoteRows: 0,
+			mergedRows: 0,
+			uploadedRows: 0,
+			localWins: 0,
+			remoteWins: 0
+		}
+	);
+
+	markSupabaseCacheHydrated(userId);
+
+	return summary;
+}
+
+async function putMergedRemoteRow<T extends SyncableRow>(
+	tableName: SupabaseTableName,
+	table: DataTable<T>,
+	row: T,
+	normalize: (row: T) => T = (nextRow) => nextRow
+) {
+	const currentRow = await table.get(row.id);
+	const choice = chooseReconciledRow(tableName, currentRow, normalize(row), 'richest');
+
+	if (!choice) {
+		return;
+	}
+
+	await table.put(choice.row);
+}
+
+async function putMergedRemoteRows<T extends SyncableRow>(
+	tableName: SupabaseTableName,
+	table: DataTable<T>,
+	rows: T[],
+	normalize: (row: T) => T = (nextRow) => nextRow
+) {
+	for (const row of rows) {
+		await putMergedRemoteRow(tableName, table, row, normalize);
+	}
+}
+
+export async function uploadLocalDatabaseToCloud() {
+	await ensureDbOpen();
+
+	if (!activeSupabaseUserId) {
+		throw new Error('Sign in with Google to upload this device.');
+	}
+
+	activeSyncState.set({ phase: 'pushing', status: 'syncing' });
+
+	try {
+		const summary = await reconcileSupabaseDatabase(activeSupabaseUserId, 'local-preferred');
+		activeSyncState.set({ phase: 'in-sync', status: 'synced' });
+		return summary;
+	} catch (error) {
+		activeSyncState.set({
+			phase: 'error',
+			status: 'error',
+			error: error instanceof Error ? error : new Error('Local upload failed.')
+		});
+		throw error;
+	}
+}
+
+export async function getLocalDatabaseStats(): Promise<LocalDatabaseStats> {
+	await ensureDbOpen();
+
+	const [workouts, exercises, sessions, sessionExercises, sessionSets] = await Promise.all([
+		db.workouts.toArray(),
+		db.exercises.toArray(),
+		db.workoutSessions.toArray(),
+		db.sessionExercises.toArray(),
+		db.sessionSets.toArray()
+	]);
+	const completedSessions = sessions.filter((session) => session.status === 'completed');
+	const lastWorkout = [...completedSessions].sort(
+		(first, second) => getRowTimestamp(second) - getRowTimestamp(first)
+	)[0];
+
+	return {
+		workouts: workouts.length,
+		customExercises: exercises.filter(shouldSyncExercise).length,
+		previousWorkouts: completedSessions.length,
+		sessionExercises: sessionExercises.length,
+		sessionSets: sessionSets.length,
+		filledSessionSets: sessionSets.filter(hasAnySetValue).length,
+		lastWorkoutAt: lastWorkout?.completedAt ?? lastWorkout?.startedAt ?? lastWorkout?.createdAt
+	};
+}
+
+async function hydrateSessionFromSupabase(sessionId: string) {
+	if (activeBackend !== 'supabase-rxdb' || !activeSupabaseUserId) {
+		return;
+	}
+
+	try {
+		const [sessionResult, sessionExercisesResult] = await Promise.all([
+			supabase
+				.from('workout_sessions')
+				.select('*')
+				.eq('user_id', activeSupabaseUserId)
+				.eq('id', sessionId)
+				.eq('_deleted', false)
+				.maybeSingle(),
+			supabase
+				.from('session_exercises')
+				.select('*')
+				.eq('user_id', activeSupabaseUserId)
+				.eq('sessionId', sessionId)
+				.eq('_deleted', false)
+		]);
+
+		if (sessionResult.error) {
+			throw sessionResult.error;
+		}
+
+		if (sessionExercisesResult.error) {
+			throw sessionExercisesResult.error;
+		}
+
+		const sessionRow = sessionResult.data as SupabaseSyncedRow | null;
+		const sessionExerciseRows = (sessionExercisesResult.data ?? []) as SupabaseSyncedRow[];
+		const sessionExerciseIds = sessionExerciseRows.map((row) => row.id);
+		const exerciseIds = [...new Set(sessionExerciseRows.map((row) => String(row.exerciseId)))];
+		const [sessionSetsResult, exercisesResult] = await Promise.all([
+			sessionExerciseIds.length > 0
+				? supabase
+						.from('session_sets')
+						.select('*')
+						.eq('user_id', activeSupabaseUserId)
+						.in('sessionExerciseId', sessionExerciseIds)
+						.eq('_deleted', false)
+				: Promise.resolve({ data: [], error: null }),
+			exerciseIds.length > 0
+				? supabase
+						.from('exercises')
+						.select('*')
+						.eq('user_id', activeSupabaseUserId)
+						.in('id', exerciseIds)
+						.eq('_deleted', false)
+				: Promise.resolve({ data: [], error: null })
+		]);
+
+		if (sessionSetsResult.error) {
+			throw sessionSetsResult.error;
+		}
+
+		if (exercisesResult.error) {
+			throw exercisesResult.error;
+		}
+
+		if (sessionRow) {
+			await putMergedRemoteRow(
+				'workout_sessions',
+				db.workoutSessions,
+				stripSupabaseSyncFields<WorkoutSession>(sessionRow)
+			);
+		}
+
+		await putMergedRemoteRows(
+			'session_exercises',
+			db.sessionExercises,
+			sessionExerciseRows.map((row) => stripSupabaseSyncFields<SessionExercise>(row))
+		);
+		await putMergedRemoteRows(
+			'session_sets',
+			db.sessionSets,
+			((sessionSetsResult.data ?? []) as SupabaseSyncedRow[]).map((row) =>
+				stripSupabaseSyncFields<SessionSet>(row)
+			),
+			normalizeRemoteSessionSet
+		);
+		await putMergedRemoteRows(
+			'exercises',
+			db.exercises,
+			((exercisesResult.data ?? []) as SupabaseSyncedRow[]).map((row) =>
+				stripSupabaseSyncFields<Exercise>(row)
+			),
+			withExerciseDefaults
+		);
+	} catch (error) {
+		console.warn('Direct session hydration from Supabase failed.', error);
+	}
 }
 
 export function toDayKey(input: Date | string) {
@@ -2025,6 +2670,8 @@ async function updateSessionSetInputs(
 }
 
 export async function cleanupStaleSessions(todayDayKey = toDayKey(new Date())) {
+	await ensureDbOpen();
+
 	if (!activeUser.value?.isLoggedIn) {
 		return;
 	}
@@ -2671,6 +3318,81 @@ export async function completeWorkoutSession(sessionId: string) {
 	});
 }
 
+export async function updateWorkoutSessionTiming(
+	sessionId: string,
+	nextStartedAt: string,
+	nextCompletedAt?: string
+) {
+	requireLoggedInUser();
+
+	const session = await db.workoutSessions.get(sessionId);
+
+	if (!session) {
+		throw new Error('Session not found.');
+	}
+
+	const startedAtDate = new Date(nextStartedAt);
+	const completedAtDate = nextCompletedAt ? new Date(nextCompletedAt) : null;
+
+	if (Number.isNaN(startedAtDate.getTime())) {
+		throw new Error('Start time is invalid.');
+	}
+
+	if (completedAtDate && Number.isNaN(completedAtDate.getTime())) {
+		throw new Error('End time is invalid.');
+	}
+
+	if (completedAtDate && completedAtDate.getTime() < startedAtDate.getTime()) {
+		throw new Error('End time must be after the start time.');
+	}
+
+	if (session.status === 'planned') {
+		throw new Error('Start the session before editing its time.');
+	}
+
+	const currentStartedAtMs = session.startedAt ? new Date(session.startedAt).getTime() : NaN;
+	const startedAtDeltaMs = Number.isNaN(currentStartedAtMs)
+		? 0
+		: startedAtDate.getTime() - currentStartedAtMs;
+	const now = timestamp();
+
+	await db.transaction('rw', db.workoutSessions, db.sessionExercises, async () => {
+		await db.workoutSessions.update(sessionId, {
+			startedAt: timestamp(startedAtDate),
+			completedAt: completedAtDate ? timestamp(completedAtDate) : undefined,
+			dayKey: toDayKey(startedAtDate),
+			updatedAt: now
+		});
+
+		if (startedAtDeltaMs === 0) {
+			return;
+		}
+
+		const sessionExercises = await db.sessionExercises
+			.where('sessionId')
+			.equals(sessionId)
+			.toArray();
+
+		await Promise.all(
+			sessionExercises.map((sessionExercise) => {
+				const performedAtMs = new Date(sessionExercise.performedAt).getTime();
+				const nextPerformedAt = Number.isNaN(performedAtMs)
+					? startedAtDate
+					: new Date(performedAtMs + startedAtDeltaMs);
+
+				return db.sessionExercises.update(sessionExercise.id, {
+					performedAt: timestamp(nextPerformedAt),
+					updatedAt: now
+				});
+			})
+		);
+	});
+
+	void syncNow().catch((error) => {
+		console.warn('Background Supabase sync failed.', error);
+	});
+}
+
 export async function getSessionOverview(sessionId: string): Promise<SessionOverview | null> {
 	const session = await db.workoutSessions.get(sessionId);
 
@@ -2813,6 +3535,9 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 }
 
 export async function getEditableSession(sessionId: string) {
+	await ensureDbOpen();
+	await hydrateSessionFromSupabase(sessionId);
+
 	const session = await db.workoutSessions.get(sessionId);
 
 	if (!session) {

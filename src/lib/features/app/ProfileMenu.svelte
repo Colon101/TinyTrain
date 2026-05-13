@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import Icon from '$lib/ui/Icon.svelte';
 	import type { CloudUser } from './user';
@@ -98,8 +99,17 @@
 			</div>
 
 			<div class="pt-2">
+				<a
+					class="flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-zinc-200 transition hover:bg-white/6"
+					href={resolve('/settings')}
+					onclick={() => (isOpen = false)}
+				>
+					<Icon name="settings" class="h-4 w-4" />
+					<span>Settings</span>
+				</a>
+
 				<button
-					class="flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-zinc-200 transition hover:bg-white/6 disabled:text-zinc-500"
+					class="mt-1 flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm font-medium text-zinc-200 transition hover:bg-white/6 disabled:text-zinc-500"
 					type="button"
 					disabled={!api || isBusy}
 					onclick={syncNow}

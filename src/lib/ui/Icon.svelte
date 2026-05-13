@@ -15,12 +15,16 @@
 		| 'history'
 		| 'loader-circle'
 		| 'log-out'
+		| 'pencil'
 		| 'plus'
 		| 'refresh-cw'
 		| 'rotate-ccw'
+		| 'settings'
 		| 'share-2'
+		| 'shield-alert'
 		| 'sparkles'
 		| 'trash-2'
+		| 'upload-cloud'
 		| 'x';
 
 	let {
@@ -99,6 +103,9 @@
 		<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
 		<path d="m16 17 5-5-5-5" />
 		<path d="M21 12H9" />
+	{:else if name === 'pencil'}
+		<path d="M12 20h9" />
+		<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
 	{:else if name === 'plus'}
 		<path d="M12 5v14" />
 		<path d="M5 12h14" />
@@ -110,12 +117,23 @@
 	{:else if name === 'rotate-ccw'}
 		<path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
 		<path d="M3 3v5h5" />
+	{:else if name === 'settings'}
+		<path
+			d="M12.2 2h-.4a2 2 0 0 0-2 1.6l-.2 1a2 2 0 0 1-2.8 1.2l-.9-.5a2 2 0 0 0-2.5.4l-.2.3a2 2 0 0 0-.3 2.5l.5.9a2 2 0 0 1-1.2 2.8l-1 .2a2 2 0 0 0-1.6 2v.4a2 2 0 0 0 1.6 2l1 .2a2 2 0 0 1 1.2 2.8l-.5.9a2 2 0 0 0 .3 2.5l.2.3a2 2 0 0 0 2.5.4l.9-.5a2 2 0 0 1 2.8 1.2l.2 1a2 2 0 0 0 2 1.6h.4a2 2 0 0 0 2-1.6l.2-1a2 2 0 0 1 2.8-1.2l.9.5a2 2 0 0 0 2.5-.4l.2-.3a2 2 0 0 0 .3-2.5l-.5-.9a2 2 0 0 1 1.2-2.8l1-.2a2 2 0 0 0 1.6-2v-.4a2 2 0 0 0-1.6-2l-1-.2a2 2 0 0 1-1.2-2.8l.5-.9a2 2 0 0 0-.3-2.5l-.2-.3a2 2 0 0 0-2.5-.4l-.9.5a2 2 0 0 1-2.8-1.2l-.2-1a2 2 0 0 0-2-1.6Z"
+		/>
+		<circle cx="12" cy="12" r="3" />
 	{:else if name === 'share-2'}
 		<circle cx="18" cy="5" r="3" />
 		<circle cx="6" cy="12" r="3" />
 		<circle cx="18" cy="19" r="3" />
 		<path d="m8.6 10.5 6.8-4" />
 		<path d="m8.6 13.5 6.8 4" />
+	{:else if name === 'shield-alert'}
+		<path
+			d="M20 13c0 5-3.5 7.5-7.6 8.9a1 1 0 0 1-.8 0C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.2-2.7a1.2 1.2 0 0 1 1.6 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1z"
+		/>
+		<path d="M12 8v4" />
+		<path d="M12 16h.01" />
 	{:else if name === 'sparkles'}
 		<path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6Z" />
 		<path d="M5 3v4" />
@@ -128,6 +146,11 @@
 		<path d="M19 6l-1 14H6L5 6" />
 		<path d="M10 11v6" />
 		<path d="M14 11v6" />
+	{:else if name === 'upload-cloud'}
+		<path d="M12 13v8" />
+		<path d="m8 17 4-4 4 4" />
+		<path d="M20.4 16.1A5 5 0 0 0 18 6h-1.3A8 8 0 1 0 4 15.3" />
+		<path d="M16 16h1a4 4 0 0 0 0-8h-.3" />
 	{:else if name === 'x'}
 		<path d="M18 6 6 18" />
 		<path d="m6 6 12 12" />

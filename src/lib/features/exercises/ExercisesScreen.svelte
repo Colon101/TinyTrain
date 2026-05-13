@@ -35,6 +35,7 @@
 				}
 
 				api = dbApi;
+				await dbApi.ensureDbOpen();
 				await loadItems();
 			} catch (error) {
 				errorMessage = error instanceof Error ? error.message : 'Something went wrong.';

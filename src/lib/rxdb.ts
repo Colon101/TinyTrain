@@ -8,7 +8,10 @@ import {
 } from 'rxdb';
 import Dexie from 'dexie';
 import { RxDBMigrationSchemaPlugin } from 'rxdb/plugins/migration-schema';
-import { replicateSupabase, type RxSupabaseReplicationState } from 'rxdb/plugins/replication-supabase';
+import {
+	replicateSupabase,
+	type RxSupabaseReplicationState
+} from 'rxdb/plugins/replication-supabase';
 import { getRxStorageDexie } from 'rxdb/plugins/storage-dexie';
 import { supabase } from './supabase';
 import type {
@@ -47,6 +50,9 @@ export type TinyTrainRxCollections = {
 export type TinyTrainRxDatabase = RxDatabase<TinyTrainRxCollections>;
 
 type CollectionKey = keyof TinyTrainRxCollections;
+type AwaitInSyncOptions = {
+	timeoutMs?: number;
+};
 
 const collectionTableNames: Record<CollectionKey, string> = {
 	exercises: 'exercises',
@@ -83,6 +89,8 @@ function createSchema<T>(schema: Omit<RxJsonSchema<T>, 'primaryKey' | 'type'>): 
 	} as RxJsonSchema<T>;
 }
 
+// RxDB's schema generic needs the concrete document type per collection; the record has mixed schema types.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const schemas: Record<CollectionKey, RxJsonSchema<any>> = {
 	exercises: createSchema<SupabaseExercise>({
 		version: 0,
@@ -136,7 +144,13 @@ const schemas: Record<CollectionKey, RxJsonSchema<any>> = {
 			updatedAt: timestampProperty
 		},
 		required: ['id', 'user_id', 'workoutId', 'exerciseId', 'order', 'createdAt', 'updatedAt'],
-		indexes: ['user_id', 'workoutId', 'exerciseId', ['workoutId', 'order'], ['workoutId', 'exerciseId']]
+		indexes: [
+			'user_id',
+			'workoutId',
+			'exerciseId',
+			['workoutId', 'order'],
+			['workoutId', 'exerciseId']
+		]
 	}),
 	workoutSessions: createSchema<SupabaseWorkoutSession>({
 		version: 1,
@@ -148,7 +162,11 @@ const schemas: Record<CollectionKey, RxJsonSchema<any>> = {
 			dayKey: stringProperty,
 			startedAt: timestampProperty,
 			completedAt: timestampProperty,
-			status: { type: 'string', enum: ['planned', 'in_progress', 'completed', 'abandoned'], maxLength: 20 },
+			status: {
+				type: 'string',
+				enum: ['planned', 'in_progress', 'completed', 'abandoned'],
+				maxLength: 20
+			},
 			createdAt: timestampProperty,
 			updatedAt: timestampProperty
 		},
@@ -190,7 +208,14 @@ const schemas: Record<CollectionKey, RxJsonSchema<any>> = {
 			'createdAt',
 			'updatedAt'
 		],
-		indexes: ['user_id', 'sessionId', 'workoutId', 'exerciseId', ['sessionId', 'order'], ['exerciseId', 'performedAt']]
+		indexes: [
+			'user_id',
+			'sessionId',
+			'workoutId',
+			'exerciseId',
+			['sessionId', 'order'],
+			['exerciseId', 'performedAt']
+		]
 	}),
 	sessionSets: createSchema<SupabaseSessionSet>({
 		version: 0,
@@ -210,8 +235,23 @@ const schemas: Record<CollectionKey, RxJsonSchema<any>> = {
 			createdAt: timestampProperty,
 			updatedAt: timestampProperty
 		},
-		required: ['id', 'user_id', 'sessionExerciseId', 'exerciseId', 'order', 'side', 'createdAt', 'updatedAt'],
-		indexes: ['user_id', 'sessionExerciseId', 'exerciseId', ['sessionExerciseId', 'order'], ['exerciseId', 'createdAt']]
+		required: [
+			'id',
+			'user_id',
+			'sessionExerciseId',
+			'exerciseId',
+			'order',
+			'side',
+			'createdAt',
+			'updatedAt'
+		],
+		indexes: [
+			'user_id',
+			'sessionExerciseId',
+			'exerciseId',
+			['sessionExerciseId', 'order'],
+			['exerciseId', 'createdAt']
+		]
 	}),
 	exerciseResetEvents: createSchema<SupabaseExerciseResetEvent>({
 		version: 0,
@@ -244,7 +284,10 @@ function toDatabaseName(userId: string) {
 	return `tinytrain_supabase_${userId.replace(/[^a-zA-Z0-9_]/g, '_')}`;
 }
 
-function removeNullOptionalValues<T extends Record<string, unknown>>(collectionName: CollectionKey, doc: T) {
+function removeNullOptionalValues<T extends Record<string, unknown>>(
+	collectionName: CollectionKey,
+	doc: T
+) {
 	for (const key of optionalFieldsByCollection[collectionName]) {
 		if (doc[key] === null) {
 			delete doc[key];
@@ -252,6 +295,40 @@ function removeNullOptionalValues<T extends Record<string, unknown>>(collectionN
 	}
 
 	return doc;
+}
+
+function toOptionalNumber(value: unknown) {
+	if (typeof value === 'number' && Number.isFinite(value)) {
+		return value;
+	}
+
+	if (typeof value === 'string' && value.trim()) {
+		const nextValue = Number(value);
+		return Number.isFinite(nextValue) ? nextValue : undefined;
+	}
+
+	return undefined;
+}
+
+function normalizePulledDoc<T extends Record<string, unknown>>(
+	collectionName: CollectionKey,
+	doc: T
+) {
+	const nextDoc = removeNullOptionalValues(collectionName, doc) as Record<string, unknown>;
+
+	if (collectionName === 'sessionSets') {
+		for (const key of ['weight', 'reps', 'rir']) {
+			const nextValue = toOptionalNumber(nextDoc[key]);
+
+			if (nextValue === undefined) {
+				delete nextDoc[key];
+			} else {
+				nextDoc[key] = nextValue;
+			}
+		}
+	}
+
+	return nextDoc as T;
 }
 
 export function toSupabaseRowId(userId: string, localId: string) {
@@ -262,7 +339,10 @@ export function fromSupabaseRowId(userId: string, remoteId: string) {
 	return remoteId.startsWith(`${userId}:`) ? remoteId.slice(userId.length + 1) : remoteId;
 }
 
-export function addUserId<T extends { id: string }>(userId: string, doc: T): T & { user_id: string } {
+export function addUserId<T extends { id: string }>(
+	userId: string,
+	doc: T
+): T & { user_id: string } {
 	return {
 		...doc,
 		id: toSupabaseRowId(userId, doc.id),
@@ -342,7 +422,9 @@ export async function resetTinyTrainRxDatabase(userId: string) {
 		typeof indexedDB !== 'undefined' && 'databases' in indexedDB
 			? (await indexedDB.databases())
 					.map((database) => database.name)
-					.filter((name): name is string => Boolean(name?.startsWith(`rxdb-dexie-${databaseName}--`)))
+					.filter((name): name is string =>
+						Boolean(name?.startsWith(`rxdb-dexie-${databaseName}--`))
+					)
 			: [];
 	const namesToDelete = [...new Set([...knownDatabaseNames, ...availableDatabaseNames])];
 
@@ -357,25 +439,27 @@ export async function startSupabaseReplication(userId: string) {
 	}
 
 	const database = await getTinyTrainRxDatabase(userId);
-	const replications = (Object.keys(collectionTableNames) as CollectionKey[]).map((collectionName) =>
-		replicateSupabase({
-			tableName: collectionTableNames[collectionName],
-			client: supabase,
-			collection: database[collectionName] as unknown as RxCollection<SyncedRow>,
-			replicationIdentifier: `${userId}:${collectionTableNames[collectionName]}`,
-			live: true,
-			pull: {
-				batchSize: 100,
-				queryBuilder: ({ query }) => query.eq('user_id', userId),
-				modifier: (doc) =>
-					removeNullOptionalValues(collectionName, doc as Record<string, unknown>) as SyncedRow & {
-						_deleted: boolean;
-					}
-			},
-			push: {
-				batchSize: 100
-			}
-		})
+	const replications = (Object.keys(collectionTableNames) as CollectionKey[]).map(
+		(collectionName) =>
+			replicateSupabase({
+				tableName: collectionTableNames[collectionName],
+				client: supabase,
+				collection: database[collectionName] as unknown as RxCollection<SyncedRow>,
+				replicationIdentifier: `${userId}:${collectionTableNames[collectionName]}`,
+				live: true,
+				waitForLeadership: false,
+				pull: {
+					batchSize: 100,
+					queryBuilder: ({ query }) => query.eq('user_id', userId),
+					modifier: (doc) =>
+						normalizePulledDoc(collectionName, doc as Record<string, unknown>) as SyncedRow & {
+							_deleted: boolean;
+						}
+				},
+				push: {
+					batchSize: 100
+				}
+			})
 	);
 
 	for (const replication of replications) {
@@ -393,7 +477,38 @@ export async function awaitSupabaseInitialReplication(userId: string) {
 	await Promise.all(replications.map((replication) => replication.awaitInitialReplication()));
 }
 
-export async function awaitSupabaseInSync(userId: string) {
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+	let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+	const timeoutPromise = new Promise<never>((_resolve, reject) => {
+		timeoutId = setTimeout(() => {
+			reject(new Error(message));
+		}, timeoutMs);
+	});
+
+	return Promise.race([promise, timeoutPromise]).finally(() => {
+		if (timeoutId) {
+			clearTimeout(timeoutId);
+		}
+	});
+}
+
+export async function awaitSupabaseInSync(userId: string, options: AwaitInSyncOptions = {}) {
 	const replications = await startSupabaseReplication(userId);
-	await Promise.all(replications.map((replication) => replication.awaitInSync()));
+	for (const replication of replications) {
+		replication.reSync();
+	}
+
+	const syncPromise = Promise.all(replications.map((replication) => replication.awaitInSync()));
+
+	if (options.timeoutMs) {
+		await withTimeout(
+			syncPromise,
+			options.timeoutMs,
+			'Cloud sync is still running. Try again in a moment.'
+		);
+		return;
+	}
+
+	await syncPromise;
 }

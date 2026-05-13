@@ -1,18 +1,25 @@
 <script lang="ts">
+	import { browser } from '$app/environment';
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { onDestroy, onMount } from 'svelte';
 	import type { Exercise, SessionExerciseOverview, SessionOverview } from '$lib/db';
 	import ExercisePickerSheet from '$lib/features/workouts/ExercisePickerSheet.svelte';
+	import Icon from '$lib/ui/Icon.svelte';
 	import SessionDragPreview from './SessionDragPreview.svelte';
 	import SessionExerciseList from './SessionExerciseList.svelte';
 	import SessionOverviewHeader from './SessionOverviewHeader.svelte';
 	import SessionSummaryPanel from './SessionSummaryPanel.svelte';
 	import {
+		SESSION_EDIT_DISCARD_MESSAGE,
+		clearSessionEditDraft,
 		clearSessionOverviewActions,
+		readSessionEditDraft,
 		setSessionOverviewActions
 	} from './session-overview-actions';
-	import { formatDayHeading } from './session-format';
+	import { writeSessionEditDraft } from './session-overview-actions';
+	import { formatDayHeading, formatDuration } from './session-format';
 	import { hasLoggedValues } from './session-overview';
 	import { shareOrDownloadSessionImage } from './session-share-image';
 
@@ -49,6 +56,14 @@
 	let isSharingSession = $state(false);
 	let errorMessage = $state('');
 	let nowMs = $state(Date.now());
+	let isEditMode = $state(false);
+	let isTimeEditorOpen = $state(false);
+	let draftStartedAt = $state('');
+	let draftCompletedAt = $state('');
+	let timeEditorStartTime = $state('');
+	let timeEditorDurationHours = $state('0');
+	let timeEditorDurationMinutes = $state('0');
+	let timeEditorDurationSeconds = $state('0');
 	let isExercisePickerOpen = $state(false);
 	let pickerMode = $state<PickerMode>('add');
 	let targetSessionExerciseId = $state('');
@@ -74,8 +89,38 @@
 	let isEditable = $derived(
 		Boolean(
 			overview &&
-			(overview.summary.status === 'planned' || overview.summary.status === 'in_progress')
+			(overview.summary.status === 'planned' ||
+				overview.summary.status === 'in_progress' ||
+				isEditMode)
 		)
+	);
+	let timerSummary = $derived(
+		overview
+			? {
+					...overview.summary,
+					startedAt: isEditMode
+						? draftStartedAt || overview.summary.startedAt
+						: overview.summary.startedAt,
+					completedAt: isEditMode
+						? draftCompletedAt || overview.summary.completedAt
+						: overview.summary.completedAt
+				}
+			: null
+	);
+	let canEditSession = $derived(Boolean(overview?.summary.status === 'completed'));
+	let hasUnsavedTimeChanges = $derived(
+		Boolean(
+			overview &&
+			isEditMode &&
+			(draftStartedAt !== (overview.summary.startedAt ?? '') ||
+				draftCompletedAt !== (overview.summary.completedAt ?? ''))
+		)
+	);
+	let timerSummaryEndMs = $derived(
+		timerSummary?.completedAt ? new Date(timerSummary.completedAt).getTime() : nowMs
+	);
+	let timeEditorDurationText = $derived(
+		formatDuration(timerSummary?.startedAt, timerSummary?.completedAt, timerSummaryEndMs)
 	);
 	let selectedExerciseIds = $derived(
 		new Set((overview?.exercises ?? []).map((sessionExercise) => sessionExercise.exerciseId))
@@ -206,6 +251,181 @@
 		} finally {
 			isSaving = false;
 		}
+	}
+
+	function writeStoredEditDraft() {
+		if (!browser || !overview || !isEditMode) {
+			return;
+		}
+
+		writeSessionEditDraft(sessionId, {
+			startedAt: draftStartedAt,
+			completedAt: draftCompletedAt
+		});
+	}
+
+	function clearStoredEditDraft() {
+		if (!browser) {
+			return;
+		}
+
+		clearSessionEditDraft(sessionId);
+	}
+
+	function getSessionOverviewPath(editMode: boolean) {
+		const basePath = resolve('/(app)/sessions/[sessionId]', { sessionId });
+
+		return editMode ? `${basePath}?edit=1` : basePath;
+	}
+
+	async function syncEditUrl(editMode: boolean) {
+		const nextPath = getSessionOverviewPath(editMode);
+
+		if (`${page.url.pathname}${page.url.search}` === nextPath) {
+			return;
+		}
+
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
+		await goto(nextPath, { replaceState: true, keepFocus: true, noScroll: true });
+	}
+
+	function getDurationSeconds(startedAt?: string | null, completedAt?: string | null) {
+		const startedAtMs = startedAt ? new Date(startedAt).getTime() : NaN;
+		const completedAtMs = completedAt ? new Date(completedAt).getTime() : NaN;
+
+		if (Number.isNaN(startedAtMs) || Number.isNaN(completedAtMs) || completedAtMs < startedAtMs) {
+			return 0;
+		}
+
+		return Math.max(Math.round((completedAtMs - startedAtMs) / 1000), 0);
+	}
+
+	function toTimeInputValue(value?: string | null) {
+		if (!value) {
+			return '';
+		}
+
+		const date = new Date(value);
+
+		if (Number.isNaN(date.getTime())) {
+			return '';
+		}
+
+		return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+	}
+
+	function getTimeEditorNumber(value: string) {
+		const nextValue = Number(value);
+
+		return Number.isFinite(nextValue) ? Math.max(Math.trunc(nextValue), 0) : 0;
+	}
+
+	function enterEditMode() {
+		if (!overview || !canEditSession) {
+			return;
+		}
+
+		const storedDraft = browser ? readSessionEditDraft(sessionId) : null;
+
+		draftStartedAt = storedDraft?.startedAt ?? overview.summary.startedAt ?? '';
+		draftCompletedAt = storedDraft?.completedAt ?? overview.summary.completedAt ?? '';
+		isEditMode = true;
+		openExerciseMenuId = '';
+		void syncEditUrl(true);
+	}
+
+	function openTimeEditor() {
+		if (!overview || !isEditMode || !timerSummary?.startedAt) {
+			return;
+		}
+
+		const durationSeconds = getDurationSeconds(timerSummary.startedAt, timerSummary.completedAt);
+
+		timeEditorStartTime = toTimeInputValue(timerSummary.startedAt);
+		timeEditorDurationHours = `${Math.floor(durationSeconds / 3600)}`;
+		timeEditorDurationMinutes = `${Math.floor((durationSeconds % 3600) / 60)}`;
+		timeEditorDurationSeconds = `${durationSeconds % 60}`;
+		isTimeEditorOpen = true;
+	}
+
+	function closeTimeEditor() {
+		isTimeEditorOpen = false;
+	}
+
+	function applyTimeEditor(event: SubmitEvent) {
+		event.preventDefault();
+
+		if (!overview || !timerSummary?.startedAt || !timeEditorStartTime) {
+			return;
+		}
+
+		const [hours = '0', minutes = '0'] = timeEditorStartTime.split(':');
+		const currentStartedAt = new Date(timerSummary.startedAt);
+
+		if (Number.isNaN(currentStartedAt.getTime())) {
+			return;
+		}
+
+		const nextStartedAt = new Date(
+			currentStartedAt.getFullYear(),
+			currentStartedAt.getMonth(),
+			currentStartedAt.getDate(),
+			Number(hours),
+			Number(minutes),
+			0,
+			0
+		);
+
+		const durationSeconds =
+			getTimeEditorNumber(timeEditorDurationHours) * 3600 +
+			getTimeEditorNumber(timeEditorDurationMinutes) * 60 +
+			getTimeEditorNumber(timeEditorDurationSeconds);
+		const nextCompletedAt = new Date(nextStartedAt.getTime() + durationSeconds * 1000);
+
+		draftStartedAt = nextStartedAt.toISOString();
+		draftCompletedAt = nextCompletedAt.toISOString();
+		isTimeEditorOpen = false;
+	}
+
+	async function discardEditMode() {
+		if (!isEditMode) {
+			return;
+		}
+
+		if (hasUnsavedTimeChanges && !window.confirm(SESSION_EDIT_DISCARD_MESSAGE)) {
+			return;
+		}
+
+		await syncEditUrl(false);
+		clearStoredEditDraft();
+		isEditMode = false;
+		isTimeEditorOpen = false;
+	}
+
+	async function saveEditMode() {
+		if (!overview || !isEditMode) {
+			return;
+		}
+
+		if (!hasUnsavedTimeChanges) {
+			await syncEditUrl(false);
+			clearStoredEditDraft();
+			isEditMode = false;
+			isTimeEditorOpen = false;
+			return;
+		}
+
+		const summaryId = overview.summary.id;
+		const nextStartedAt = draftStartedAt;
+		const nextCompletedAt = draftCompletedAt || undefined;
+
+		void runMutation(async () => {
+			await requireApi().updateWorkoutSessionTiming(summaryId, nextStartedAt, nextCompletedAt);
+			clearStoredEditDraft();
+			await syncEditUrl(false);
+			isEditMode = false;
+			isTimeEditorOpen = false;
+		});
 	}
 
 	function openExercisePicker(mode: PickerMode, nextTargetSessionExerciseId = '') {
@@ -348,7 +568,9 @@
 		void runMutation(async () => {
 			await requireApi().deleteWorkoutSession(summaryId);
 			const todayDayKey = new Date().toLocaleDateString('sv-SE');
-			const homePath = summaryDayKey === todayDayKey ? '/' : `/?date=${encodeURIComponent(summaryDayKey)}`;
+			const homePath =
+				summaryDayKey === todayDayKey ? '/' : `/?date=${encodeURIComponent(summaryDayKey)}`;
+			// eslint-disable-next-line svelte/no-navigation-without-resolve
 			await goto(homePath === '/' ? resolve('/') : `${resolve('/')}${homePath.slice(1)}`, {
 				replaceState: true
 			});
@@ -480,9 +702,10 @@
 			}
 
 			const bounds = row.getBoundingClientRect();
-			const midpointY = scrollArea && scrollAreaBounds
-				? bounds.top - scrollAreaBounds.top + scrollArea.scrollTop + bounds.height / 2
-				: bounds.top + window.scrollY + bounds.height / 2;
+			const midpointY =
+				scrollArea && scrollAreaBounds
+					? bounds.top - scrollAreaBounds.top + scrollArea.scrollTop + bounds.height / 2
+					: bounds.top + window.scrollY + bounds.height / 2;
 
 			return [
 				{
@@ -503,9 +726,10 @@
 		).filter((id) => id !== draggedSessionExerciseId);
 		const scrollArea = document.querySelector<HTMLElement>('[data-app-scroll-area]');
 		const scrollAreaBounds = scrollArea?.getBoundingClientRect() ?? null;
-		const pointerDocumentY = scrollArea && scrollAreaBounds
-			? pointerY - scrollAreaBounds.top + scrollArea.scrollTop
-			: pointerY + window.scrollY;
+		const pointerDocumentY =
+			scrollArea && scrollAreaBounds
+				? pointerY - scrollAreaBounds.top + scrollArea.scrollTop
+				: pointerY + window.scrollY;
 		const targetSessionExerciseId = dragDropTargets.find(
 			(target) => pointerDocumentY < target.midpointY
 		)?.id;
@@ -595,15 +819,15 @@
 
 	function getDragAutoScrollStep(pointerY: number) {
 		const scrollBounds =
-			document.querySelector<HTMLElement>('[data-app-scroll-area]')?.getBoundingClientRect() ?? null;
+			document.querySelector<HTMLElement>('[data-app-scroll-area]')?.getBoundingClientRect() ??
+			null;
 		const topEdge = scrollBounds?.top ?? 0;
 		const bottomEdge = scrollBounds?.bottom ?? window.innerHeight;
 		const topEdgeDistance = pointerY - topEdge;
 
 		if (topEdgeDistance < DRAG_SCROLL_EDGE_PX) {
 			return -Math.ceil(
-				((DRAG_SCROLL_EDGE_PX - topEdgeDistance) / DRAG_SCROLL_EDGE_PX) *
-					DRAG_SCROLL_MAX_STEP_PX
+				((DRAG_SCROLL_EDGE_PX - topEdgeDistance) / DRAG_SCROLL_EDGE_PX) * DRAG_SCROLL_MAX_STEP_PX
 			);
 		}
 
@@ -750,6 +974,18 @@
 	}
 
 	$effect(() => {
+		if (overview && page.url.searchParams.get('edit') === '1' && !isEditMode && canEditSession) {
+			enterEditMode();
+		}
+	});
+
+	$effect(() => {
+		if (overview && isEditMode) {
+			writeStoredEditDraft();
+		}
+	});
+
+	$effect(() => {
 		if (!overview) {
 			clearSessionOverviewActions();
 			return;
@@ -757,9 +993,17 @@
 
 		setSessionOverviewActions({
 			status: overview.summary.status,
-			timerSummary: overview.summary,
+			timerSummary: timerSummary ?? overview.summary,
+			isEditMode,
+			canEditSession,
+			canEditTime: Boolean(isEditMode && overview.summary.startedAt),
+			hasUnsavedChanges: hasUnsavedTimeChanges,
 			isSaving,
 			isSharingSession,
+			onEnterEditMode: enterEditMode,
+			onSaveEditMode: saveEditMode,
+			onDiscardEditMode: discardEditMode,
+			onOpenTimeEditor: openTimeEditor,
 			onShareSession: handleShareSession,
 			onEndSession: handleEndSession,
 			onResetSession: handleResetSession,
@@ -804,7 +1048,10 @@
 			</a>
 		</section>
 	{:else}
-		<SessionOverviewHeader {overview} {nowMs} />
+		<SessionOverviewHeader
+			overview={timerSummary ? { ...overview, summary: timerSummary } : overview}
+			{nowMs}
+		/>
 
 		{#if overview.summary.status !== 'in_progress'}
 			<SessionSummaryPanel {overview} {isSaving} onStartSession={handleStartSession} />
@@ -813,6 +1060,7 @@
 		<SessionExerciseList
 			{sessionId}
 			{overview}
+			{isEditMode}
 			{isEditable}
 			{isSaving}
 			hideHeading={overview.summary.status === 'in_progress'}
@@ -857,5 +1105,128 @@
 			onAddSelected={handleAddSelected}
 			{getPickerExercisePosition}
 		/>
+	{/if}
+
+	{#if isTimeEditorOpen}
+		<div
+			class="fixed inset-0 z-40 flex items-end px-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]"
+			role="presentation"
+		>
+			<button
+				class="absolute inset-0 bg-black/65 backdrop-blur-[2px]"
+				type="button"
+				aria-label="Close time editor"
+				onclick={closeTimeEditor}
+			></button>
+			<form
+				class="relative w-full overflow-hidden rounded-lg border border-white/10 bg-[#0b1013] shadow-[0_24px_80px_rgba(0,0,0,0.58)]"
+				onsubmit={applyTimeEditor}
+			>
+				<div class="flex justify-center pt-2">
+					<div class="h-1 w-10 rounded-full bg-white/20"></div>
+				</div>
+
+				<div class="flex items-start justify-between gap-3 px-4 pt-4">
+					<div class="min-w-0">
+						<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
+							Edit time
+						</p>
+						<h2 class="mt-1 text-2xl leading-tight font-semibold text-white tabular-nums">
+							{timeEditorDurationText}
+						</h2>
+					</div>
+					<button
+						class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-zinc-300"
+						type="button"
+						aria-label="Close time editor"
+						onclick={closeTimeEditor}
+					>
+						<Icon name="x" class="h-4 w-4" />
+					</button>
+				</div>
+
+				<div class="mt-5 border-y border-white/10">
+					<label class="grid grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-3 px-4 py-3">
+						<span class="flex items-center gap-2 text-sm font-medium text-zinc-400">
+							<Icon name="clock-3" class="h-4 w-4 text-zinc-500" />
+							Start
+						</span>
+						<input
+							class="h-11 rounded-lg border border-white/10 bg-white/[0.04] px-3 text-right text-xl font-semibold text-white tabular-nums outline-none focus:border-emerald-300/60"
+							type="time"
+							bind:value={timeEditorStartTime}
+							required
+						/>
+					</label>
+				</div>
+
+				<div class="px-4 pt-4">
+					<p class="mb-2 text-xs font-semibold tracking-[0.16em] text-zinc-500 uppercase">
+						Duration
+					</p>
+					<div class="grid grid-cols-3 gap-2">
+						<label class="grid gap-1.5">
+							<span
+								class="text-center text-[10px] font-semibold tracking-[0.14em] text-zinc-500 uppercase"
+							>
+								Hours
+							</span>
+							<input
+								class="h-13 min-w-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-center text-2xl font-semibold text-white tabular-nums outline-none focus:border-emerald-300/60"
+								type="number"
+								min="0"
+								inputmode="numeric"
+								bind:value={timeEditorDurationHours}
+							/>
+						</label>
+						<label class="grid gap-1.5">
+							<span
+								class="text-center text-[10px] font-semibold tracking-[0.14em] text-zinc-500 uppercase"
+							>
+								Min
+							</span>
+							<input
+								class="h-13 min-w-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-center text-2xl font-semibold text-white tabular-nums outline-none focus:border-emerald-300/60"
+								type="number"
+								min="0"
+								inputmode="numeric"
+								bind:value={timeEditorDurationMinutes}
+							/>
+						</label>
+						<label class="grid gap-1.5">
+							<span
+								class="text-center text-[10px] font-semibold tracking-[0.14em] text-zinc-500 uppercase"
+							>
+								Sec
+							</span>
+							<input
+								class="h-13 min-w-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-center text-2xl font-semibold text-white tabular-nums outline-none focus:border-emerald-300/60"
+								type="number"
+								min="0"
+								inputmode="numeric"
+								bind:value={timeEditorDurationSeconds}
+							/>
+						</label>
+					</div>
+				</div>
+
+				<div class="grid grid-cols-[1fr_1.35fr] gap-2 px-4 pt-5 pb-4">
+					<button
+						class="flex min-h-11 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] px-4 text-sm font-semibold text-zinc-200"
+						type="button"
+						onclick={closeTimeEditor}
+					>
+						Cancel
+					</button>
+					<button
+						class="flex min-h-11 items-center justify-center gap-2 rounded-lg bg-emerald-300 px-4 text-sm font-bold text-zinc-950"
+						type="submit"
+					>
+						<Icon name="check" class="h-4 w-4" />
+						Apply
+					</button>
+				</div>
+			</form>
+		</div>
 	{/if}
 </section>

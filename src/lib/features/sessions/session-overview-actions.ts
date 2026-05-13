@@ -6,11 +6,62 @@ export type SessionOverviewTimerSummary = Pick<
 	'id' | 'status' | 'startedAt' | 'completedAt' | 'workoutNameSnapshot' | 'dayKey'
 >;
 
+export const SESSION_EDIT_DRAFT_PREFIX = 'tinytrain:session-edit-draft:';
+export const SESSION_EDIT_DISCARD_MESSAGE =
+	'Discard your edit mode changes? Unsaved time changes will be lost.';
+
+export type SessionEditDraft = {
+	startedAt: string;
+	completedAt: string;
+};
+
+export function getSessionEditDraftKey(sessionId: string) {
+	return `${SESSION_EDIT_DRAFT_PREFIX}${sessionId}`;
+}
+
+export function readSessionEditDraft(sessionId: string): SessionEditDraft | null {
+	try {
+		const rawDraft = globalThis.localStorage?.getItem(getSessionEditDraftKey(sessionId)) ?? null;
+		const parsedDraft = rawDraft ? (JSON.parse(rawDraft) as Partial<SessionEditDraft>) : null;
+
+		if (
+			parsedDraft &&
+			typeof parsedDraft.startedAt === 'string' &&
+			typeof parsedDraft.completedAt === 'string'
+		) {
+			return {
+				startedAt: parsedDraft.startedAt,
+				completedAt: parsedDraft.completedAt
+			};
+		}
+	} catch {
+		clearSessionEditDraft(sessionId);
+	}
+
+	return null;
+}
+
+export function writeSessionEditDraft(sessionId: string, draft: SessionEditDraft) {
+	globalThis.localStorage?.setItem(getSessionEditDraftKey(sessionId), JSON.stringify(draft));
+}
+
+export function clearSessionEditDraft(sessionId: string) {
+	globalThis.localStorage?.removeItem(getSessionEditDraftKey(sessionId));
+}
+
 export type SessionOverviewActions = {
 	status: SessionStatus;
 	timerSummary: SessionOverviewTimerSummary;
+	isEditMode: boolean;
+	canEditSession: boolean;
+	canEditTime: boolean;
+	hasUnsavedChanges: boolean;
 	isSaving: boolean;
 	isSharingSession: boolean;
+	onEnterEditMode: () => void;
+	onSaveEditMode: () => void | Promise<void>;
+	onDiscardEditMode: () => void | Promise<void>;
+	onOpenTimeEditor: () => void;
 	onShareSession: () => void | Promise<void>;
 	onEndSession: () => void;
 	onResetSession: () => void;
