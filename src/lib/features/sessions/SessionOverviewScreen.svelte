@@ -3,7 +3,7 @@
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, untrack } from 'svelte';
 	import type {
 		Exercise,
 		ExerciseUsagePreference,
@@ -11,6 +11,10 @@
 		SessionOverview
 	} from '$lib/db';
 	import ExercisePickerSheet from '$lib/features/workouts/ExercisePickerSheet.svelte';
+	import {
+		readExercisePickerCache,
+		writeExercisePickerCache
+	} from '$lib/features/workouts/exercise-picker-cache';
 	import Icon from '$lib/ui/Icon.svelte';
 	import SessionDragPreview from './SessionDragPreview.svelte';
 	import SessionExerciseList from './SessionExerciseList.svelte';
@@ -27,6 +31,7 @@
 	import { formatDayHeading, formatDuration } from './session-format';
 	import { hasLoggedValues } from './session-overview';
 	import { shareOrDownloadSessionImage } from './session-share-image';
+	import { readSessionDataCache, writeSessionDataCache } from './session-data-cache';
 
 	type DatabaseApi = typeof import('$lib/db');
 	type PickerMode = 'add' | 'swap';
@@ -52,12 +57,20 @@
 	const DRAG_SCROLL_MAX_STEP_PX = 18;
 
 	let { sessionId }: { sessionId: string } = $props();
+	const cachedSessionData = untrack(() => readSessionDataCache(sessionId));
+	const cachedExercisePickerData = untrack(() => readExercisePickerCache());
 
 	let api = $state<DatabaseApi | null>(null);
-	let overview = $state<SessionOverview | null>(null);
-	let exercises = $state<Exercise[]>([]);
-	let exerciseUsagePreferences = $state<ExerciseUsagePreference[]>([]);
-	let isLoading = $state(true);
+	let overview = $state<SessionOverview | null>(cachedSessionData?.overview ?? null);
+	let exercises = $state<Exercise[]>(
+		cachedSessionData?.exercises ?? cachedExercisePickerData?.exercises ?? []
+	);
+	let exerciseUsagePreferences = $state<ExerciseUsagePreference[]>(
+		cachedSessionData?.exerciseUsagePreferences ??
+			cachedExercisePickerData?.exerciseUsagePreferences ??
+			[]
+	);
+	let isLoading = $state(!cachedSessionData);
 	let isSaving = $state(false);
 	let isSharingSession = $state(false);
 	let errorMessage = $state('');
@@ -245,15 +258,23 @@
 	async function loadData() {
 		const dbApi = requireApi();
 		await dbApi.cleanupStaleSessions();
-		const [nextOverview, nextExercises, nextExerciseUsagePreferences] = await Promise.all([
-			dbApi.getEditableSession(sessionId),
+		const nextOverviewPromise = dbApi.getEditableSession(sessionId);
+		const nextPickerDataPromise = Promise.all([
 			dbApi.listExercises(),
 			dbApi.listExerciseUsagePreferences()
 		]);
+		const nextOverview = await nextOverviewPromise;
+		const [nextExercises, nextExerciseUsagePreferences] = await nextPickerDataPromise;
 
 		overview = nextOverview;
 		exercises = nextExercises;
 		exerciseUsagePreferences = nextExerciseUsagePreferences;
+		writeExercisePickerCache(nextExercises, nextExerciseUsagePreferences);
+		writeSessionDataCache(sessionId, {
+			overview: nextOverview,
+			exercises: nextExercises,
+			exerciseUsagePreferences: nextExerciseUsagePreferences
+		});
 		nowMs = Date.now();
 		openExerciseMenuId = '';
 	}
@@ -728,7 +749,7 @@
 			overview.exercises.map((sessionExercise) => [sessionExercise.id, sessionExercise])
 		);
 
-		overview = {
+		const nextOverview = {
 			...overview,
 			exercises: nextIds
 				.map((id) => sessionExerciseById.get(id))
@@ -736,6 +757,12 @@
 					Boolean(sessionExercise)
 				)
 		};
+		overview = nextOverview;
+		writeSessionDataCache(sessionId, {
+			overview: nextOverview,
+			exercises,
+			exerciseUsagePreferences
+		});
 	}
 
 	function cacheDragDropTargets(excludedSessionExerciseId: string) {

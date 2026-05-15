@@ -3,6 +3,7 @@
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import ExercisePickerSheet from './ExercisePickerSheet.svelte';
+	import { readExercisePickerCache, writeExercisePickerCache } from './exercise-picker-cache';
 	import WorkoutDetailView from './WorkoutDetailView.svelte';
 	import WorkoutListView from './WorkoutListView.svelte';
 	import type {
@@ -28,10 +29,13 @@
 	const DRAG_SCROLL_MAX_STEP_PX = 18;
 
 	let { routeWorkoutId = '' }: { routeWorkoutId?: string } = $props();
+	const cachedExercisePickerData = readExercisePickerCache();
 
 	let dbApi = $state<DatabaseApi | null>(null);
-	let exercises = $state<Exercise[]>([]);
-	let exerciseUsagePreferences = $state<ExerciseUsagePreference[]>([]);
+	let exercises = $state<Exercise[]>(cachedExercisePickerData?.exercises ?? []);
+	let exerciseUsagePreferences = $state<ExerciseUsagePreference[]>(
+		cachedExercisePickerData?.exerciseUsagePreferences ?? []
+	);
 	let workouts = $state<Workout[]>([]);
 	let workoutExercises = $state<WorkoutExerciseWithExercise[]>([]);
 	let selectedWorkoutId = $state('');
@@ -198,14 +202,17 @@
 
 	async function loadPageData(preferredWorkoutId = selectedWorkoutId) {
 		const api = requireDbApi();
-		const [nextExercises, nextExerciseUsagePreferences, nextWorkouts] = await Promise.all([
+		const nextWorkoutsPromise = api.listWorkouts();
+		const nextPickerDataPromise = Promise.all([
 			api.listExercises(),
-			api.listExerciseUsagePreferences(),
-			api.listWorkouts()
+			api.listExerciseUsagePreferences()
 		]);
+		const nextWorkouts = await nextWorkoutsPromise;
+		const [nextExercises, nextExerciseUsagePreferences] = await nextPickerDataPromise;
 
 		exercises = nextExercises;
 		exerciseUsagePreferences = nextExerciseUsagePreferences;
+		writeExercisePickerCache(nextExercises, nextExerciseUsagePreferences);
 		workouts = nextWorkouts;
 
 		if (preferredWorkoutId) {

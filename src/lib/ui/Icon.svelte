@@ -10,6 +10,7 @@
 		| 'chevron-right'
 		| 'clock-3'
 		| 'database'
+		| 'download'
 		| 'dumbbell'
 		| 'grip-vertical'
 		| 'history'
@@ -76,6 +77,10 @@
 		<ellipse cx="12" cy="5" rx="8" ry="3" />
 		<path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
 		<path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
+	{:else if name === 'download'}
+		<path d="M12 3v12" />
+		<path d="m7 10 5 5 5-5" />
+		<path d="M5 21h14" />
 	{:else if name === 'dumbbell'}
 		<path d="M14.4 14.4 9.6 9.6" />
 		<path d="M18.7 5.3a2 2 0 1 1 2.8 2.8l-1.4 1.4-2.8-2.8z" />

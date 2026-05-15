@@ -328,6 +328,7 @@ let rxRuntimePromise: Promise<{
 	adapter: typeof import('./rxdb-dexie-adapter');
 	rxdb: typeof import('./rxdb');
 }> | null = null;
+let lastStaleSessionCleanupKey: string | null = null;
 
 function toSupabaseCloudUser() {
 	const snapshot = getSupabaseAuthSnapshot();
@@ -467,6 +468,7 @@ async function selectBackend() {
 	const user = await getSupabaseUser();
 
 	if (!user) {
+		lastStaleSessionCleanupKey = null;
 		activeBackend = 'supabase-rxdb';
 		activeSupabaseUserId = null;
 		rxDataDb = null;
@@ -571,7 +573,7 @@ export async function logoutFromCloud() {
 	await logoutFromSupabase();
 }
 
-export async function syncNow() {
+export async function syncNow(options: SyncNowOptions = {}) {
 	await ensureDbOpen();
 
 	if (!activeSupabaseUserId) {
@@ -582,7 +584,9 @@ export async function syncNow() {
 
 	try {
 		const userId = activeSupabaseUserId;
-		const summary = await reconcileSupabaseDatabase(userId, 'richest');
+		const summary = await reconcileSupabaseDatabase(userId, 'richest', {
+			onProgress: options.onProgress
+		});
 		const { rxdb } = await getRxRuntime();
 
 		void rxdb.awaitSupabaseInSync(userId, { timeoutMs: 15000 }).catch((error) => {
@@ -602,6 +606,15 @@ export async function syncNow() {
 }
 
 export type DatabaseUploadMode = 'local-preferred' | 'richest';
+
+export type SyncProgress = {
+	completedTables: number;
+	totalTables: number;
+};
+
+type SyncNowOptions = {
+	onProgress?: (progress: SyncProgress) => void;
+};
 
 export type DatabaseTableUploadSummary = {
 	table: string;
@@ -654,6 +667,9 @@ type ReconcileTableOptions<T extends SyncableRow> = {
 	localTable: DataTable<T>;
 	normalize?: (row: T) => T;
 	filterLocal?: (row: T) => boolean;
+};
+type ReconcileDatabaseOptions = {
+	onProgress?: (progress: SyncProgress) => void;
 };
 
 type ReconcileWinner = 'local' | 'remote';
@@ -976,36 +992,54 @@ async function reconcileTable<T extends SyncableRow>(
 	};
 }
 
-async function reconcileSupabaseDatabase(userId: string, mode: DatabaseUploadMode) {
+async function reconcileSupabaseDatabase(
+	userId: string,
+	mode: DatabaseUploadMode,
+	options: ReconcileDatabaseOptions = {}
+) {
+	const totalTables = 7;
+	let completedTables = 0;
+
+	options.onProgress?.({ completedTables, totalTables });
+
+	async function reconcileNextTable<T extends SyncableRow>(
+		tableOptions: ReconcileTableOptions<T>
+	): Promise<DatabaseTableUploadSummary> {
+		const summary = await reconcileTable<T>(userId, mode, tableOptions);
+		completedTables += 1;
+		options.onProgress?.({ completedTables, totalTables });
+		return summary;
+	}
+
 	const tables = [
-		await reconcileTable<Exercise>(userId, mode, {
+		await reconcileNextTable<Exercise>({
 			tableName: 'exercises',
 			localTable: db.exercises,
 			normalize: withExerciseDefaults,
 			filterLocal: shouldSyncExercise
 		}),
-		await reconcileTable<Workout>(userId, mode, {
+		await reconcileNextTable<Workout>({
 			tableName: 'workouts',
 			localTable: db.workouts
 		}),
-		await reconcileTable<WorkoutExercise>(userId, mode, {
+		await reconcileNextTable<WorkoutExercise>({
 			tableName: 'workout_exercises',
 			localTable: db.workoutExercises
 		}),
-		await reconcileTable<WorkoutSession>(userId, mode, {
+		await reconcileNextTable<WorkoutSession>({
 			tableName: 'workout_sessions',
 			localTable: db.workoutSessions
 		}),
-		await reconcileTable<SessionExercise>(userId, mode, {
+		await reconcileNextTable<SessionExercise>({
 			tableName: 'session_exercises',
 			localTable: db.sessionExercises
 		}),
-		await reconcileTable<SessionSet>(userId, mode, {
+		await reconcileNextTable<SessionSet>({
 			tableName: 'session_sets',
 			localTable: db.sessionSets,
 			normalize: normalizeRemoteSessionSet
 		}),
-		await reconcileTable<ExerciseResetEvent>(userId, mode, {
+		await reconcileNextTable<ExerciseResetEvent>({
 			tableName: 'exercise_reset_events',
 			localTable: db.exerciseResetEvents
 		})
@@ -2746,7 +2780,15 @@ async function updateSessionSetInputs(
 export async function cleanupStaleSessions(todayDayKey = toDayKey(new Date())) {
 	await ensureDbOpen();
 
-	if (!activeUser.value?.isLoggedIn) {
+	const userId = activeUser.value?.userId;
+
+	if (!activeUser.value?.isLoggedIn || !userId) {
+		return;
+	}
+
+	const cleanupKey = `${userId}:${todayDayKey}`;
+
+	if (lastStaleSessionCleanupKey === cleanupKey) {
 		return;
 	}
 
@@ -2758,6 +2800,7 @@ export async function cleanupStaleSessions(todayDayKey = toDayKey(new Date())) {
 	const staleRunningSessions = runningSessions.filter((session) => session.dayKey < todayDayKey);
 
 	if (stalePlannedSessions.length === 0 && staleRunningSessions.length === 0) {
+		lastStaleSessionCleanupKey = cleanupKey;
 		return;
 	}
 
@@ -2776,6 +2819,8 @@ export async function cleanupStaleSessions(todayDayKey = toDayKey(new Date())) {
 			});
 		}
 	});
+
+	lastStaleSessionCleanupKey = cleanupKey;
 }
 
 export async function getCurrentInProgressSession() {

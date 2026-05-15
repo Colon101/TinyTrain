@@ -2,7 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import type {
 		Exercise,
@@ -13,9 +13,14 @@
 		SessionSetOverview
 	} from '$lib/db';
 	import ExercisePickerSheet from '$lib/features/workouts/ExercisePickerSheet.svelte';
+	import {
+		readExercisePickerCache,
+		writeExercisePickerCache
+	} from '$lib/features/workouts/exercise-picker-cache';
 	import SessionExerciseFooter from './SessionExerciseFooter.svelte';
 	import SessionExerciseHeader from './SessionExerciseHeader.svelte';
 	import SessionSetEditor from './SessionSetEditor.svelte';
+	import { readSessionDataCache, writeSessionDataCache } from './session-data-cache';
 	// import { formatSessionStatus, formatSessionTime } from './session-format';
 
 	type DatabaseApi = typeof import('$lib/db');
@@ -28,12 +33,20 @@
 		sessionId: string;
 		sessionExerciseId: string;
 	} = $props();
+	const cachedSessionData = untrack(() => readSessionDataCache(sessionId));
+	const cachedExercisePickerData = untrack(() => readExercisePickerCache());
 
 	let api = $state<DatabaseApi | null>(null);
-	let overview = $state<SessionOverview | null>(null);
-	let exercises = $state<Exercise[]>([]);
-	let exerciseUsagePreferences = $state<ExerciseUsagePreference[]>([]);
-	let isLoading = $state(true);
+	let overview = $state<SessionOverview | null>(cachedSessionData?.overview ?? null);
+	let exercises = $state<Exercise[]>(
+		cachedSessionData?.exercises ?? cachedExercisePickerData?.exercises ?? []
+	);
+	let exerciseUsagePreferences = $state<ExerciseUsagePreference[]>(
+		cachedSessionData?.exerciseUsagePreferences ??
+			cachedExercisePickerData?.exerciseUsagePreferences ??
+			[]
+	);
+	let isLoading = $state(!cachedSessionData);
 	let isSaving = $state(false);
 	let errorMessage = $state('');
 	let isMenuOpen = $state(false);
@@ -152,15 +165,23 @@
 	async function loadData() {
 		const dbApi = requireApi();
 		await dbApi.cleanupStaleSessions();
-		const [nextOverview, nextExercises, nextExerciseUsagePreferences] = await Promise.all([
-			dbApi.getEditableSession(sessionId),
+		const nextOverviewPromise = dbApi.getEditableSession(sessionId);
+		const nextPickerDataPromise = Promise.all([
 			dbApi.listExercises(),
 			dbApi.listExerciseUsagePreferences()
 		]);
+		const nextOverview = await nextOverviewPromise;
+		const [nextExercises, nextExerciseUsagePreferences] = await nextPickerDataPromise;
 
 		overview = nextOverview;
 		exercises = nextExercises;
 		exerciseUsagePreferences = nextExerciseUsagePreferences;
+		writeExercisePickerCache(nextExercises, nextExerciseUsagePreferences);
+		writeSessionDataCache(sessionId, {
+			overview: nextOverview,
+			exercises: nextExercises,
+			exerciseUsagePreferences: nextExerciseUsagePreferences
+		});
 		isMenuOpen = false;
 	}
 
@@ -275,7 +296,7 @@
 			return;
 		}
 
-		overview = {
+		const nextOverview = {
 			...overview,
 			exercises: overview.exercises.map((sessionExercise) => {
 				const sessionSets = sessionExercise.sets as SessionSetOverview[];
@@ -288,6 +309,12 @@
 				};
 			})
 		};
+		overview = nextOverview;
+		writeSessionDataCache(sessionId, {
+			overview: nextOverview,
+			exercises,
+			exerciseUsagePreferences
+		});
 	}
 
 	function applyLocalInput(sessionSetId: string, field: SessionInputField, rawValue: string) {

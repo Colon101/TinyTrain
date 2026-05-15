@@ -1,15 +1,28 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { DatabaseUploadSummary, LocalDatabaseStats } from '$lib/db';
+	import type {
+		TrackedImportPhase,
+		TrackedImportSummary,
+		TrackedLimbPriority
+	} from '$lib/tracked-import';
 	import Icon from '$lib/ui/Icon.svelte';
 
 	type DatabaseApi = typeof import('$lib/db');
+	type TrackedImportApi = typeof import('$lib/tracked-import');
 
 	let api = $state<DatabaseApi | null>(null);
+	let trackedImportApi = $state<TrackedImportApi | null>(null);
 	let stats = $state<LocalDatabaseStats | null>(null);
 	let summary = $state<DatabaseUploadSummary | null>(null);
+	let trackedSummary = $state<TrackedImportSummary | null>(null);
+	let trackedFile = $state<File | null>(null);
+	let trackedLimbPriorities = $state<Record<string, TrackedLimbPriority>>({});
 	let isLoading = $state(true);
 	let isUploading = $state(false);
+	let isPreviewingTracked = $state(false);
+	let isImportingTracked = $state(false);
+	let trackedImportPhase = $state<TrackedImportPhase>('reading');
 	let errorMessage = $state('');
 	let statusMessage = $state('');
 
@@ -18,13 +31,17 @@
 
 		void (async () => {
 			try {
-				const dbApi = await import('$lib/db');
+				const [dbApi, importApi] = await Promise.all([
+					import('$lib/db'),
+					import('$lib/tracked-import')
+				]);
 
 				if (disposed) {
 					return;
 				}
 
 				api = dbApi;
+				trackedImportApi = importApi;
 				await dbApi.ensureDbOpen();
 
 				if (!disposed) {
@@ -75,6 +92,75 @@
 		}
 	}
 
+	async function onTrackedFileChange(event: Event) {
+		if (!trackedImportApi || isPreviewingTracked || isImportingTracked) {
+			return;
+		}
+
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0] ?? null;
+
+		trackedFile = file;
+		trackedSummary = null;
+		errorMessage = '';
+		statusMessage = '';
+
+		if (!file) {
+			return;
+		}
+
+		isPreviewingTracked = true;
+		statusMessage = 'Reading Tracked export.';
+
+		try {
+			trackedSummary = await trackedImportApi.previewTrackedArchive(file);
+			trackedLimbPriorities = Object.fromEntries(
+				trackedSummary.exerciseLimbPriorities.map((exercise) => [
+					exercise.normalizedName,
+					exercise.limbPriority
+				])
+			);
+			statusMessage = 'Tracked export is ready to import.';
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Tracked export could not be read.';
+			statusMessage = '';
+			trackedFile = null;
+			input.value = '';
+		} finally {
+			isPreviewingTracked = false;
+		}
+	}
+
+	async function importTrackedFile() {
+		if (!trackedImportApi || !trackedFile || isImportingTracked) {
+			return;
+		}
+
+		isImportingTracked = true;
+		trackedImportPhase = 'reading';
+		errorMessage = '';
+		statusMessage = 'Importing Tracked workouts.';
+
+		try {
+			trackedSummary = await trackedImportApi.importTrackedArchive(trackedFile, {
+				limbPriorities: trackedLimbPriorities,
+				onProgress: (phase) => {
+					trackedImportPhase = phase;
+				}
+			});
+			stats = api ? await api.getLocalDatabaseStats() : stats;
+			statusMessage =
+				trackedSummary.syncStatus === 'synced'
+					? 'Tracked import finished and synced.'
+					: 'Tracked import finished locally. Sync failed.';
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Tracked import failed.';
+			statusMessage = '';
+		} finally {
+			isImportingTracked = false;
+		}
+	}
+
 	function formatNumber(value: number) {
 		return new Intl.NumberFormat().format(value);
 	}
@@ -90,11 +176,69 @@
 			year: 'numeric'
 		}).format(new Date(value));
 	}
+
+	function formatFileList(files: string[]) {
+		return files.length > 0 ? files.join(', ') : 'None';
+	}
+
+	function formatTrackedImportPhase(phase: TrackedImportPhase) {
+		switch (phase) {
+			case 'reading':
+				return 'Reading Tracked zip';
+			case 'planning':
+				return 'Checking CSVs and matching exercises';
+			case 'writing':
+				return 'Writing workouts locally';
+			case 'syncing':
+				return 'Syncing imported data to cloud';
+		}
+	}
+
+	function setTrackedExerciseLimbPriority(
+		normalizedName: string,
+		limbPriority: TrackedLimbPriority
+	) {
+		trackedLimbPriorities = {
+			...trackedLimbPriorities,
+			[normalizedName]: limbPriority
+		};
+	}
 </script>
 
 <svelte:head>
 	<title>Settings | TinyTrain</title>
 </svelte:head>
+
+{#if isImportingTracked}
+	<div
+		class="fixed inset-0 z-50 grid place-items-center bg-zinc-950/85 px-5 backdrop-blur-md"
+		role="dialog"
+		aria-modal="true"
+		aria-labelledby="tracked-import-title"
+	>
+		<div
+			class="grid w-full max-w-sm gap-5 rounded-2xl border border-sky-200/20 bg-zinc-950 p-6 text-center shadow-2xl shadow-sky-950/30"
+		>
+			<div
+				class="mx-auto grid h-16 w-16 place-items-center rounded-full border border-sky-200/25 bg-sky-300/10 text-sky-100"
+			>
+				<Icon name="loader-circle" class="h-8 w-8 animate-spin" />
+			</div>
+			<div class="grid gap-2">
+				<p id="tracked-import-title" class="text-xl font-semibold text-white">
+					{formatTrackedImportPhase(trackedImportPhase)}
+				</p>
+				<p class="text-sm leading-6 text-zinc-300">
+					Keep this page open. Large Tracked exports can take a few minutes because TinyTrain is
+					merging the local database and then pushing the new rows to Supabase.
+				</p>
+			</div>
+			<div class="h-1.5 overflow-hidden rounded-full bg-white/10">
+				<div class="h-full w-1/2 animate-pulse rounded-full bg-sky-300"></div>
+			</div>
+		</div>
+	</div>
+{/if}
 
 <section class="flex flex-1 flex-col gap-5 px-1 pb-6">
 	<div class="flex items-start gap-4 pt-3">
@@ -170,6 +314,180 @@
 					</div>
 				</dl>
 			</div>
+		</section>
+
+		<section class="grid gap-3 rounded-lg border border-white/10 bg-white/[0.04] p-4">
+			<div class="flex items-start gap-3">
+				<div
+					class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-sky-300/25 bg-sky-300/10 text-sky-100"
+				>
+					<Icon name="download" class="h-5 w-5" />
+				</div>
+				<div class="min-w-0">
+					<p class="text-xs font-semibold tracking-[0.18em] text-zinc-500 uppercase">
+						Import from Tracked
+					</p>
+					<p class="mt-1 text-sm leading-5 text-zinc-300">
+						Upload the Tracked zip export. TinyTrain imports workout history, merges matching
+						exercises, ignores unsupported data, and syncs after import.
+					</p>
+				</div>
+			</div>
+
+			<label class="grid gap-2 text-sm font-semibold text-white">
+				Tracked zip file
+				<input
+					class="rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-sm font-medium text-zinc-200 file:mr-3 file:rounded-md file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-sm file:font-bold file:text-white"
+					type="file"
+					accept=".zip,application/zip"
+					disabled={!trackedImportApi || isPreviewingTracked || isImportingTracked}
+					onchange={onTrackedFileChange}
+				/>
+			</label>
+
+			{#if isPreviewingTracked}
+				<p class="text-sm font-medium text-sky-100">Reading zip and validating CSVs.</p>
+			{/if}
+
+			{#if trackedSummary}
+				<div class="grid gap-3 rounded-lg border border-white/10 bg-black/20 p-3">
+					<dl class="grid grid-cols-2 gap-3 text-sm">
+						<div>
+							<dt class="text-zinc-500">Sessions</dt>
+							<dd class="font-semibold text-white">
+								{formatNumber(trackedSummary.sessionsImportable)} / {formatNumber(
+									trackedSummary.sessionsFound
+								)}
+							</dd>
+						</div>
+						<div>
+							<dt class="text-zinc-500">Strength rows</dt>
+							<dd class="font-semibold text-white">
+								{formatNumber(trackedSummary.strengthSetRowsImportable)} / {formatNumber(
+									trackedSummary.strengthSetRowsFound
+								)}
+							</dd>
+						</div>
+						<div>
+							<dt class="text-zinc-500">Exercises merge</dt>
+							<dd class="font-semibold text-white">
+								{formatNumber(trackedSummary.exercisesMatched)} matched,
+								{formatNumber(trackedSummary.exercisesCreated)} new
+							</dd>
+						</div>
+						<div>
+							<dt class="text-zinc-500">Workouts</dt>
+							<dd class="font-semibold text-white">
+								{formatNumber(trackedSummary.workoutsMatched)} matched,
+								{formatNumber(trackedSummary.workoutsCreated)} new
+							</dd>
+						</div>
+					</dl>
+
+					<p class="text-xs leading-5 text-zinc-400">
+						Required CSVs: {formatFileList(trackedSummary.requiredFilesPresent)}. Optional CSVs: {formatFileList(
+							trackedSummary.optionalFilesPresent
+						)}.
+					</p>
+					<p class="text-xs leading-5 text-zinc-400">
+						Ignored files: {formatFileList(trackedSummary.ignoredFiles)}.
+					</p>
+					<p class="text-xs leading-5 text-zinc-400">
+						Unsupported data not imported: {trackedSummary.unsupportedCategories.join(', ')}.
+					</p>
+
+					{#if trackedSummary.exerciseLimbPriorities.length > 0}
+						<div class="grid gap-2 rounded-lg border border-sky-300/15 bg-sky-300/[0.06] p-3">
+							<div>
+								<p class="text-sm font-semibold text-white">Side mapping for Tracked limb data</p>
+								<p class="mt-1 text-xs leading-5 text-zinc-400">
+									Tracked does not export which side primary means. Default assumes primary is
+									right. Flip only the exercises where primary should import as left.
+								</p>
+							</div>
+
+							<div class="grid max-h-72 gap-2 overflow-y-auto pr-1">
+								{#each trackedSummary.exerciseLimbPriorities as exercise (exercise.normalizedName)}
+									<div class="grid gap-2 rounded-lg border border-white/10 bg-black/20 p-3">
+										<div class="flex items-start justify-between gap-3">
+											<p class="text-sm font-semibold text-white">{exercise.name}</p>
+											<p class="shrink-0 text-xs text-zinc-500">
+												{formatNumber(exercise.setsWithSecondaryValues)} sided sets
+											</p>
+										</div>
+										<div class="grid grid-cols-2 gap-2 text-xs font-semibold">
+											<button
+												class={`rounded-md px-3 py-2 transition ${
+													(trackedLimbPriorities[exercise.normalizedName] ?? 'primary-right') ===
+													'primary-right'
+														? 'bg-sky-300 text-zinc-950'
+														: 'bg-white/10 text-zinc-300'
+												}`}
+												type="button"
+												disabled={isImportingTracked}
+												onclick={() =>
+													setTrackedExerciseLimbPriority(exercise.normalizedName, 'primary-right')}
+											>
+												Primary = right
+											</button>
+											<button
+												class={`rounded-md px-3 py-2 transition ${
+													trackedLimbPriorities[exercise.normalizedName] === 'primary-left'
+														? 'bg-sky-300 text-zinc-950'
+														: 'bg-white/10 text-zinc-300'
+												}`}
+												type="button"
+												disabled={isImportingTracked}
+												onclick={() =>
+													setTrackedExerciseLimbPriority(exercise.normalizedName, 'primary-left')}
+											>
+												Primary = left
+											</button>
+										</div>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+
+					{#if trackedSummary.warnings.length > 0}
+						<ul class="grid gap-1 text-xs leading-5 text-amber-100">
+							{#each trackedSummary.warnings as warning (warning)}
+								<li>{warning}</li>
+							{/each}
+						</ul>
+					{/if}
+
+					{#if trackedSummary.sessionsImported > 0 || trackedSummary.sessionsSkipped > 0}
+						<p class="text-xs leading-5 text-emerald-100">
+							Imported {formatNumber(trackedSummary.sessionsImported)} sessions and
+							{formatNumber(trackedSummary.sessionSetsImported)} set rows. Skipped
+							{formatNumber(trackedSummary.sessionsSkipped)} existing sessions.
+						</p>
+					{/if}
+
+					{#if trackedSummary.syncStatus === 'failed'}
+						<p class="text-xs leading-5 text-red-100">
+							Sync failed: {trackedSummary.syncError}
+						</p>
+					{/if}
+				</div>
+			{/if}
+
+			<button
+				class="flex min-h-[3.25rem] items-center justify-center gap-3 rounded-lg bg-sky-300 px-4 text-base font-bold text-zinc-950 transition disabled:bg-zinc-700 disabled:text-zinc-400"
+				type="button"
+				disabled={!trackedImportApi || !trackedFile || isPreviewingTracked || isImportingTracked}
+				onclick={importTrackedFile}
+			>
+				{#if isImportingTracked}
+					<Icon name="loader-circle" class="h-5 w-5 animate-spin" />
+					Importing
+				{:else}
+					<Icon name="download" class="h-5 w-5" />
+					Import Tracked zip
+				{/if}
+			</button>
 		</section>
 
 		<section class="mt-auto grid gap-3 border-t border-white/10 pt-5">

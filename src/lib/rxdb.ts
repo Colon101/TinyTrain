@@ -73,6 +73,7 @@ const optionalFieldsByCollection: Record<CollectionKey, string[]> = {
 	sessionSets: ['weightInput', 'repsInput', 'rirInput', 'weight', 'reps', 'rir'],
 	exerciseResetEvents: []
 };
+const replicationBatchSize = 500;
 
 const stringProperty = { type: 'string', maxLength: 500 } as const;
 const timestampProperty = { type: 'string', format: 'date-time', maxLength: 80 } as const;
@@ -449,7 +450,7 @@ export async function startSupabaseReplication(userId: string) {
 				live: true,
 				waitForLeadership: false,
 				pull: {
-					batchSize: 100,
+					batchSize: replicationBatchSize,
 					queryBuilder: ({ query }) => query.eq('user_id', userId),
 					modifier: (doc) =>
 						normalizePulledDoc(collectionName, doc as Record<string, unknown>) as SyncedRow & {
@@ -457,7 +458,7 @@ export async function startSupabaseReplication(userId: string) {
 						}
 				},
 				push: {
-					batchSize: 100
+					batchSize: replicationBatchSize
 				}
 			})
 	);
