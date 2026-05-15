@@ -9,7 +9,9 @@ const supabaseUrl =
 	import.meta.env.VITE_SUPABASE_URL ||
 	'https://rcognfamskwirstxmdrh.supabase.co';
 const supabaseAnonKey =
-	env.PUBLIC_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_xuOkk0llHzFGPxyrki0adQ_61SG53d6';
+	env.PUBLIC_SUPABASE_ANON_KEY ||
+	import.meta.env.VITE_SUPABASE_ANON_KEY ||
+	'sb_publishable_xuOkk0llHzFGPxyrki0adQ_61SG53d6';
 const postLoginReloadKey = 'tinytrain:supabase-post-login-reload';
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
@@ -19,6 +21,41 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 		detectSessionInUrl: true
 	}
 });
+
+type PostgrestFilterPatchTarget = {
+	__tinytrainReservedColumnPatch?: boolean;
+	eq(column: string, value: unknown): unknown;
+	is(column: string, value: boolean | null): unknown;
+};
+
+const reservedPostgrestFilterColumns = new Set(['order']);
+
+function quoteReservedPostgrestFilterColumn(column: string) {
+	return reservedPostgrestFilterColumns.has(column) ? `"${column}"` : column;
+}
+
+function patchReservedPostgrestFilterColumns() {
+	const filterBuilderPrototype = Object.getPrototypeOf(
+		supabase.from('__tinytrain_filter_patch_probe__').select()
+	) as PostgrestFilterPatchTarget;
+
+	if (filterBuilderPrototype.__tinytrainReservedColumnPatch) {
+		return;
+	}
+
+	const originalEq = filterBuilderPrototype.eq;
+	const originalIs = filterBuilderPrototype.is;
+
+	filterBuilderPrototype.eq = function eq(column: string, value: unknown) {
+		return originalEq.call(this, quoteReservedPostgrestFilterColumn(column), value);
+	};
+	filterBuilderPrototype.is = function is(column: string, value: boolean | null) {
+		return originalIs.call(this, quoteReservedPostgrestFilterColumn(column), value);
+	};
+	filterBuilderPrototype.__tinytrainReservedColumnPatch = true;
+}
+
+patchReservedPostgrestFilterColumns();
 
 export type SupabaseAuthSnapshot = {
 	session: Session | null;
@@ -71,9 +108,9 @@ export function getSupabaseAuthSnapshot() {
 	return authSnapshot;
 }
 
-export function subscribeToSupabaseAuth(
-	subscriber: (snapshot: SupabaseAuthSnapshot) => void
-): { unsubscribe(): void } {
+export function subscribeToSupabaseAuth(subscriber: (snapshot: SupabaseAuthSnapshot) => void): {
+	unsubscribe(): void;
+} {
 	authSubscribers.add(subscriber);
 	subscriber(authSnapshot);
 	void initializeSupabaseAuth();
