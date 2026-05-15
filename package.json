@@ -44,10 +44,5 @@
 		"@vercel/speed-insights": "^2.0.0",
 		"dexie": "^4.4.2",
 		"rxdb": "^17.1.0"
-	},
-	"pnpm": {
-		"overrides": {
-			"rxdb>dexie": "4.4.2"
-		}
 	}
 }

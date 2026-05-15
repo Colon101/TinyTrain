@@ -5,7 +5,12 @@
 	import ExercisePickerSheet from './ExercisePickerSheet.svelte';
 	import WorkoutDetailView from './WorkoutDetailView.svelte';
 	import WorkoutListView from './WorkoutListView.svelte';
-	import type { Exercise, Workout, WorkoutExerciseWithExercise } from '$lib/db';
+	import type {
+		Exercise,
+		ExerciseUsagePreference,
+		Workout,
+		WorkoutExerciseWithExercise
+	} from '$lib/db';
 
 	type DatabaseApi = typeof import('$lib/db');
 	type PageMode = 'workouts' | 'detail';
@@ -26,6 +31,7 @@
 
 	let dbApi = $state<DatabaseApi | null>(null);
 	let exercises = $state<Exercise[]>([]);
+	let exerciseUsagePreferences = $state<ExerciseUsagePreference[]>([]);
 	let workouts = $state<Workout[]>([]);
 	let workoutExercises = $state<WorkoutExerciseWithExercise[]>([]);
 	let selectedWorkoutId = $state('');
@@ -56,10 +62,21 @@
 	let selectedPickerExerciseIdSet = $derived(new Set(selectedPickerExerciseIds));
 	let cleanExerciseSearch = $derived(exerciseSearch.trim().replace(/\s+/g, ' '));
 	let normalizedExerciseSearch = $derived(cleanExerciseSearch.toLocaleLowerCase());
+	let exerciseUsageByNormalizedName = $derived(
+		new Map(exerciseUsagePreferences.map((preference) => [preference.normalizedName, preference]))
+	);
+	let exerciseUsageById = $derived(
+		new Map(
+			exerciseUsagePreferences.flatMap((preference) =>
+				preference.exerciseIds.map((exerciseId) => [exerciseId, preference] as const)
+			)
+		)
+	);
 	let filteredExercises = $derived(
-		cleanExerciseSearch
+		(cleanExerciseSearch
 			? exercises.filter((exercise) => exercise.normalizedName.includes(normalizedExerciseSearch))
 			: exercises
+		).toSorted(compareExercisePickerPreference)
 	);
 	let visiblePickerExercises = $derived(filteredExercises.slice(0, cleanExerciseSearch ? 80 : 60));
 	let hiddenPickerExerciseCount = $derived(
@@ -148,14 +165,47 @@
 		return dbApi;
 	}
 
+	function getExerciseUsagePreference(exercise: Exercise) {
+		return (
+			exerciseUsageById.get(exercise.id) ??
+			exerciseUsageByNormalizedName.get(exercise.normalizedName) ??
+			null
+		);
+	}
+
+	function isPreviouslyUsedExercise(exercise: Exercise) {
+		return Boolean(getExerciseUsagePreference(exercise));
+	}
+
+	function compareExercisePickerPreference(first: Exercise, second: Exercise) {
+		const firstUsage = getExerciseUsagePreference(first);
+		const secondUsage = getExerciseUsagePreference(second);
+
+		if (Boolean(firstUsage) !== Boolean(secondUsage)) {
+			return firstUsage ? -1 : 1;
+		}
+
+		if (firstUsage && secondUsage) {
+			return (
+				secondUsage.lastPerformedAt.localeCompare(firstUsage.lastPerformedAt) ||
+				secondUsage.sessionCount - firstUsage.sessionCount ||
+				first.name.localeCompare(second.name)
+			);
+		}
+
+		return first.name.localeCompare(second.name);
+	}
+
 	async function loadPageData(preferredWorkoutId = selectedWorkoutId) {
 		const api = requireDbApi();
-		const [nextExercises, nextWorkouts] = await Promise.all([
+		const [nextExercises, nextExerciseUsagePreferences, nextWorkouts] = await Promise.all([
 			api.listExercises(),
+			api.listExerciseUsagePreferences(),
 			api.listWorkouts()
 		]);
 
 		exercises = nextExercises;
+		exerciseUsagePreferences = nextExerciseUsagePreferences;
 		workouts = nextWorkouts;
 
 		if (preferredWorkoutId) {
@@ -388,15 +438,15 @@
 
 	function getDragAutoScrollStep(pointerY: number) {
 		const scrollBounds =
-			document.querySelector<HTMLElement>('[data-app-scroll-area]')?.getBoundingClientRect() ?? null;
+			document.querySelector<HTMLElement>('[data-app-scroll-area]')?.getBoundingClientRect() ??
+			null;
 		const topEdge = scrollBounds?.top ?? 0;
 		const bottomEdge = scrollBounds?.bottom ?? window.innerHeight;
 		const topEdgeDistance = pointerY - topEdge;
 
 		if (topEdgeDistance < DRAG_SCROLL_EDGE_PX) {
 			return -Math.ceil(
-				((DRAG_SCROLL_EDGE_PX - topEdgeDistance) / DRAG_SCROLL_EDGE_PX) *
-					DRAG_SCROLL_MAX_STEP_PX
+				((DRAG_SCROLL_EDGE_PX - topEdgeDistance) / DRAG_SCROLL_EDGE_PX) * DRAG_SCROLL_MAX_STEP_PX
 			);
 		}
 
@@ -616,6 +666,7 @@
 				onToggleUnilateral={(nextValue) => (isNewExerciseUnilateral = nextValue)}
 				onCreateExercise={handleCreateExercise}
 				onAddSelected={addSelectedExercises}
+				{isPreviouslyUsedExercise}
 				{getPickerExercisePosition}
 			/>
 		{/if}

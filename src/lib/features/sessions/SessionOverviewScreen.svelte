@@ -4,7 +4,12 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onDestroy, onMount } from 'svelte';
-	import type { Exercise, SessionExerciseOverview, SessionOverview } from '$lib/db';
+	import type {
+		Exercise,
+		ExerciseUsagePreference,
+		SessionExerciseOverview,
+		SessionOverview
+	} from '$lib/db';
 	import ExercisePickerSheet from '$lib/features/workouts/ExercisePickerSheet.svelte';
 	import Icon from '$lib/ui/Icon.svelte';
 	import SessionDragPreview from './SessionDragPreview.svelte';
@@ -51,6 +56,7 @@
 	let api = $state<DatabaseApi | null>(null);
 	let overview = $state<SessionOverview | null>(null);
 	let exercises = $state<Exercise[]>([]);
+	let exerciseUsagePreferences = $state<ExerciseUsagePreference[]>([]);
 	let isLoading = $state(true);
 	let isSaving = $state(false);
 	let isSharingSession = $state(false);
@@ -128,10 +134,21 @@
 	let selectedPickerExerciseIdSet = $derived(new Set(selectedPickerExerciseIds));
 	let cleanExerciseSearch = $derived(exerciseSearch.trim().replace(/\s+/g, ' '));
 	let normalizedExerciseSearch = $derived(cleanExerciseSearch.toLocaleLowerCase());
+	let exerciseUsageByNormalizedName = $derived(
+		new Map(exerciseUsagePreferences.map((preference) => [preference.normalizedName, preference]))
+	);
+	let exerciseUsageById = $derived(
+		new Map(
+			exerciseUsagePreferences.flatMap((preference) =>
+				preference.exerciseIds.map((exerciseId) => [exerciseId, preference] as const)
+			)
+		)
+	);
 	let filteredExercises = $derived(
-		cleanExerciseSearch
+		(cleanExerciseSearch
 			? exercises.filter((exercise) => exercise.normalizedName.includes(normalizedExerciseSearch))
 			: exercises
+		).toSorted(compareExercisePickerPreference)
 	);
 	let visiblePickerExercises = $derived(filteredExercises.slice(0, cleanExerciseSearch ? 80 : 60));
 	let hiddenPickerExerciseCount = $derived(
@@ -228,13 +245,15 @@
 	async function loadData() {
 		const dbApi = requireApi();
 		await dbApi.cleanupStaleSessions();
-		const [nextOverview, nextExercises] = await Promise.all([
+		const [nextOverview, nextExercises, nextExerciseUsagePreferences] = await Promise.all([
 			dbApi.getEditableSession(sessionId),
-			dbApi.listExercises()
+			dbApi.listExercises(),
+			dbApi.listExerciseUsagePreferences()
 		]);
 
 		overview = nextOverview;
 		exercises = nextExercises;
+		exerciseUsagePreferences = nextExerciseUsagePreferences;
 		nowMs = Date.now();
 		openExerciseMenuId = '';
 	}
@@ -458,6 +477,37 @@
 
 	function handleCustomExerciseNameInput(value: string) {
 		newExerciseName = value;
+	}
+
+	function getExerciseUsagePreference(exercise: Exercise) {
+		return (
+			exerciseUsageById.get(exercise.id) ??
+			exerciseUsageByNormalizedName.get(exercise.normalizedName) ??
+			null
+		);
+	}
+
+	function isPreviouslyUsedExercise(exercise: Exercise) {
+		return Boolean(getExerciseUsagePreference(exercise));
+	}
+
+	function compareExercisePickerPreference(first: Exercise, second: Exercise) {
+		const firstUsage = getExerciseUsagePreference(first);
+		const secondUsage = getExerciseUsagePreference(second);
+
+		if (Boolean(firstUsage) !== Boolean(secondUsage)) {
+			return firstUsage ? -1 : 1;
+		}
+
+		if (firstUsage && secondUsage) {
+			return (
+				secondUsage.lastPerformedAt.localeCompare(firstUsage.lastPerformedAt) ||
+				secondUsage.sessionCount - firstUsage.sessionCount ||
+				first.name.localeCompare(second.name)
+			);
+		}
+
+		return first.name.localeCompare(second.name);
 	}
 
 	function togglePickerExercise(exerciseId: string) {
@@ -1103,6 +1153,7 @@
 			onToggleUnilateral={(nextValue) => (isNewExerciseUnilateral = nextValue)}
 			onCreateExercise={handleCreateExercise}
 			onAddSelected={handleAddSelected}
+			{isPreviouslyUsedExercise}
 			{getPickerExercisePosition}
 		/>
 	{/if}

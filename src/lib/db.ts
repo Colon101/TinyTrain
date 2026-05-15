@@ -121,6 +121,13 @@ export type ExerciseListItem = {
 	latestResetAt?: string;
 };
 
+export type ExerciseUsagePreference = {
+	normalizedName: string;
+	exerciseIds: string[];
+	lastPerformedAt: string;
+	sessionCount: number;
+};
+
 export type ExerciseHistoryEntry = {
 	sessionId: string;
 	workoutId: string;
@@ -1973,6 +1980,73 @@ export async function listExercises() {
 	return exercises
 		.filter((exercise) => !exercise.archived)
 		.sort((first, second) => first.name.localeCompare(second.name));
+}
+
+export async function listExerciseUsagePreferences(): Promise<ExerciseUsagePreference[]> {
+	const sessionExercises = await db.sessionExercises.toArray();
+
+	if (sessionExercises.length === 0) {
+		return [];
+	}
+
+	const sessionIds = [
+		...new Set(sessionExercises.map((sessionExercise) => sessionExercise.sessionId))
+	];
+	const sessions = await db.workoutSessions.bulkGet(sessionIds);
+	const sessionById = new Map(sessions.filter(isDefined).map((session) => [session.id, session]));
+	const usageByNormalizedName = new Map<
+		string,
+		{
+			exerciseIds: Set<string>;
+			lastPerformedAt: string;
+			sessionIds: Set<string>;
+		}
+	>();
+
+	for (const sessionExercise of sessionExercises) {
+		const session = sessionById.get(sessionExercise.sessionId);
+
+		if (!session || session.status === 'planned') {
+			continue;
+		}
+
+		const normalizedName = normalizeName(sessionExercise.exerciseNameSnapshot);
+
+		if (!normalizedName) {
+			continue;
+		}
+
+		const performedAt =
+			session.completedAt ?? session.startedAt ?? sessionExercise.performedAt ?? session.createdAt;
+		const currentUsage = usageByNormalizedName.get(normalizedName) ?? {
+			exerciseIds: new Set<string>(),
+			lastPerformedAt: performedAt,
+			sessionIds: new Set<string>()
+		};
+
+		currentUsage.exerciseIds.add(sessionExercise.exerciseId);
+		currentUsage.sessionIds.add(sessionExercise.sessionId);
+
+		if (currentUsage.lastPerformedAt < performedAt) {
+			currentUsage.lastPerformedAt = performedAt;
+		}
+
+		usageByNormalizedName.set(normalizedName, currentUsage);
+	}
+
+	return [...usageByNormalizedName.entries()]
+		.map(([normalizedName, usage]) => ({
+			normalizedName,
+			exerciseIds: [...usage.exerciseIds],
+			lastPerformedAt: usage.lastPerformedAt,
+			sessionCount: usage.sessionIds.size
+		}))
+		.sort(
+			(first, second) =>
+				second.lastPerformedAt.localeCompare(first.lastPerformedAt) ||
+				second.sessionCount - first.sessionCount ||
+				first.normalizedName.localeCompare(second.normalizedName)
+		);
 }
 
 export async function listCustomExercises() {

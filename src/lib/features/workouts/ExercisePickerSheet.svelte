@@ -23,6 +23,7 @@
 		onToggleUnilateral,
 		onCreateExercise,
 		onAddSelected,
+		isPreviouslyUsedExercise,
 		getPickerExercisePosition
 	}: {
 		exerciseSearch: string;
@@ -45,6 +46,7 @@
 		onToggleUnilateral: (nextValue: boolean) => void;
 		onCreateExercise: (event: SubmitEvent) => void;
 		onAddSelected: () => void;
+		isPreviouslyUsedExercise: (exercise: Exercise) => boolean;
 		getPickerExercisePosition: (exerciseId: string) => number | null;
 	} = $props();
 </script>
@@ -104,6 +106,9 @@
 								{exercise.source === 'custom' ? 'Custom' : 'Built-in'} · {exercise.unilateral
 									? 'Unilateral'
 									: 'Bilateral'}
+								{#if isPreviouslyUsedExercise(exercise)}
+									<span class="text-emerald-200"> · Previously used</span>
+								{/if}
 							</p>
 						</div>
 

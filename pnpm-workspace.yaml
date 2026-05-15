@@ -1,2 +1,5 @@
+overrides:
+  dexie: 4.4.2
+
 onlyBuiltDependencies:
   - esbuild
