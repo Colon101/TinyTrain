@@ -281,16 +281,11 @@ self.addEventListener('fetch', (event) => {
 			return fetchFresh(event.request);
 		}
 
-		// Check the deploy UUID once before trusting the cache. If the check fails,
-		// assume we're offline and let the cache carry the app.
-		const canUseCache = await hasVerifiedCurrentDeployment(cache);
+		const cached = await getCachedResponse(cache, event.request, url);
 
-		if (canUseCache) {
-			const cached = await getCachedResponse(cache, event.request, url);
-
-			if (cached) {
-				return cached;
-			}
+		if (cached) {
+			event.waitUntil(hasVerifiedCurrentDeployment(cache).catch(() => true));
+			return cached;
 		}
 
 		try {

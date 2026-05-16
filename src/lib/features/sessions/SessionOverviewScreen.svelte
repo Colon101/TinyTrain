@@ -191,6 +191,7 @@
 
 	onMount(() => {
 		let disposed = false;
+		let databaseSubscription: { unsubscribe(): void } | null = null;
 
 		function handlePointerDown(event: PointerEvent) {
 			const target = event.target as Element | null;
@@ -211,7 +212,15 @@
 				}
 
 				api = dbApi;
+				databaseSubscription = dbApi.subscribeToDatabaseChanges(
+					['workoutSessions', 'sessionExercises', 'sessionSets', 'exercises'],
+					() => {
+						void loadData();
+					},
+					{ debounceMs: 250 }
+				);
 				await loadData();
+				void dbApi.hydrateVisibleScope({ type: 'session', sessionId }).catch(() => undefined);
 			} catch (error) {
 				errorMessage = getErrorMessage(error);
 			} finally {
@@ -221,6 +230,7 @@
 
 		return () => {
 			disposed = true;
+			databaseSubscription?.unsubscribe();
 			window.removeEventListener('pointerdown', handlePointerDown, { capture: true });
 			stopDragAutoScroll();
 			stopDragPreviewMove();
@@ -257,26 +267,37 @@
 
 	async function loadData() {
 		const dbApi = requireApi();
-		await dbApi.cleanupStaleSessions();
-		const nextOverviewPromise = dbApi.getEditableSession(sessionId);
-		const nextPickerDataPromise = Promise.all([
+		void dbApi.cleanupStaleSessions();
+		const nextOverview = await dbApi.getEditableSession(sessionId);
+
+		overview = nextOverview;
+		writeSessionDataCache(sessionId, {
+			overview: nextOverview,
+			exercises,
+			exerciseUsagePreferences
+		});
+		nowMs = Date.now();
+		openExerciseMenuId = '';
+		void loadExercisePickerData().catch((error) => {
+			errorMessage = getErrorMessage(error);
+		});
+	}
+
+	async function loadExercisePickerData() {
+		const dbApi = requireApi();
+		const [nextExercises, nextExerciseUsagePreferences] = await Promise.all([
 			dbApi.listExercises(),
 			dbApi.listExerciseUsagePreferences()
 		]);
-		const nextOverview = await nextOverviewPromise;
-		const [nextExercises, nextExerciseUsagePreferences] = await nextPickerDataPromise;
 
-		overview = nextOverview;
 		exercises = nextExercises;
 		exerciseUsagePreferences = nextExerciseUsagePreferences;
 		writeExercisePickerCache(nextExercises, nextExerciseUsagePreferences);
 		writeSessionDataCache(sessionId, {
-			overview: nextOverview,
+			overview,
 			exercises: nextExercises,
 			exerciseUsagePreferences: nextExerciseUsagePreferences
 		});
-		nowMs = Date.now();
-		openExerciseMenuId = '';
 	}
 
 	async function runMutation(action: () => Promise<void>) {

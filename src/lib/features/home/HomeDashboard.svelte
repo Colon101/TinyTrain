@@ -4,7 +4,7 @@
 	import { page } from '$app/state';
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
-	import { SvelteDate, SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import { SvelteMap } from 'svelte/reactivity';
 	import type { DayOverview, SessionSummary, Workout } from '$lib/db';
 	import { toDayKey } from '$lib/db';
 	import InstallPrompt from '$lib/InstallPrompt.svelte';
@@ -12,6 +12,7 @@
 	import type { CloudUser } from '$lib/features/app/user';
 	import Icon from '$lib/ui/Icon.svelte';
 	import {
+		addDays,
 		addMonths,
 		addWeeks,
 		fromDayKey,
@@ -42,6 +43,7 @@
 	let isWorkoutPickerOpen = $state(false);
 	let weekSlideDirection = $state<-1 | 0 | 1>(0);
 	let sessionsByMonthKey = $state<SessionCache>({});
+	let sessionsByWeekKey = $state<SessionCache>({});
 	let dayOverview = $state<DayOverview | null>(null);
 	let currentSession = $state<SessionSummary | null>(null);
 	let workouts = $state<Workout[]>([]);
@@ -53,7 +55,10 @@
 		const nextMap = new SvelteMap<string, SessionSummary>();
 		const getSortValue = (session: SessionSummary) => session.startedAt ?? session.createdAt;
 
-		for (const monthSessions of Object.values(sessionsByMonthKey)) {
+		for (const monthSessions of [
+			...Object.values(sessionsByMonthKey),
+			...Object.values(sessionsByWeekKey)
+		]) {
 			for (const session of monthSessions) {
 				const existing = nextMap.get(session.dayKey);
 
@@ -77,6 +82,7 @@
 	onMount(() => {
 		let disposed = false;
 		let currentUserSubscription: SubscriptionLike | null = null;
+		let databaseSubscription: SubscriptionLike | null = null;
 
 		void (async () => {
 			try {
@@ -88,11 +94,30 @@
 
 				api = dbApi;
 				await dbApi.ensureDbOpen();
-				await dbApi.cleanupStaleSessions(todayDayKey);
 				currentUserSubscription = dbApi.db.cloud.currentUser.subscribe((nextUser) => {
 					currentUser = nextUser;
 				});
+				databaseSubscription = dbApi.subscribeToDatabaseChanges(
+					['workoutSessions', 'sessionExercises', 'sessionSets', 'workouts'],
+					() => {
+						sessionsByMonthKey = {};
+						sessionsByWeekKey = {};
+						void refreshSelectedDay();
+					},
+					{ debounceMs: 250 }
+				);
 				await refreshSelectedDay();
+				isLoading = false;
+				void dbApi
+					.cleanupStaleSessions(todayDayKey)
+					.then(() => refreshSelectedDay())
+					.catch((error) => {
+						errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
+					});
+				void hydrateVisibleWeek();
+				setTimeout(() => {
+					void dbApi.hydrateVisibleScope({ type: 'workouts' }).catch(() => undefined);
+				}, 1200);
 			} catch (error) {
 				errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
 			} finally {
@@ -103,6 +128,7 @@
 		return () => {
 			disposed = true;
 			currentUserSubscription?.unsubscribe();
+			databaseSubscription?.unsubscribe();
 		};
 	});
 
@@ -134,22 +160,7 @@
 	}
 
 	async function ensureWeekLoaded(weekDate: Date) {
-		const monthKeys = new SvelteSet<string>();
-		const monthDates: Date[] = [];
-
-		for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
-			const dayDate = new SvelteDate(weekDate);
-			dayDate.setDate(weekDate.getDate() + dayIndex);
-			const monthDate = startOfMonth(dayDate);
-			const monthKey = getMonthCacheKey(monthDate);
-
-			if (!monthKeys.has(monthKey)) {
-				monthKeys.add(monthKey);
-				monthDates.push(monthDate);
-			}
-		}
-
-		await Promise.all(monthDates.map((monthDate) => ensureMonthLoaded(monthDate)));
+		await reloadWeek(weekDate);
 	}
 
 	async function refreshSelectedDay() {
@@ -157,11 +168,48 @@
 			return;
 		}
 
-		await api.cleanupStaleSessions(todayDayKey);
 		await ensureWeekLoaded(visibleWeekDate);
-		dayOverview = await api.getDayOverview(selectedDayKey);
-		currentSession = await api.getCurrentInProgressSession();
-		workouts = await api.listWorkouts();
+		const [nextDayOverview, nextCurrentSession, nextWorkouts] = await Promise.all([
+			api.getDayOverview(selectedDayKey),
+			api.getCurrentInProgressSession(),
+			api.listWorkouts()
+		]);
+		dayOverview = nextDayOverview;
+		currentSession = nextCurrentSession;
+		workouts = nextWorkouts;
+	}
+
+	function getWeekCacheKey(weekDate: Date) {
+		return toDayKey(startOfWeek(weekDate));
+	}
+
+	async function reloadWeek(weekDate: Date) {
+		if (!api) {
+			return;
+		}
+
+		const weekStart = startOfWeek(weekDate);
+		const weekKey = getWeekCacheKey(weekStart);
+		const sessions = await api.listSessionCalendarRowsForWeek(weekStart);
+		sessionsByWeekKey = {
+			...sessionsByWeekKey,
+			[weekKey]: sessions
+		};
+	}
+
+	async function hydrateVisibleWeek() {
+		if (!api) {
+			return;
+		}
+
+		const weekStart = startOfWeek(visibleWeekDate);
+		const weekEnd = addDays(weekStart, 6);
+		await api.hydrateVisibleScope({
+			type: 'week',
+			weekStartDayKey: toDayKey(weekStart),
+			weekEndDayKey: toDayKey(weekEnd)
+		});
+		await reloadWeek(weekStart);
 	}
 
 	async function runMutation(action: () => Promise<void>) {
@@ -171,6 +219,7 @@
 		try {
 			await action();
 			sessionsByMonthKey = {};
+			sessionsByWeekKey = {};
 			await refreshSelectedDay();
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
@@ -232,6 +281,7 @@
 
 		try {
 			await refreshSelectedDay();
+			void hydrateVisibleWeek().catch(() => undefined);
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
 		}

@@ -247,6 +247,21 @@ type SyncStateLike = {
 	progress?: number;
 	error?: Error;
 };
+type DatabaseTableKey =
+	| 'exercises'
+	| 'workouts'
+	| 'workoutExercises'
+	| 'workoutSessions'
+	| 'sessionExercises'
+	| 'sessionSets'
+	| 'exerciseResetEvents';
+type DatabaseChangeSubscriber = (tables: DatabaseTableKey[]) => void;
+type DatabaseChangeSubscribeOptions = {
+	debounceMs?: number;
+};
+type WindowWithIdleCallback = Window & {
+	requestIdleCallback?: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+};
 
 class ValueObservable<T> {
 	private subscribers = new Set<(value: T) => void>();
@@ -317,6 +332,8 @@ const activeSyncState = new ValueObservable<SyncStateLike>({
 	status: 'not-started'
 });
 const supabaseHydratedPrefix = 'tinytrain:supabase-rxdb-hydrated:';
+const progressiveBackfillPrefix = 'tinytrain:supabase-rxdb-backfilled:';
+const recentBackfillDays = 90;
 
 let activeBackend: StorageBackend = 'supabase-rxdb';
 let rxDataDb: RxDexieLikeDatabase | null = null;
@@ -324,11 +341,20 @@ let activeSupabaseUserId: string | null = null;
 let dbOpenPromise: Promise<typeof db> | null = null;
 let authBridgeStarted = false;
 let supabaseBackendActivationPromise: Promise<void> | null = null;
+let rxChangeSubscription: SubscriptionLike | null = null;
 let rxRuntimePromise: Promise<{
 	adapter: typeof import('./rxdb-dexie-adapter');
 	rxdb: typeof import('./rxdb');
 }> | null = null;
 let lastStaleSessionCleanupKey: string | null = null;
+let backgroundSyncUserId: string | null = null;
+const databaseChangeSubscribers = new Set<{
+	tables: Set<DatabaseTableKey>;
+	callback: DatabaseChangeSubscriber;
+	debounceMs: number;
+	pendingTables: Set<DatabaseTableKey>;
+	timeoutId: ReturnType<typeof setTimeout> | null;
+}>();
 
 function toSupabaseCloudUser() {
 	const snapshot = getSupabaseAuthSnapshot();
@@ -370,6 +396,64 @@ function markSupabaseCacheHydrated(userId: string) {
 
 export function getActiveStorageBackend(): StorageBackend {
 	return activeBackend;
+}
+
+function getProgressiveBackfillKey(userId: string) {
+	return `${progressiveBackfillPrefix}${userId}`;
+}
+
+function markRecentBackfillComplete(userId: string) {
+	if (!browser) {
+		return;
+	}
+
+	localStorage.setItem(getProgressiveBackfillKey(userId), 'true');
+}
+
+function emitDatabaseChange(tableName: DatabaseTableKey) {
+	for (const subscriber of databaseChangeSubscribers) {
+		if (!subscriber.tables.has(tableName)) {
+			continue;
+		}
+
+		subscriber.pendingTables.add(tableName);
+
+		if (subscriber.timeoutId) {
+			continue;
+		}
+
+		subscriber.timeoutId = setTimeout(() => {
+			subscriber.timeoutId = null;
+			const changedTables = [...subscriber.pendingTables];
+			subscriber.pendingTables.clear();
+			subscriber.callback(changedTables);
+		}, subscriber.debounceMs);
+	}
+}
+
+export function subscribeToDatabaseChanges(
+	tables: DatabaseTableKey[],
+	callback: DatabaseChangeSubscriber,
+	options: DatabaseChangeSubscribeOptions = {}
+): SubscriptionLike {
+	const subscriber = {
+		tables: new Set(tables),
+		callback,
+		debounceMs: options.debounceMs ?? 150,
+		pendingTables: new Set<DatabaseTableKey>(),
+		timeoutId: null as ReturnType<typeof setTimeout> | null
+	};
+
+	databaseChangeSubscribers.add(subscriber);
+
+	return {
+		unsubscribe() {
+			if (subscriber.timeoutId) {
+				clearTimeout(subscriber.timeoutId);
+			}
+			databaseChangeSubscribers.delete(subscriber);
+		}
+	};
 }
 
 function startAuthBridge() {
@@ -418,9 +502,13 @@ async function openSupabaseRuntime(userId: string) {
 	activeSupabaseUserId = userId;
 	activeSyncState.set({ phase: 'pulling', status: 'syncing' });
 	rxDataDb = await adapter.getRxDexieLikeDatabase(userId);
+	rxChangeSubscription ??= adapter.subscribeToRxDexieChanges((tableName) => {
+		emitDatabaseChange(tableName as DatabaseTableKey);
+	});
+	activeUser.set(toSupabaseCloudUser());
+	startProgressiveSync(userId);
 
 	if (hasHydratedSupabaseCache(userId)) {
-		activeUser.set(toSupabaseCloudUser());
 		void rxdb
 			.awaitSupabaseInSync(userId, { timeoutMs: 15000 })
 			.then(() => {
@@ -440,26 +528,6 @@ async function openSupabaseRuntime(userId: string) {
 				}
 			});
 		return;
-	}
-
-	activeUser.set(toSupabaseCloudUser());
-
-	try {
-		await withTimeout(
-			rxdb.awaitSupabaseInitialReplication(userId),
-			15000,
-			'Cloud sync is still loading. Open settings to upload this device or try again.'
-		);
-		await rxdb.awaitSupabaseInSync(userId, { timeoutMs: 15000 });
-		markSupabaseCacheHydrated(userId);
-		activeSyncState.set({ phase: 'in-sync', status: 'synced' });
-	} catch (error) {
-		console.warn('Initial Supabase sync did not finish in time.', error);
-		activeSyncState.set({
-			phase: 'error',
-			status: 'error',
-			error: error instanceof Error ? error : new Error('Supabase sync timed out.')
-		});
 	}
 }
 
@@ -696,6 +764,10 @@ function stripSupabaseSyncFields<T extends { id: string }>(row: SupabaseSyncedRo
 	return doc as T;
 }
 
+function areRowsEqual(first: unknown, second: unknown) {
+	return JSON.stringify(first) === JSON.stringify(second);
+}
+
 function toRemoteOptionalNumber(value: unknown) {
 	if (typeof value === 'number' && Number.isFinite(value)) {
 		return value;
@@ -715,22 +787,6 @@ function normalizeRemoteSessionSet(row: SessionSet): SessionSet {
 		weight: toRemoteOptionalNumber(row.weight),
 		reps: toRemoteOptionalNumber(row.reps),
 		rir: toRemoteOptionalNumber(row.rir)
-	});
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
-	let timeoutId: ReturnType<typeof setTimeout> | null = null;
-
-	const timeoutPromise = new Promise<never>((_resolve, reject) => {
-		timeoutId = setTimeout(() => {
-			reject(new Error(message));
-		}, timeoutMs);
-	});
-
-	return Promise.race([promise, timeoutPromise]).finally(() => {
-		if (timeoutId) {
-			clearTimeout(timeoutId);
-		}
 	});
 }
 
@@ -1086,6 +1142,10 @@ async function putMergedRemoteRow<T extends SyncableRow>(
 		return;
 	}
 
+	if (currentRow && areRowsEqual(currentRow, choice.row)) {
+		return;
+	}
+
 	await table.put(choice.row);
 }
 
@@ -1098,6 +1158,175 @@ async function putMergedRemoteRows<T extends SyncableRow>(
 	for (const row of rows) {
 		await putMergedRemoteRow(tableName, table, row, normalize);
 	}
+}
+
+type SyncedTableConfig<T extends SyncableRow = SyncableRow> = {
+	tableName: SupabaseTableName;
+	localTable: () => DataTable<T>;
+	normalize?: (row: T) => T;
+};
+
+function getSyncedTableConfigs(): SyncedTableConfig[] {
+	return [
+		{
+			tableName: 'exercises',
+			localTable: () => db.exercises as unknown as DataTable<SyncableRow>,
+			normalize: withExerciseDefaults as (row: SyncableRow) => SyncableRow
+		},
+		{ tableName: 'workouts', localTable: () => db.workouts as unknown as DataTable<SyncableRow> },
+		{
+			tableName: 'workout_exercises',
+			localTable: () => db.workoutExercises as unknown as DataTable<SyncableRow>
+		},
+		{
+			tableName: 'workout_sessions',
+			localTable: () => db.workoutSessions as unknown as DataTable<SyncableRow>
+		},
+		{
+			tableName: 'session_exercises',
+			localTable: () => db.sessionExercises as unknown as DataTable<SyncableRow>
+		},
+		{
+			tableName: 'session_sets',
+			localTable: () => db.sessionSets as unknown as DataTable<SyncableRow>,
+			normalize: normalizeRemoteSessionSet as (row: SyncableRow) => SyncableRow
+		},
+		{
+			tableName: 'exercise_reset_events',
+			localTable: () => db.exerciseResetEvents as unknown as DataTable<SyncableRow>
+		}
+	];
+}
+
+async function fetchSupabaseRows<T extends SyncableRow>(
+	tableName: SupabaseTableName,
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	buildQuery: (query: any) => PromiseLike<{ data: unknown; error: unknown }>,
+	normalize: (row: T) => T = (row) => row
+) {
+	const { data, error } = await buildQuery(
+		supabase.from(tableName).select('*').eq('user_id', activeSupabaseUserId).eq('_deleted', false)
+	);
+
+	if (error) {
+		throw error;
+	}
+
+	return ((data ?? []) as SupabaseSyncedRow[]).map((row) =>
+		normalize(stripSupabaseSyncFields<T>(row))
+	);
+}
+
+async function fetchRecentSupabaseRows<T extends SyncableRow>(
+	tableName: SupabaseTableName,
+	sinceIso: string,
+	normalize: (row: T) => T = (row) => row
+) {
+	const pageSize = 1000;
+	const rows: T[] = [];
+	let from = 0;
+
+	while (true) {
+		const pageRows = await fetchSupabaseRows<T>(
+			tableName,
+			(query) =>
+				query
+					.gte('_modified', sinceIso)
+					.order('_modified', { ascending: false })
+					.range(from, from + pageSize - 1),
+			normalize
+		);
+
+		rows.push(...pageRows);
+
+		if (pageRows.length < pageSize) {
+			return rows;
+		}
+
+		from += pageSize;
+	}
+}
+
+async function backfillRecentRows(userId: string, days = recentBackfillDays) {
+	if (activeBackend !== 'supabase-rxdb' || activeSupabaseUserId !== userId) {
+		return;
+	}
+
+	const sinceDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+	for (const tableConfig of getSyncedTableConfigs()) {
+		const rows = await fetchRecentSupabaseRows(
+			tableConfig.tableName,
+			sinceDate,
+			tableConfig.normalize
+		);
+		await putMergedRemoteRows(
+			tableConfig.tableName,
+			tableConfig.localTable(),
+			rows,
+			tableConfig.normalize
+		);
+	}
+
+	markRecentBackfillComplete(userId);
+	markSupabaseCacheHydrated(userId);
+}
+
+function startProgressiveSync(userId: string) {
+	if (backgroundSyncUserId === userId) {
+		return;
+	}
+
+	backgroundSyncUserId = userId;
+
+	void (async () => {
+		try {
+			const { rxdb } = await getRxRuntime();
+			await waitForBackgroundSyncSlot();
+
+			activeSyncState.set({ phase: 'pulling', status: 'syncing', progress: 0.25 });
+
+			try {
+				await backfillRecentRows(userId);
+			} catch (error) {
+				console.warn('Recent Supabase backfill failed.', error);
+			}
+
+			activeSyncState.set({ phase: 'pulling', status: 'syncing', progress: 0.75 });
+			await rxdb.awaitSupabaseInitialReplication(userId);
+			await rxdb.awaitSupabaseInSync(userId, { timeoutMs: 15000 });
+
+			markSupabaseCacheHydrated(userId);
+			activeSyncState.set({ phase: 'in-sync', status: 'synced' });
+		} catch (error) {
+			console.warn('Background Supabase sync failed.', error);
+
+			if (activeSupabaseUserId === userId) {
+				activeSyncState.set({
+					phase: 'error',
+					status: 'error',
+					error: error instanceof Error ? error : new Error('Supabase sync failed.')
+				});
+			}
+		}
+	})();
+}
+
+function waitForBackgroundSyncSlot() {
+	if (!browser) {
+		return Promise.resolve();
+	}
+
+	return new Promise<void>((resolve) => {
+		const idleWindow = window as WindowWithIdleCallback;
+
+		if (idleWindow.requestIdleCallback) {
+			idleWindow.requestIdleCallback(() => resolve(), { timeout: 3000 });
+			return;
+		}
+
+		setTimeout(resolve, 1500);
+	});
 }
 
 export async function uploadLocalDatabaseToCloud() {
@@ -1242,6 +1471,84 @@ async function hydrateSessionFromSupabase(sessionId: string) {
 	} catch (error) {
 		console.warn('Direct session hydration from Supabase failed.', error);
 	}
+}
+
+export type HydrateVisibleScopeInput =
+	| { type: 'session'; sessionId: string }
+	| { type: 'week'; weekStartDayKey: string; weekEndDayKey: string }
+	| { type: 'day'; dayKey: string }
+	| { type: 'workouts' };
+
+export async function hydrateVisibleScope(scope: HydrateVisibleScopeInput) {
+	await ensureDbOpen();
+
+	if (activeBackend !== 'supabase-rxdb' || !activeSupabaseUserId) {
+		return;
+	}
+
+	if (scope.type === 'session') {
+		await hydrateSessionFromSupabase(scope.sessionId);
+		return;
+	}
+
+	if (scope.type === 'week') {
+		const sessions = await fetchSupabaseRows<WorkoutSession>('workout_sessions', (query) =>
+			query
+				.gte('dayKey', scope.weekStartDayKey)
+				.lte('dayKey', scope.weekEndDayKey)
+				.order('_modified', { ascending: false })
+		);
+		await putMergedRemoteRows('workout_sessions', db.workoutSessions, sessions);
+		return;
+	}
+
+	if (scope.type === 'day') {
+		const sessions = await fetchSupabaseRows<WorkoutSession>(
+			'workout_sessions',
+			(query) => query.eq('dayKey', scope.dayKey).order('_modified', { ascending: false })
+		);
+		await putMergedRemoteRows('workout_sessions', db.workoutSessions, sessions);
+		await Promise.all(sessions.map((session) => hydrateSessionFromSupabase(session.id)));
+		return;
+	}
+
+	const workouts = await fetchSupabaseRows<Workout>('workouts', (query) =>
+		query.order('_modified', { ascending: false }).limit(200)
+	);
+	const workoutExercises = await fetchSupabaseRows<WorkoutExercise>('workout_exercises', (query) =>
+		query.order('_modified', { ascending: false }).limit(2000)
+	);
+	const exerciseIds = [...new Set(workoutExercises.map((row) => row.exerciseId))];
+	const exercises =
+		exerciseIds.length === 0
+			? []
+			: await fetchSupabaseRows<Exercise>(
+					'exercises',
+					(query) => query.in('id', exerciseIds),
+					withExerciseDefaults
+				);
+
+	await Promise.all([
+		putMergedRemoteRows('workouts', db.workouts, workouts),
+		putMergedRemoteRows('workout_exercises', db.workoutExercises, workoutExercises),
+		putMergedRemoteRows('exercises', db.exercises, exercises, withExerciseDefaults)
+	]);
+}
+
+export async function getSessionTimerSummary(sessionId: string) {
+	await ensureDbOpen();
+
+	const session = await db.workoutSessions.get(sessionId);
+
+	if (!session) {
+		return null;
+	}
+
+	return summarizeSession(
+		session,
+		await db.sessionExercises.where('sessionId').equals(sessionId).toArray(),
+		[]
+	);
 }
 
 export function toDayKey(input: Date | string) {
@@ -2847,6 +3154,20 @@ export async function listSessionSummariesForMonth(monthDate: Date) {
 	);
 }
 
+export async function listSessionCalendarRowsForWeek(weekDate: Date): Promise<SessionSummary[]> {
+	const start = toValidDate(weekDate);
+	const end = new Date(start);
+	end.setDate(start.getDate() + 6);
+	const sessions = await db.workoutSessions
+		.where('dayKey')
+		.between(toDayKey(start), toDayKey(end), true, true)
+		.toArray();
+
+	return sessions
+		.map((session) => summarizeSession(session, [], []))
+		.sort((first, second) => compareSessionRows(first, second));
+}
+
 export async function getDayOverview(dayKey: string): Promise<DayOverview> {
 	const sessions = await db.workoutSessions.where('dayKey').equals(dayKey).toArray();
 	const latestSession = sessions.sort(compareSessionRows).at(-1) ?? null;
@@ -3655,7 +3976,6 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 
 export async function getEditableSession(sessionId: string) {
 	await ensureDbOpen();
-	await hydrateSessionFromSupabase(sessionId);
 
 	const session = await db.workoutSessions.get(sessionId);
 

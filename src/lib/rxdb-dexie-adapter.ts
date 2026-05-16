@@ -4,6 +4,33 @@ import { BASELINE_EXERCISE_ROWS } from './exercises';
 
 type PlainDoc = Record<string, unknown> & { id: string; user_id?: string };
 type Selector = Record<string, unknown>;
+type TableName =
+	| 'exercises'
+	| 'workouts'
+	| 'workoutExercises'
+	| 'workoutSessions'
+	| 'sessionExercises'
+	| 'sessionSets'
+	| 'exerciseResetEvents';
+type ChangeListener = (tableName: TableName) => void;
+
+const changeListeners = new Set<ChangeListener>();
+
+export function subscribeToRxDexieChanges(listener: ChangeListener) {
+	changeListeners.add(listener);
+
+	return {
+		unsubscribe() {
+			changeListeners.delete(listener);
+		}
+	};
+}
+
+function notifyTableChanged(tableName: TableName) {
+	for (const listener of changeListeners) {
+		listener(tableName);
+	}
+}
 
 function stripRxMeta<T>(doc: RxDocument<T> | null | undefined): T | undefined {
 	if (!doc) {
@@ -105,7 +132,7 @@ class RxCollectionQuery<T extends PlainDoc> {
 	) {}
 
 	async toArray() {
-		return (await this.table.toArray()).filter((doc) => matchesSelector(doc, this.selector));
+		return this.table.findBySelector(this.selector);
 	}
 
 	async first() {
@@ -123,9 +150,11 @@ export class RxTableAdapter<T extends PlainDoc> {
 	constructor(
 		private readonly collection: RxCollection<T>,
 		private readonly userId: string,
+		tableName: TableName,
 		sharedDocs: T[] = []
 	) {
 		this.sharedDocsById = new Map(sharedDocs.map((doc) => [doc.id, doc]));
+		this.collection.$.subscribe(() => notifyTableChanged(tableName));
 	}
 
 	private withUserId(doc: Partial<T>) {
@@ -140,6 +169,31 @@ export class RxTableAdapter<T extends PlainDoc> {
 		return [
 			...this.sharedDocsById.values(),
 			...docs.map((doc) => stripRxMeta<T>(doc)).filter((doc): doc is T => Boolean(doc))
+		];
+	}
+
+	async findBySelector(selector: Selector) {
+		const pushdownSelector = Object.fromEntries(
+			Object.entries(selector).filter(([field]) => !field.match(/^\[(.+)\]$/))
+		);
+		const sharedDocs = [...this.sharedDocsById.values()].filter((doc) =>
+			matchesSelector(doc, selector)
+		);
+		const docs = await this.collection
+			.find({
+				selector: {
+					user_id: this.userId,
+					...pushdownSelector
+				} as never
+			})
+			.exec();
+
+		return [
+			...sharedDocs,
+			...docs
+				.map((doc) => stripRxMeta<T>(doc))
+				.filter((doc): doc is T => Boolean(doc))
+				.filter((doc) => matchesSelector(doc, selector))
 		];
 	}
 
@@ -251,28 +305,38 @@ export async function getRxDexieLikeDatabase(userId: string): Promise<RxDexieLik
 			exercises: new RxTableAdapter(
 				database.exercises as unknown as RxCollection<PlainDoc>,
 				userId,
+				'exercises',
 				BASELINE_EXERCISE_ROWS as PlainDoc[]
 			),
-			workouts: new RxTableAdapter(database.workouts as unknown as RxCollection<PlainDoc>, userId),
+			workouts: new RxTableAdapter(
+				database.workouts as unknown as RxCollection<PlainDoc>,
+				userId,
+				'workouts'
+			),
 			workoutExercises: new RxTableAdapter(
 				database.workoutExercises as unknown as RxCollection<PlainDoc>,
-				userId
+				userId,
+				'workoutExercises'
 			),
 			workoutSessions: new RxTableAdapter(
 				database.workoutSessions as unknown as RxCollection<PlainDoc>,
-				userId
+				userId,
+				'workoutSessions'
 			),
 			sessionExercises: new RxTableAdapter(
 				database.sessionExercises as unknown as RxCollection<PlainDoc>,
-				userId
+				userId,
+				'sessionExercises'
 			),
 			sessionSets: new RxTableAdapter(
 				database.sessionSets as unknown as RxCollection<PlainDoc>,
-				userId
+				userId,
+				'sessionSets'
 			),
 			exerciseResetEvents: new RxTableAdapter(
 				database.exerciseResetEvents as unknown as RxCollection<PlainDoc>,
-				userId
+				userId,
+				'exerciseResetEvents'
 			),
 			async transaction<T>(_mode: string, ...args: unknown[]) {
 				const callback = args.at(-1);

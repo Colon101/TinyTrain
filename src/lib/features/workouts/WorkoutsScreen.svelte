@@ -107,6 +107,7 @@
 
 	onMount(() => {
 		let disposed = false;
+		let databaseSubscription: { unsubscribe(): void } | null = null;
 
 		void (async () => {
 			try {
@@ -119,8 +120,16 @@
 				dbApi = api;
 				await api.ensureDbOpen();
 				await api.ensureBaselineExercises();
+				databaseSubscription = api.subscribeToDatabaseChanges(
+					['workouts', 'workoutExercises', 'exercises', 'sessionExercises', 'workoutSessions'],
+					() => {
+						void loadPageData(selectedWorkoutId || routeWorkoutId);
+					},
+					{ debounceMs: 250 }
+				);
 				pageMode = routeWorkoutId ? 'detail' : 'workouts';
 				await loadPageData(routeWorkoutId);
+				void api.hydrateVisibleScope({ type: 'workouts' }).catch(() => undefined);
 				isLoading = false;
 			} catch (error) {
 				errorMessage = getErrorMessage(error);
@@ -130,6 +139,7 @@
 
 		return () => {
 			disposed = true;
+			databaseSubscription?.unsubscribe();
 			stopDragAutoScroll();
 		};
 	});
@@ -202,33 +212,44 @@
 
 	async function loadPageData(preferredWorkoutId = selectedWorkoutId) {
 		const api = requireDbApi();
-		const nextWorkoutsPromise = api.listWorkouts();
-		const nextPickerDataPromise = Promise.all([
-			api.listExercises(),
-			api.listExerciseUsagePreferences()
-		]);
-		const nextWorkouts = await nextWorkoutsPromise;
-		const [nextExercises, nextExerciseUsagePreferences] = await nextPickerDataPromise;
-
-		exercises = nextExercises;
-		exerciseUsagePreferences = nextExerciseUsagePreferences;
-		writeExercisePickerCache(nextExercises, nextExerciseUsagePreferences);
+		const nextWorkouts = await api.listWorkouts();
 		workouts = nextWorkouts;
 
 		if (preferredWorkoutId) {
 			if (nextWorkouts.some((workout) => workout.id === preferredWorkoutId)) {
 				selectedWorkoutId = preferredWorkoutId;
 				await loadSelectedWorkoutExercises();
+				void loadExercisePickerData().catch((error) => {
+					errorMessage = getErrorMessage(error);
+				});
 				return;
 			}
 
 			selectedWorkoutId = preferredWorkoutId;
 			workoutExercises = [];
+			void loadExercisePickerData().catch((error) => {
+				errorMessage = getErrorMessage(error);
+			});
 			return;
 		}
 
 		selectedWorkoutId = '';
 		workoutExercises = [];
+		void loadExercisePickerData().catch((error) => {
+			errorMessage = getErrorMessage(error);
+		});
+	}
+
+	async function loadExercisePickerData() {
+		const api = requireDbApi();
+		const [nextExercises, nextExerciseUsagePreferences] = await Promise.all([
+			api.listExercises(),
+			api.listExerciseUsagePreferences()
+		]);
+
+		exercises = nextExercises;
+		exerciseUsagePreferences = nextExerciseUsagePreferences;
+		writeExercisePickerCache(nextExercises, nextExerciseUsagePreferences);
 	}
 
 	async function loadSelectedWorkoutExercises() {

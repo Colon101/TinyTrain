@@ -136,7 +136,10 @@
 					}, CALLBACK_TIMEOUT_MS);
 				}
 
-				await api.ensureDbOpen();
+				void api.ensureDbOpen().catch((error) => {
+					authError = error instanceof Error ? error.message : 'Failed to open local storage.';
+					isCheckingAuth = false;
+				});
 			} catch (error) {
 				clearCallbackTimeout();
 				authError = error instanceof Error ? error.message : 'Failed to open local storage.';
@@ -176,6 +179,7 @@
 	$effect(() => {
 		const sessionId = sessionMatch?.[1];
 		let cancelled = false;
+		let subscription: SubscriptionLike | null = null;
 
 		sessionTimer = null;
 
@@ -186,11 +190,28 @@
 		void (async () => {
 			try {
 				const api = (await import('$lib/db')) as DatabaseApi;
-				const overview = await api.getEditableSession(sessionId);
+
+				async function loadTimer() {
+					const timer = await api.getSessionTimerSummary(sessionId);
+
+					if (!cancelled) {
+						sessionTimer = timer;
+					}
+				}
+
+				await loadTimer();
+				void api.hydrateVisibleScope({ type: 'session', sessionId }).catch(() => undefined);
 
 				if (!cancelled) {
-					sessionTimer = overview?.summary ?? null;
+					subscription = api.subscribeToDatabaseChanges(
+						['workoutSessions', 'sessionExercises', 'sessionSets'],
+						() => {
+							void loadTimer();
+						},
+						{ debounceMs: 250 }
+					);
 				}
+
 			} catch {
 				if (!cancelled) {
 					sessionTimer = null;
@@ -200,6 +221,7 @@
 
 		return () => {
 			cancelled = true;
+			subscription?.unsubscribe();
 		};
 	});
 
