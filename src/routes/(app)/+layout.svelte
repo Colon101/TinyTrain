@@ -187,12 +187,14 @@
 			return;
 		}
 
+		const activeSessionId = sessionId;
+
 		void (async () => {
 			try {
 				const api = (await import('$lib/db')) as DatabaseApi;
 
 				async function loadTimer() {
-					const timer = await api.getSessionTimerSummary(sessionId);
+					const timer = await api.getSessionTimerSummary(activeSessionId);
 
 					if (!cancelled) {
 						sessionTimer = timer;
@@ -200,7 +202,9 @@
 				}
 
 				await loadTimer();
-				void api.hydrateVisibleScope({ type: 'session', sessionId }).catch(() => undefined);
+				void api
+					.hydrateVisibleScope({ type: 'session', sessionId: activeSessionId })
+					.catch(() => undefined);
 
 				if (!cancelled) {
 					subscription = api.subscribeToDatabaseChanges(
@@ -211,7 +215,6 @@
 						{ debounceMs: 250 }
 					);
 				}
-
 			} catch {
 				if (!cancelled) {
 					sessionTimer = null;

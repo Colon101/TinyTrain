@@ -60,6 +60,31 @@ export type TrackedImportSummary = {
 	syncError?: string;
 };
 
+export type TrackedImportRecoveryPreview = {
+	fileName: string;
+	sessionsFound: number;
+	importableSessionsFound: number;
+	matchedImportedSessions: number;
+	repairableSessions: number;
+	alreadyCorrectSessions: number;
+	missingImportedSessions: number;
+	matchedSessionExercises: number;
+	repairableSessionExercises: number;
+	missingSessionExercises: number;
+	matchedSessionSets: number;
+	repairableSessionSets: number;
+	missingSessionSets: number;
+	warnings: string[];
+};
+
+export type TrackedImportRecoveryResult = TrackedImportRecoveryPreview & {
+	sessionsRepaired: number;
+	sessionExercisesRepaired: number;
+	sessionSetsRepaired: number;
+	syncStatus: 'synced' | 'failed';
+	syncError?: string;
+};
+
 type CsvRow = Record<string, string>;
 
 type TrackedArchive = {
@@ -96,6 +121,18 @@ type ImportPlan = {
 	workoutNameByTrackedId: Map<string, string>;
 	sessionRows: CsvRow[];
 	setRows: CsvRow[];
+};
+
+type RecoveryPatch<T extends { id: string }> = {
+	id: string;
+	patch: Partial<T>;
+};
+
+type TrackedImportRecoveryWork = {
+	preview: TrackedImportRecoveryPreview;
+	sessionPatches: RecoveryPatch<WorkoutSession>[];
+	sessionExercisePatches: RecoveryPatch<SessionExercise>[];
+	sessionSetPatches: RecoveryPatch<SessionSet>[];
 };
 
 const REQUIRED_FILES = ['sessions.csv', 'sets.csv', 'exercises.csv'];
@@ -150,6 +187,249 @@ export async function importTrackedArchive(
 			syncError: error instanceof Error ? error.message : 'Sync failed.'
 		};
 	}
+}
+
+export async function previewTrackedImportTimestampRecovery(
+	file: File
+): Promise<TrackedImportRecoveryPreview> {
+	return (await buildTrackedImportTimestampRecoveryWork(file)).preview;
+}
+
+export async function repairTrackedImportTimestamps(
+	file: File
+): Promise<TrackedImportRecoveryResult> {
+	const work = await buildTrackedImportTimestampRecoveryWork(file, timestamp());
+
+	await db.transaction('rw', db.workoutSessions, db.sessionExercises, db.sessionSets, async () => {
+		await Promise.all(
+			work.sessionPatches.map(({ id, patch }) => db.workoutSessions.update(id, patch))
+		);
+		await Promise.all(
+			work.sessionExercisePatches.map(({ id, patch }) => db.sessionExercises.update(id, patch))
+		);
+		await Promise.all(
+			work.sessionSetPatches.map(({ id, patch }) => db.sessionSets.update(id, patch))
+		);
+	});
+
+	const result: TrackedImportRecoveryResult = {
+		...work.preview,
+		sessionsRepaired: work.sessionPatches.length,
+		sessionExercisesRepaired: work.sessionExercisePatches.length,
+		sessionSetsRepaired: work.sessionSetPatches.length,
+		syncStatus: 'synced'
+	};
+
+	try {
+		if (!db.cloud.currentUser.value?.isLoggedIn) {
+			throw new Error('Sign in with Google to sync repaired rows to cloud.');
+		}
+
+		await syncNow();
+		return result;
+	} catch (error) {
+		return {
+			...result,
+			syncStatus: 'failed',
+			syncError: error instanceof Error ? error.message : 'Sync failed.'
+		};
+	}
+}
+
+async function buildTrackedImportTimestampRecoveryWork(
+	file: File,
+	repairTimestamp = timestamp()
+): Promise<TrackedImportRecoveryWork> {
+	const archive = await readTrackedArchive(file);
+	const plan = await buildImportPlan(archive);
+	const preview: TrackedImportRecoveryPreview = {
+		fileName: archive.fileName,
+		sessionsFound: archive.rows.sessions.length,
+		importableSessionsFound: plan.sessionRows.length,
+		matchedImportedSessions: 0,
+		repairableSessions: 0,
+		alreadyCorrectSessions: 0,
+		missingImportedSessions: 0,
+		matchedSessionExercises: 0,
+		repairableSessionExercises: 0,
+		missingSessionExercises: 0,
+		matchedSessionSets: 0,
+		repairableSessionSets: 0,
+		missingSessionSets: 0,
+		warnings: [...plan.summary.warnings]
+	};
+	const sessionPatches: RecoveryPatch<WorkoutSession>[] = [];
+	const sessionExercisePatches: RecoveryPatch<SessionExercise>[] = [];
+	const sessionSetPatches: RecoveryPatch<SessionSet>[] = [];
+	const setRowsBySessionId = groupBy(plan.setRows, (set) => set.sessionId);
+	const existingSessions = await db.workoutSessions.bulkGet(
+		plan.sessionRows.map((session) => toTrackedId('session', session.id))
+	);
+	const sessionExerciseExpectations: {
+		id: string;
+		performedAt: string;
+		createdAt: string;
+	}[] = [];
+	const sessionSetExpectations: {
+		id: string;
+		createdAt: string;
+	}[] = [];
+	let setTimestampFallbacks = 0;
+
+	for (const [index, sessionRow] of plan.sessionRows.entries()) {
+		const sessionId = toTrackedId('session', sessionRow.id);
+		const existingSession = existingSessions[index];
+
+		if (!existingSession) {
+			preview.missingImportedSessions += 1;
+			continue;
+		}
+
+		preview.matchedImportedSessions += 1;
+
+		const repairedStartedAt = toIsoTimestamp(sessionRow.startedAt || sessionRow.sessionDate);
+
+		if (!repairedStartedAt) {
+			preview.warnings.push(
+				`Skipped session ${sessionRow.id || sessionId} because its start timestamp could not be parsed.`
+			);
+			continue;
+		}
+
+		const repairedCompletedAt = toIsoTimestamp(sessionRow.endedAt) ?? repairedStartedAt;
+		const sessionNeedsRepair =
+			existingSession.startedAt !== repairedStartedAt ||
+			existingSession.completedAt !== repairedCompletedAt ||
+			existingSession.createdAt !== repairedStartedAt;
+
+		if (sessionNeedsRepair) {
+			preview.repairableSessions += 1;
+			sessionPatches.push({
+				id: sessionId,
+				patch: {
+					startedAt: repairedStartedAt,
+					completedAt: repairedCompletedAt,
+					createdAt: repairedStartedAt,
+					updatedAt: repairTimestamp
+				}
+			});
+		} else {
+			preview.alreadyCorrectSessions += 1;
+		}
+
+		const sessionSetRows = setRowsBySessionId.get(sessionRow.id) ?? [];
+		const trackedExerciseIds = [
+			...new Set(sessionSetRows.map((set) => set.exerciseId).filter(Boolean))
+		];
+		const repairedStartedAtMs = new Date(repairedStartedAt).getTime();
+
+		for (const [exerciseIndex, trackedExerciseId] of trackedExerciseIds.entries()) {
+			sessionExerciseExpectations.push({
+				id: `${sessionId}:exercise:${trackedExerciseId}`,
+				performedAt: timestamp(new Date(repairedStartedAtMs + exerciseIndex * 8 * 60 * 1000)),
+				createdAt: repairedStartedAt
+			});
+		}
+
+		for (const set of sessionSetRows) {
+			if (!set.exerciseId) {
+				continue;
+			}
+
+			const sessionExerciseId = `${sessionId}:exercise:${set.exerciseId}`;
+			const setCreatedAt = toIsoTimestamp(set.createdAt || set.sessionDate);
+			const repairedSetCreatedAt = setCreatedAt ?? repairedStartedAt;
+
+			if (!setCreatedAt && (set.createdAt || set.sessionDate)) {
+				setTimestampFallbacks += 1;
+			}
+
+			sessionSetExpectations.push({
+				id: `${sessionExerciseId}:set:${set.id}:primary`,
+				createdAt: repairedSetCreatedAt
+			});
+
+			if (hasSecondarySetValues(set)) {
+				sessionSetExpectations.push({
+					id: `${sessionExerciseId}:set:${set.id}:secondary`,
+					createdAt: repairedSetCreatedAt
+				});
+			}
+		}
+	}
+
+	const existingSessionExercises = await db.sessionExercises.bulkGet(
+		sessionExerciseExpectations.map((expectation) => expectation.id)
+	);
+
+	for (const [index, expectation] of sessionExerciseExpectations.entries()) {
+		const existingSessionExercise = existingSessionExercises[index];
+
+		if (!existingSessionExercise) {
+			preview.missingSessionExercises += 1;
+			continue;
+		}
+
+		preview.matchedSessionExercises += 1;
+
+		if (
+			existingSessionExercise.performedAt === expectation.performedAt &&
+			existingSessionExercise.createdAt === expectation.createdAt
+		) {
+			continue;
+		}
+
+		preview.repairableSessionExercises += 1;
+		sessionExercisePatches.push({
+			id: expectation.id,
+			patch: {
+				performedAt: expectation.performedAt,
+				createdAt: expectation.createdAt,
+				updatedAt: repairTimestamp
+			}
+		});
+	}
+
+	const existingSessionSets = await db.sessionSets.bulkGet(
+		sessionSetExpectations.map((expectation) => expectation.id)
+	);
+
+	for (const [index, expectation] of sessionSetExpectations.entries()) {
+		const existingSessionSet = existingSessionSets[index];
+
+		if (!existingSessionSet) {
+			preview.missingSessionSets += 1;
+			continue;
+		}
+
+		preview.matchedSessionSets += 1;
+
+		if (existingSessionSet.createdAt === expectation.createdAt) {
+			continue;
+		}
+
+		preview.repairableSessionSets += 1;
+		sessionSetPatches.push({
+			id: expectation.id,
+			patch: {
+				createdAt: expectation.createdAt,
+				updatedAt: repairTimestamp
+			}
+		});
+	}
+
+	if (setTimestampFallbacks > 0) {
+		preview.warnings.push(
+			`${setTimestampFallbacks} set rows had unparseable timestamps and will use the repaired session start time.`
+		);
+	}
+
+	return {
+		preview,
+		sessionPatches,
+		sessionExercisePatches,
+		sessionSetPatches
+	};
 }
 
 async function readTrackedArchive(file: File): Promise<TrackedArchive> {
@@ -923,13 +1203,22 @@ function hasSecondarySetValues(set: CsvRow) {
 	return Boolean(set.secondaryRepetitions || set.secondaryWeight || set.secondaryRir);
 }
 
+function normalizeTrackedTimestamp(value: string) {
+	let normalized = value.trim();
+
+	if (normalized.includes(' ')) {
+		normalized = normalized.replace(' ', 'T');
+	}
+
+	return normalized.replace(/([+-]\d{2})$/, '$1:00');
+}
+
 function toIsoTimestamp(value: string | undefined) {
 	if (!value?.trim()) {
 		return undefined;
 	}
 
-	const normalizedValue = value.includes(' ') ? value.replace(' ', 'T') : value;
-	const date = new Date(normalizedValue);
+	const date = new Date(normalizeTrackedTimestamp(value));
 
 	return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }

@@ -1171,7 +1171,7 @@ function getSyncedTableConfigs(): SyncedTableConfig[] {
 		{
 			tableName: 'exercises',
 			localTable: () => db.exercises as unknown as DataTable<SyncableRow>,
-			normalize: withExerciseDefaults as (row: SyncableRow) => SyncableRow
+			normalize: withExerciseDefaults as unknown as (row: SyncableRow) => SyncableRow
 		},
 		{ tableName: 'workouts', localTable: () => db.workouts as unknown as DataTable<SyncableRow> },
 		{
@@ -1189,7 +1189,7 @@ function getSyncedTableConfigs(): SyncedTableConfig[] {
 		{
 			tableName: 'session_sets',
 			localTable: () => db.sessionSets as unknown as DataTable<SyncableRow>,
-			normalize: normalizeRemoteSessionSet as (row: SyncableRow) => SyncableRow
+			normalize: normalizeRemoteSessionSet as unknown as (row: SyncableRow) => SyncableRow
 		},
 		{
 			tableName: 'exercise_reset_events',
@@ -1503,9 +1503,8 @@ export async function hydrateVisibleScope(scope: HydrateVisibleScopeInput) {
 	}
 
 	if (scope.type === 'day') {
-		const sessions = await fetchSupabaseRows<WorkoutSession>(
-			'workout_sessions',
-			(query) => query.eq('dayKey', scope.dayKey).order('_modified', { ascending: false })
+		const sessions = await fetchSupabaseRows<WorkoutSession>('workout_sessions', (query) =>
+			query.eq('dayKey', scope.dayKey).order('_modified', { ascending: false })
 		);
 		await putMergedRemoteRows('workout_sessions', db.workoutSessions, sessions);
 		await Promise.all(sessions.map((session) => hydrateSessionFromSupabase(session.id)));
@@ -2027,9 +2026,13 @@ function toSessionSetReference(
 
 function buildPreviousReferenceBySetKey(
 	currentExercise: SessionExerciseDetail,
-	history: ExerciseHistoryEntry[]
+	previousPerformance: ExerciseHistoryEntry | null
 ) {
 	const referenceBySetKey = new Map<string, SessionSetReference>();
+
+	if (!previousPerformance) {
+		return referenceBySetKey;
+	}
 
 	for (const currentSet of currentExercise.sets) {
 		const setKey = getSessionSetKey(currentSet);
@@ -2038,17 +2041,12 @@ function buildPreviousReferenceBySetKey(
 			continue;
 		}
 
-		for (const historyEntry of history) {
-			const previousSet = historyEntry.sets.find(
-				(candidate) => getSessionSetKey(candidate) === setKey && hasAnySetValue(candidate)
-			);
+		const previousSet = previousPerformance.sets.find(
+			(candidate) => getSessionSetKey(candidate) === setKey && hasAnySetValue(candidate)
+		);
 
-			if (!previousSet) {
-				continue;
-			}
-
-			referenceBySetKey.set(setKey, toSessionSetReference(historyEntry, previousSet));
-			break;
+		if (previousSet) {
+			referenceBySetKey.set(setKey, toSessionSetReference(previousPerformance, previousSet));
 		}
 	}
 
@@ -3882,21 +3880,6 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 			return [nextExercise.id, nextExercise] as const;
 		})
 	);
-	const historyEntriesByExerciseId = new Map(
-		await Promise.all(
-			[...new Set(sessionExercises.map((sessionExercise) => sessionExercise.exerciseId))].map(
-				async (exerciseId) =>
-					[
-						exerciseId,
-						(await listExerciseHistory(exerciseId)).filter(
-							(entry) =>
-								entry.sessionId !== session.id &&
-								getExerciseHistorySortTime(entry) < currentSessionAt
-						)
-					] as const
-			)
-		)
-	);
 	const previousPerformanceByExerciseId = await getLatestExerciseHistoryEntries(
 		sessionExercises.map((sessionExercise) => sessionExercise.exerciseId),
 		session.id,
@@ -3913,13 +3896,12 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 					newExercises: 0
 				};
 	const nextExercises = sessionExercises.map((sessionExercise) => {
-		const historyEntries = historyEntriesByExerciseId.get(sessionExercise.exerciseId) ?? [];
-		const previousReferenceBySetKey = buildPreviousReferenceBySetKey(
-			sessionExercise,
-			historyEntries
-		);
 		const previousPerformance =
 			previousPerformanceByExerciseId.get(sessionExercise.exerciseId) ?? null;
+		const previousReferenceBySetKey = buildPreviousReferenceBySetKey(
+			sessionExercise,
+			previousPerformance
+		);
 		const { progressStatus, progressSummary } = summarizeExerciseProgress(
 			sessionExercise,
 			previousReferenceBySetKey
