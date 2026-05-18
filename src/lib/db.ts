@@ -121,6 +121,30 @@ export type ExerciseListItem = {
 	latestResetAt?: string;
 };
 
+export type ExerciseMergeOption = {
+	exercise: Exercise;
+	historyCount: number;
+	lastPerformedAt?: string;
+	canRename: boolean;
+};
+
+export type ExerciseMergeInput = {
+	mainExerciseId: string;
+	secondaryExerciseId: string;
+	mainExerciseName?: string;
+};
+
+export type ExerciseMergeResult = {
+	mainExercise: Exercise;
+	secondaryExercise: Exercise;
+	copiedSessionExercises: number;
+	copiedSessionSets: number;
+	skippedConflicts: number;
+	renamed: boolean;
+	syncStatus: 'synced' | 'failed';
+	syncError?: string;
+};
+
 export type ExerciseUsagePreference = {
 	normalizedName: string;
 	exerciseIds: string[];
@@ -1721,6 +1745,14 @@ function hasAnySetValue(
 	);
 }
 
+function hasPerformedSetValues(
+	sessionSets: Array<
+		Pick<SessionSet, 'weight' | 'reps' | 'rir' | 'weightInput' | 'repsInput' | 'rirInput'>
+	>
+) {
+	return sessionSets.some(hasAnySetValue);
+}
+
 function getSessionSortTime(session: Pick<WorkoutSession, 'startedAt' | 'createdAt'>) {
 	return toValidDate(session.startedAt ?? session.createdAt).getTime();
 }
@@ -1864,8 +1896,11 @@ async function listHistoricalSessionExerciseMatches(
 	return sessionExercises
 		.flatMap((sessionExercise) => {
 			const session = sessionById.get(sessionExercise.sessionId);
+			const sets = (setsBySessionExerciseId.get(sessionExercise.id) ?? []).sort(
+				compareSessionSetRows
+			);
 
-			if (!session || session.status === 'planned') {
+			if (!session || session.status === 'planned' || !hasPerformedSetValues(sets)) {
 				return [];
 			}
 
@@ -1873,7 +1908,7 @@ async function listHistoricalSessionExerciseMatches(
 				{
 					session,
 					sessionExercise,
-					sets: (setsBySessionExerciseId.get(sessionExercise.id) ?? []).sort(compareSessionSetRows)
+					sets
 				}
 			];
 		})
@@ -2079,8 +2114,12 @@ function getSessionSetOrderCount(sessionSets: Array<Pick<SessionSet, 'order'>>) 
 	}, 0);
 }
 
-function findLatestHistoryEntryWithSeedRows(history: ExerciseHistoryEntry[]) {
-	return history.find((entry) => getSessionSetOrderCount(entry.sets) > 0) ?? null;
+function findLatestHistoryEntryWithPerformedSets(history: ExerciseHistoryEntry[]) {
+	return (
+		history.find(
+			(entry) => getSessionSetOrderCount(entry.sets) > 0 && hasPerformedSetValues(entry.sets)
+		) ?? null
+	);
 }
 
 function summarizeExerciseProgress(
@@ -2170,7 +2209,7 @@ async function getLatestExerciseHistoryEntries(
 					entry.sessionId !== currentSessionId &&
 					getExerciseHistorySortTime(entry) < beforeSessionAt
 			);
-			const previousEntry = findLatestHistoryEntryWithSeedRows(history) ?? history[0] ?? null;
+			const previousEntry = findLatestHistoryEntryWithPerformedSets(history) ?? history[0] ?? null;
 
 			return [exerciseId, previousEntry] as const;
 		})
@@ -2341,6 +2380,26 @@ export async function listExercises() {
 		.sort((first, second) => first.name.localeCompare(second.name));
 }
 
+async function getPerformedSessionExerciseIdSet(sessionExercises: SessionExercise[]) {
+	if (sessionExercises.length === 0) {
+		return new Set<string>();
+	}
+
+	const sessionSets = await db.sessionSets
+		.where('sessionExerciseId')
+		.anyOf(sessionExercises.map((sessionExercise) => sessionExercise.id))
+		.toArray();
+	const hasPerformedValuesBySessionExerciseId = new Set<string>();
+
+	for (const sessionSet of sessionSets.map(withSessionSetDefaults)) {
+		if (hasAnySetValue(sessionSet)) {
+			hasPerformedValuesBySessionExerciseId.add(sessionSet.sessionExerciseId);
+		}
+	}
+
+	return hasPerformedValuesBySessionExerciseId;
+}
+
 export async function listExerciseUsagePreferences(): Promise<ExerciseUsagePreference[]> {
 	const sessionExercises = await db.sessionExercises.toArray();
 
@@ -2353,6 +2412,7 @@ export async function listExerciseUsagePreferences(): Promise<ExerciseUsagePrefe
 	];
 	const sessions = await db.workoutSessions.bulkGet(sessionIds);
 	const sessionById = new Map(sessions.filter(isDefined).map((session) => [session.id, session]));
+	const performedSessionExerciseIds = await getPerformedSessionExerciseIdSet(sessionExercises);
 	const usageByNormalizedName = new Map<
 		string,
 		{
@@ -2365,7 +2425,11 @@ export async function listExerciseUsagePreferences(): Promise<ExerciseUsagePrefe
 	for (const sessionExercise of sessionExercises) {
 		const session = sessionById.get(sessionExercise.sessionId);
 
-		if (!session || session.status === 'planned') {
+		if (
+			!session ||
+			session.status === 'planned' ||
+			!performedSessionExerciseIds.has(sessionExercise.id)
+		) {
 			continue;
 		}
 
@@ -2433,6 +2497,7 @@ export async function listCustomExerciseItems(): Promise<ExerciseListItem[]> {
 	];
 	const sessions = sessionIds.length === 0 ? [] : await db.workoutSessions.bulkGet(sessionIds);
 	const sessionById = new Map(sessions.filter(isDefined).map((session) => [session.id, session]));
+	const performedSessionExerciseIds = await getPerformedSessionExerciseIdSet(sessionExercises);
 
 	const historyByExerciseId = new Map<string, Set<string>>();
 	const lastPerformedAtByExerciseId = new Map<string, string>();
@@ -2441,7 +2506,11 @@ export async function listCustomExerciseItems(): Promise<ExerciseListItem[]> {
 	for (const sessionExercise of sessionExercises) {
 		const session = sessionById.get(sessionExercise.sessionId);
 
-		if (!session || session.status === 'planned') {
+		if (
+			!session ||
+			session.status === 'planned' ||
+			!performedSessionExerciseIds.has(sessionExercise.id)
+		) {
 			continue;
 		}
 
@@ -2484,6 +2553,7 @@ export async function listExerciseItems(): Promise<ExerciseListItem[]> {
 	];
 	const sessions = sessionIds.length === 0 ? [] : await db.workoutSessions.bulkGet(sessionIds);
 	const sessionById = new Map(sessions.filter(isDefined).map((session) => [session.id, session]));
+	const performedSessionExerciseIds = await getPerformedSessionExerciseIdSet(sessionExercises);
 	const usageByNormalizedName = new Map<
 		string,
 		{
@@ -2495,7 +2565,11 @@ export async function listExerciseItems(): Promise<ExerciseListItem[]> {
 	for (const sessionExercise of sessionExercises) {
 		const session = sessionById.get(sessionExercise.sessionId);
 
-		if (!session || session.status === 'planned') {
+		if (
+			!session ||
+			session.status === 'planned' ||
+			!performedSessionExerciseIds.has(sessionExercise.id)
+		) {
 			continue;
 		}
 
@@ -2587,6 +2661,71 @@ export async function listExerciseItems(): Promise<ExerciseListItem[]> {
 		);
 }
 
+export async function listExerciseMergeOptions(): Promise<ExerciseMergeOption[]> {
+	const [exercises, sessionExercises] = await Promise.all([
+		listExercises(),
+		db.sessionExercises.toArray()
+	]);
+	const sessionIds = [
+		...new Set(sessionExercises.map((sessionExercise) => sessionExercise.sessionId))
+	];
+	const sessions = sessionIds.length === 0 ? [] : await db.workoutSessions.bulkGet(sessionIds);
+	const sessionById = new Map(sessions.filter(isDefined).map((session) => [session.id, session]));
+	const performedSessionExerciseIds = await getPerformedSessionExerciseIdSet(sessionExercises);
+	const usageByExerciseId = new Map<
+		string,
+		{
+			historySessionIds: Set<string>;
+			lastPerformedAt?: string;
+		}
+	>();
+
+	for (const sessionExercise of sessionExercises) {
+		const session = sessionById.get(sessionExercise.sessionId);
+
+		if (
+			!session ||
+			session.status === 'planned' ||
+			!performedSessionExerciseIds.has(sessionExercise.id)
+		) {
+			continue;
+		}
+
+		const performedAt =
+			session.completedAt ?? session.startedAt ?? sessionExercise.performedAt ?? session.createdAt;
+		const usage = usageByExerciseId.get(sessionExercise.exerciseId) ?? {
+			historySessionIds: new Set<string>(),
+			lastPerformedAt: undefined
+		};
+
+		usage.historySessionIds.add(sessionExercise.sessionId);
+
+		if (!usage.lastPerformedAt || usage.lastPerformedAt < performedAt) {
+			usage.lastPerformedAt = performedAt;
+		}
+
+		usageByExerciseId.set(sessionExercise.exerciseId, usage);
+	}
+
+	return exercises
+		.map((exercise) => {
+			const usage = usageByExerciseId.get(exercise.id);
+
+			return {
+				exercise,
+				historyCount: usage?.historySessionIds.size ?? 0,
+				lastPerformedAt: usage?.lastPerformedAt,
+				canRename: !BASELINE_EXERCISE_BY_ID.has(exercise.id) && exercise.source === 'custom'
+			};
+		})
+		.sort(
+			(first, second) =>
+				compareOptionalRecency(first.lastPerformedAt, second.lastPerformedAt) ||
+				second.historyCount - first.historyCount ||
+				first.exercise.name.localeCompare(second.exercise.name)
+		);
+}
+
 export async function getExercise(exerciseId: string) {
 	const baselineExercise = BASELINE_EXERCISE_BY_ID.get(exerciseId);
 
@@ -2597,6 +2736,232 @@ export async function getExercise(exerciseId: string) {
 	const exercise = await db.exercises.get(exerciseId);
 
 	return exercise ? withExerciseDefaults(exercise) : null;
+}
+
+function getMergedSessionExerciseId(mainExerciseId: string, secondarySessionExerciseId: string) {
+	return `merge:${mainExerciseId}:${secondarySessionExerciseId}`;
+}
+
+function getMergedSessionSetId(mainSessionExerciseId: string, secondarySessionSetId: string) {
+	return `${mainSessionExerciseId}:set:${secondarySessionSetId}`;
+}
+
+async function renameCustomExercise(
+	exercise: Exercise,
+	nextName: string,
+	now = timestamp()
+): Promise<{ exercise: Exercise; renamed: boolean }> {
+	const cleanName = displayName(nextName);
+	const normalizedName = normalizeName(cleanName);
+
+	if (!normalizedName) {
+		throw new Error('Exercise name is required.');
+	}
+
+	if (BASELINE_EXERCISE_BY_ID.has(exercise.id) || exercise.source !== 'custom') {
+		return { exercise, renamed: false };
+	}
+
+	if (normalizedName === exercise.normalizedName && cleanName === exercise.name) {
+		return { exercise, renamed: false };
+	}
+
+	const matchingExercises = (
+		await db.exercises.where('normalizedName').equals(normalizedName).toArray()
+	)
+		.map(withExerciseDefaults)
+		.filter((candidate) => candidate.id !== exercise.id && !candidate.archived);
+
+	if (
+		matchingExercises.length > 0 ||
+		(BASELINE_EXERCISE_BY_NORMALIZED_NAME.has(normalizedName) &&
+			BASELINE_EXERCISE_BY_NORMALIZED_NAME.get(normalizedName)?.id !== exercise.id)
+	) {
+		throw new Error('That exercise name is already in use.');
+	}
+
+	const nextExercise = {
+		...exercise,
+		name: cleanName,
+		normalizedName,
+		updatedAt: now
+	};
+
+	await db.exercises.update(exercise.id, {
+		name: cleanName,
+		normalizedName,
+		updatedAt: now
+	});
+
+	return { exercise: nextExercise, renamed: true };
+}
+
+export async function mergeExerciseHistory(
+	input: ExerciseMergeInput
+): Promise<ExerciseMergeResult> {
+	requireLoggedInUser();
+
+	if (input.mainExerciseId === input.secondaryExerciseId) {
+		throw new Error('Choose two different exercises to merge.');
+	}
+
+	const [mainExercise, secondaryExercise] = await Promise.all([
+		getExercise(input.mainExerciseId),
+		getExercise(input.secondaryExerciseId)
+	]);
+
+	if (!mainExercise) {
+		throw new Error('Main exercise not found.');
+	}
+
+	if (!secondaryExercise) {
+		throw new Error('Secondary exercise not found.');
+	}
+
+	const now = timestamp();
+	const secondarySessionExercises = await db.sessionExercises
+		.where('exerciseId')
+		.equals(secondaryExercise.id)
+		.toArray();
+	const secondarySessionExerciseIds = secondarySessionExercises.map(
+		(sessionExercise) => sessionExercise.id
+	);
+	const [existingMainSessionExercises, existingCopiedSessionExercises, secondarySessionSets] =
+		await Promise.all([
+			db.sessionExercises.where('exerciseId').equals(mainExercise.id).toArray(),
+			secondarySessionExerciseIds.length === 0
+				? Promise.resolve([])
+				: db.sessionExercises
+						.bulkGet(
+							secondarySessionExerciseIds.map((sessionExerciseId) =>
+								getMergedSessionExerciseId(mainExercise.id, sessionExerciseId)
+							)
+						)
+						.then((rows) => rows.filter(isDefined)),
+			secondarySessionExerciseIds.length === 0
+				? Promise.resolve([])
+				: db.sessionSets.where('sessionExerciseId').anyOf(secondarySessionExerciseIds).toArray()
+		]);
+	const mainSessionIds = new Set(
+		existingMainSessionExercises.map((sessionExercise) => sessionExercise.sessionId)
+	);
+	const existingCopiedIds = new Set(
+		existingCopiedSessionExercises.map((sessionExercise) => sessionExercise.id)
+	);
+	const setsBySessionExerciseId = new Map<string, SessionSet[]>();
+
+	for (const sessionSet of secondarySessionSets.map(withSessionSetDefaults)) {
+		const rows = setsBySessionExerciseId.get(sessionSet.sessionExerciseId) ?? [];
+		rows.push(sessionSet);
+		setsBySessionExerciseId.set(sessionSet.sessionExerciseId, rows);
+	}
+
+	const sessionExercisesToAdd: SessionExercise[] = [];
+	const sessionSetsToAdd: SessionSet[] = [];
+	let skippedConflicts = 0;
+
+	for (const secondarySessionExercise of secondarySessionExercises) {
+		const copiedSessionExerciseId = getMergedSessionExerciseId(
+			mainExercise.id,
+			secondarySessionExercise.id
+		);
+		const sourceSets = setsBySessionExerciseId.get(secondarySessionExercise.id) ?? [];
+
+		if (!hasPerformedSetValues(sourceSets)) {
+			continue;
+		}
+
+		if (
+			mainSessionIds.has(secondarySessionExercise.sessionId) ||
+			existingCopiedIds.has(copiedSessionExerciseId)
+		) {
+			skippedConflicts += 1;
+			continue;
+		}
+
+		const copiedSessionExercise: SessionExercise = {
+			...secondarySessionExercise,
+			id: copiedSessionExerciseId,
+			exerciseId: mainExercise.id,
+			exerciseNameSnapshot: mainExercise.name,
+			createdAt: now,
+			updatedAt: now
+		};
+		const copiedSessionSets = sourceSets.map((sessionSet) => ({
+			...sessionSet,
+			id: getMergedSessionSetId(copiedSessionExerciseId, sessionSet.id),
+			sessionExerciseId: copiedSessionExerciseId,
+			exerciseId: mainExercise.id,
+			createdAt: now,
+			updatedAt: now
+		}));
+
+		sessionExercisesToAdd.push(copiedSessionExercise);
+		sessionSetsToAdd.push(...copiedSessionSets);
+		mainSessionIds.add(secondarySessionExercise.sessionId);
+	}
+
+	let renamedMainExercise = mainExercise;
+	let renamed = false;
+
+	await db.transaction(
+		'rw',
+		db.exercises,
+		db.workoutSessions,
+		db.sessionExercises,
+		db.sessionSets,
+		async () => {
+			if (input.mainExerciseName !== undefined) {
+				const renameResult = await renameCustomExercise(mainExercise, input.mainExerciseName, now);
+				renamedMainExercise = renameResult.exercise;
+				renamed = renameResult.renamed;
+			}
+
+			for (const sessionExercise of sessionExercisesToAdd) {
+				sessionExercise.exerciseNameSnapshot = renamedMainExercise.name;
+			}
+
+			if (sessionExercisesToAdd.length > 0) {
+				await db.sessionExercises.bulkAdd(sessionExercisesToAdd);
+			}
+
+			if (sessionSetsToAdd.length > 0) {
+				await db.sessionSets.bulkAdd(sessionSetsToAdd);
+			}
+
+			const touchedSessionIds = [...new Set(sessionExercisesToAdd.map((row) => row.sessionId))];
+
+			await Promise.all(
+				touchedSessionIds.map((sessionId) =>
+					db.workoutSessions.update(sessionId, { updatedAt: now })
+				)
+			);
+		}
+	);
+
+	try {
+		await syncNow();
+		return {
+			mainExercise: renamedMainExercise,
+			secondaryExercise,
+			copiedSessionExercises: sessionExercisesToAdd.length,
+			copiedSessionSets: sessionSetsToAdd.length,
+			skippedConflicts,
+			renamed,
+			syncStatus: 'synced'
+		};
+	} catch (error) {
+		return {
+			mainExercise: renamedMainExercise,
+			secondaryExercise,
+			copiedSessionExercises: sessionExercisesToAdd.length,
+			copiedSessionSets: sessionSetsToAdd.length,
+			skippedConflicts,
+			renamed,
+			syncStatus: 'failed',
+			syncError: error instanceof Error ? error.message : 'Sync failed.'
+		};
+	}
 }
 
 export async function createExercise(name: string, unilateral = false) {

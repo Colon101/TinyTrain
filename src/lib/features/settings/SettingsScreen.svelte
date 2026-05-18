@@ -1,11 +1,18 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type { DatabaseUploadSummary, LocalDatabaseStats } from '$lib/db';
+	import type {
+		DatabaseUploadSummary,
+		Exercise,
+		ExerciseMergeOption,
+		ExerciseMergeResult,
+		LocalDatabaseStats
+	} from '$lib/db';
 	import type {
 		TrackedImportPhase,
 		TrackedImportSummary,
 		TrackedLimbPriority
 	} from '$lib/tracked-import';
+	import ExercisePickerSheet from '$lib/features/workouts/ExercisePickerSheet.svelte';
 	import Icon from '$lib/ui/Icon.svelte';
 
 	type DatabaseApi = typeof import('$lib/db');
@@ -15,16 +22,73 @@
 	let trackedImportApi = $state<TrackedImportApi | null>(null);
 	let stats = $state<LocalDatabaseStats | null>(null);
 	let summary = $state<DatabaseUploadSummary | null>(null);
+	let mergeOptions = $state<ExerciseMergeOption[]>([]);
+	let mergeResult = $state<ExerciseMergeResult | null>(null);
 	let trackedSummary = $state<TrackedImportSummary | null>(null);
 	let trackedFile = $state<File | null>(null);
 	let trackedLimbPriorities = $state<Record<string, TrackedLimbPriority>>({});
+	let mainMergeExerciseId = $state('');
+	let secondaryMergeExerciseId = $state('');
+	let mergeExerciseName = $state('');
+	let mergePickerTarget = $state<'main' | 'secondary' | null>(null);
+	let mergeExerciseSearch = $state('');
+	let selectedMergePickerExerciseIds = $state<string[]>([]);
 	let isLoading = $state(true);
 	let isUploading = $state(false);
+	let isMergingExercises = $state(false);
 	let isPreviewingTracked = $state(false);
 	let isImportingTracked = $state(false);
 	let trackedImportPhase = $state<TrackedImportPhase>('reading');
 	let errorMessage = $state('');
 	let statusMessage = $state('');
+	let mergeStatusMessage = $state('');
+
+	let selectedMainMergeOption = $derived(
+		mergeOptions.find((option) => option.exercise.id === mainMergeExerciseId) ?? null
+	);
+	let selectedSecondaryMergeOption = $derived(
+		mergeOptions.find((option) => option.exercise.id === secondaryMergeExerciseId) ?? null
+	);
+	let mergeExerciseOptions = $derived(mergeOptions.map((option) => option.exercise));
+	let cleanMergeExerciseSearch = $derived(mergeExerciseSearch.trim().replace(/\s+/g, ' '));
+	let normalizedMergeExerciseSearch = $derived(cleanMergeExerciseSearch.toLocaleLowerCase());
+	let mergeOptionByExerciseId = $derived(
+		new Map(mergeOptions.map((option) => [option.exercise.id, option]))
+	);
+	let filteredMergePickerExercises = $derived(
+		(cleanMergeExerciseSearch
+			? mergeExerciseOptions.filter((exercise) =>
+					exercise.normalizedName.includes(normalizedMergeExerciseSearch)
+				)
+			: mergeExerciseOptions
+		)
+			.filter((exercise) =>
+				mergePickerTarget === 'secondary' ? exercise.id !== mainMergeExerciseId : true
+			)
+			.toSorted(compareMergeExercisePreference)
+	);
+	let visibleMergePickerExercises = $derived(
+		filteredMergePickerExercises.slice(0, cleanMergeExerciseSearch ? 80 : 60)
+	);
+	let hiddenMergePickerExerciseCount = $derived(
+		Math.max(filteredMergePickerExercises.length - visibleMergePickerExercises.length, 0)
+	);
+	let selectedMergePickerExerciseIdSet = $derived(new Set(selectedMergePickerExerciseIds));
+	let disabledMergePickerExerciseIds = $derived(
+		new Set(mergePickerTarget === 'secondary' && mainMergeExerciseId ? [mainMergeExerciseId] : [])
+	);
+	let mergePickerSubmitLabel = $derived(
+		mergePickerTarget === 'main' ? 'Use as main exercise' : 'Use as secondary exercise'
+	);
+	let canSubmitExerciseMerge = $derived(
+		Boolean(
+			api &&
+			mainMergeExerciseId &&
+			secondaryMergeExerciseId &&
+			mainMergeExerciseId !== secondaryMergeExerciseId &&
+			!isMergingExercises
+		)
+	);
 
 	onMount(() => {
 		let disposed = false;
@@ -45,7 +109,10 @@
 				await dbApi.ensureDbOpen();
 
 				if (!disposed) {
-					stats = await dbApi.getLocalDatabaseStats();
+					[stats, mergeOptions] = await Promise.all([
+						dbApi.getLocalDatabaseStats(),
+						dbApi.listExerciseMergeOptions()
+					]);
 				}
 			} catch (error) {
 				if (!disposed) {
@@ -89,6 +156,108 @@
 			statusMessage = '';
 		} finally {
 			isUploading = false;
+		}
+	}
+
+	function selectMainMergeExercise(nextExerciseId: string) {
+		const nextOption = mergeOptions.find((option) => option.exercise.id === nextExerciseId) ?? null;
+
+		mainMergeExerciseId = nextExerciseId;
+		mergeExerciseName = nextOption?.exercise.name ?? '';
+		mergeResult = null;
+		mergeStatusMessage = '';
+
+		if (secondaryMergeExerciseId === nextExerciseId) {
+			secondaryMergeExerciseId = '';
+		}
+	}
+
+	function selectSecondaryMergeExercise(nextExerciseId: string) {
+		secondaryMergeExerciseId = nextExerciseId;
+		mergeResult = null;
+		mergeStatusMessage = '';
+	}
+
+	function openMergeExercisePicker(target: 'main' | 'secondary') {
+		mergePickerTarget = target;
+		mergeExerciseSearch = '';
+		selectedMergePickerExerciseIds =
+			target === 'main'
+				? mainMergeExerciseId
+					? [mainMergeExerciseId]
+					: []
+				: secondaryMergeExerciseId
+					? [secondaryMergeExerciseId]
+					: [];
+	}
+
+	function closeMergeExercisePicker() {
+		mergePickerTarget = null;
+		mergeExerciseSearch = '';
+		selectedMergePickerExerciseIds = [];
+	}
+
+	function handleMergeExerciseSearchInput(event: Event) {
+		const target = event.currentTarget as HTMLInputElement;
+		mergeExerciseSearch = target.value;
+	}
+
+	function toggleMergePickerExercise(exerciseId: string) {
+		if (disabledMergePickerExerciseIds.has(exerciseId)) {
+			return;
+		}
+
+		selectedMergePickerExerciseIds = selectedMergePickerExerciseIdSet.has(exerciseId)
+			? []
+			: [exerciseId];
+	}
+
+	function applyMergePickerExercise() {
+		const selectedExerciseId = selectedMergePickerExerciseIds[0];
+
+		if (!selectedExerciseId || !mergePickerTarget) {
+			return;
+		}
+
+		if (mergePickerTarget === 'main') {
+			selectMainMergeExercise(selectedExerciseId);
+		} else {
+			selectSecondaryMergeExercise(selectedExerciseId);
+		}
+
+		closeMergeExercisePicker();
+	}
+
+	async function mergeExercises() {
+		if (!api || !canSubmitExerciseMerge) {
+			return;
+		}
+
+		isMergingExercises = true;
+		errorMessage = '';
+		mergeStatusMessage = 'Copying secondary history onto the main exercise.';
+		mergeResult = null;
+
+		try {
+			mergeResult = await api.mergeExerciseHistory({
+				mainExerciseId: mainMergeExerciseId,
+				secondaryExerciseId: secondaryMergeExerciseId,
+				mainExerciseName: selectedMainMergeOption?.canRename ? mergeExerciseName : undefined
+			});
+			[stats, mergeOptions] = await Promise.all([
+				api.getLocalDatabaseStats(),
+				api.listExerciseMergeOptions()
+			]);
+			mergeExerciseName = mergeResult.mainExercise.name;
+			mergeStatusMessage =
+				mergeResult.syncStatus === 'synced'
+					? 'Exercise history merge finished and synced.'
+					: 'Exercise history merge finished locally. Sync failed.';
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Exercise merge failed.';
+			mergeStatusMessage = '';
+		} finally {
+			isMergingExercises = false;
 		}
 	}
 
@@ -175,6 +344,53 @@
 			day: 'numeric',
 			year: 'numeric'
 		}).format(new Date(value));
+	}
+
+	function compareOptionalRecency(first?: string, second?: string) {
+		if (first && second && first !== second) {
+			return second.localeCompare(first);
+		}
+
+		if (first && !second) {
+			return -1;
+		}
+
+		if (!first && second) {
+			return 1;
+		}
+
+		return 0;
+	}
+
+	function formatExerciseMergeMetadata(exercise: Exercise) {
+		const option = mergeOptionByExerciseId.get(exercise.id);
+
+		if (!option) {
+			return '';
+		}
+
+		const lastPerformedLabel = option.lastPerformedAt
+			? `last ${formatLastWorkout(option.lastPerformedAt)}`
+			: 'no history';
+
+		return `${formatNumber(option.historyCount)} session${
+			option.historyCount === 1 ? '' : 's'
+		}, ${lastPerformedLabel}`;
+	}
+
+	function compareMergeExercisePreference(first: Exercise, second: Exercise) {
+		const firstOption = mergeOptionByExerciseId.get(first.id);
+		const secondOption = mergeOptionByExerciseId.get(second.id);
+
+		return (
+			compareOptionalRecency(firstOption?.lastPerformedAt, secondOption?.lastPerformedAt) ||
+			(secondOption?.historyCount ?? 0) - (firstOption?.historyCount ?? 0) ||
+			first.name.localeCompare(second.name)
+		);
+	}
+
+	function getMergePickerExercisePosition(exerciseId: string) {
+		return selectedMergePickerExerciseIdSet.has(exerciseId) ? 1 : null;
 	}
 
 	function formatFileList(files: string[]) {
@@ -314,6 +530,162 @@
 					</div>
 				</dl>
 			</div>
+		</section>
+
+		<section
+			class="grid min-w-0 gap-3 overflow-hidden rounded-lg border border-white/10 bg-white/[0.04] p-4"
+		>
+			<div class="flex items-start gap-3">
+				<div
+					class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-300/25 bg-emerald-300/10 text-emerald-100"
+				>
+					<Icon name="history" class="h-5 w-5" />
+				</div>
+				<div class="min-w-0">
+					<p class="text-xs font-semibold tracking-[0.18em] text-zinc-500 uppercase">
+						Merge exercises
+					</p>
+					<p class="mt-1 max-w-full text-sm leading-5 break-words text-zinc-300">
+						Copy history from one exercise onto a main exercise. Original rows stay unchanged, and
+						existing main history wins conflicts.
+					</p>
+				</div>
+			</div>
+
+			<div class="grid min-w-0 gap-3">
+				<div class="grid min-w-0 gap-2 text-sm font-semibold text-white">
+					Main exercise
+					<button
+						class="flex min-h-[3.25rem] w-full min-w-0 items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-left text-sm font-medium text-zinc-200"
+						type="button"
+						disabled={!api || isMergingExercises || mergeOptions.length < 2}
+						onclick={() => openMergeExercisePicker('main')}
+					>
+						<span class="min-w-0 flex-1">
+							<span class="block truncate">
+								{selectedMainMergeOption?.exercise.name ?? 'Select main exercise'}
+							</span>
+							{#if selectedMainMergeOption}
+								<span class="mt-1 block truncate text-xs text-zinc-500">
+									{formatExerciseMergeMetadata(selectedMainMergeOption.exercise)}
+								</span>
+							{/if}
+						</span>
+						<Icon name="chevron-right" class="h-4 w-4 shrink-0 text-zinc-500" />
+					</button>
+				</div>
+
+				<div class="grid min-w-0 gap-2 text-sm font-semibold text-white">
+					Secondary exercise
+					<button
+						class="flex min-h-[3.25rem] w-full min-w-0 items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-left text-sm font-medium text-zinc-200"
+						type="button"
+						disabled={!api || isMergingExercises || !mainMergeExerciseId}
+						onclick={() => openMergeExercisePicker('secondary')}
+					>
+						<span class="min-w-0 flex-1">
+							<span class="block truncate">
+								{selectedSecondaryMergeOption?.exercise.name ?? 'Select secondary exercise'}
+							</span>
+							{#if selectedSecondaryMergeOption}
+								<span class="mt-1 block truncate text-xs text-zinc-500">
+									{formatExerciseMergeMetadata(selectedSecondaryMergeOption.exercise)}
+								</span>
+							{/if}
+						</span>
+						<Icon name="chevron-right" class="h-4 w-4 shrink-0 text-zinc-500" />
+					</button>
+				</div>
+
+				{#if selectedMainMergeOption}
+					<label class="grid min-w-0 gap-2 text-sm font-semibold text-white">
+						Main exercise name
+						<input
+							class="min-h-[3.25rem] w-full min-w-0 rounded-lg border border-white/10 bg-zinc-950 px-3 text-sm font-medium text-zinc-200 disabled:text-zinc-500"
+							type="text"
+							disabled={!selectedMainMergeOption.canRename || isMergingExercises}
+							bind:value={mergeExerciseName}
+						/>
+					</label>
+
+					{#if !selectedMainMergeOption.canRename}
+						<p class="text-xs leading-5 text-zinc-500">
+							Built-in exercise names cannot be renamed here.
+						</p>
+					{/if}
+				{/if}
+
+				{#if selectedMainMergeOption && selectedSecondaryMergeOption}
+					<div class="grid min-w-0 gap-2 rounded-lg border border-white/10 bg-black/20 p-3 text-sm">
+						<div class="flex items-center justify-between gap-3">
+							<span class="text-zinc-400">Main keeps</span>
+							<span class="min-w-0 text-right font-semibold break-words text-white">
+								{selectedMainMergeOption.exercise.name}
+							</span>
+						</div>
+						<div class="flex items-center justify-between gap-3">
+							<span class="text-zinc-400">Copy from</span>
+							<span class="min-w-0 text-right font-semibold break-words text-white">
+								{selectedSecondaryMergeOption.exercise.name}
+							</span>
+						</div>
+					</div>
+				{/if}
+
+				<button
+					class="flex min-h-[3.25rem] w-full min-w-0 items-center justify-center gap-3 rounded-lg bg-emerald-300 px-4 text-base font-bold whitespace-normal text-zinc-950 transition disabled:bg-zinc-700 disabled:text-zinc-400"
+					type="button"
+					disabled={!canSubmitExerciseMerge}
+					onclick={mergeExercises}
+				>
+					{#if isMergingExercises}
+						<Icon name="loader-circle" class="h-5 w-5 animate-spin" />
+						Merging
+					{:else}
+						<Icon name="history" class="h-5 w-5" />
+						Merge exercise history
+					{/if}
+				</button>
+			</div>
+
+			{#if mergeStatusMessage}
+				<p class="text-center text-sm font-medium text-emerald-100">{mergeStatusMessage}</p>
+			{/if}
+
+			{#if mergeResult}
+				<div class="grid gap-2 rounded-lg border border-white/10 bg-black/20 p-3">
+					<dl class="grid grid-cols-2 gap-3 text-sm">
+						<div>
+							<dt class="text-zinc-500">Copied exercises</dt>
+							<dd class="font-semibold text-white">
+								{formatNumber(mergeResult.copiedSessionExercises)}
+							</dd>
+						</div>
+						<div>
+							<dt class="text-zinc-500">Copied sets</dt>
+							<dd class="font-semibold text-white">
+								{formatNumber(mergeResult.copiedSessionSets)}
+							</dd>
+						</div>
+						<div>
+							<dt class="text-zinc-500">Main conflicts</dt>
+							<dd class="font-semibold text-white">
+								{formatNumber(mergeResult.skippedConflicts)}
+							</dd>
+						</div>
+						<div>
+							<dt class="text-zinc-500">Rename</dt>
+							<dd class="font-semibold text-white">
+								{mergeResult.renamed ? 'Updated' : 'Unchanged'}
+							</dd>
+						</div>
+					</dl>
+
+					{#if mergeResult.syncStatus === 'failed'}
+						<p class="text-xs leading-5 text-red-100">Sync failed: {mergeResult.syncError}</p>
+					{/if}
+				</div>
+			{/if}
 		</section>
 
 		<section class="grid gap-3 rounded-lg border border-white/10 bg-white/[0.04] p-4">
@@ -529,3 +901,32 @@
 		</section>
 	{/if}
 </section>
+
+{#if mergePickerTarget}
+	<ExercisePickerSheet
+		exerciseSearch={mergeExerciseSearch}
+		newExerciseName=""
+		isNewExerciseUnilateral={false}
+		visiblePickerExercises={visibleMergePickerExercises}
+		hiddenPickerExerciseCount={hiddenMergePickerExerciseCount}
+		selectedPickerExerciseIdSet={selectedMergePickerExerciseIdSet}
+		selectedExerciseIds={disabledMergePickerExerciseIds}
+		addSelectedLabel={mergePickerSubmitLabel}
+		submitDisabled={selectedMergePickerExerciseIds.length !== 1}
+		canCreateCustomExercise={false}
+		isSaving={isMergingExercises}
+		sheetEyebrow={mergePickerTarget === 'main' ? 'Main exercise' : 'Secondary exercise'}
+		sheetTitle={mergePickerTarget === 'main' ? 'Pick the head exercise' : 'Pick history to copy'}
+		onClose={closeMergeExercisePicker}
+		onExerciseSearchInput={handleMergeExerciseSearchInput}
+		onCustomExerciseNameInput={() => {}}
+		onTogglePickerExercise={toggleMergePickerExercise}
+		onToggleUnilateral={() => {}}
+		onCreateExercise={(event) => event.preventDefault()}
+		onAddSelected={applyMergePickerExercise}
+		isPreviouslyUsedExercise={(exercise) =>
+			(mergeOptionByExerciseId.get(exercise.id)?.historyCount ?? 0) > 0}
+		getPickerExercisePosition={getMergePickerExercisePosition}
+		getExerciseMetadata={formatExerciseMergeMetadata}
+	/>
+{/if}

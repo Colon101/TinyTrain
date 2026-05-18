@@ -24,7 +24,8 @@
 		onCreateExercise,
 		onAddSelected,
 		isPreviouslyUsedExercise,
-		getPickerExercisePosition
+		getPickerExercisePosition,
+		getExerciseMetadata = null
 	}: {
 		exerciseSearch: string;
 		newExerciseName: string;
@@ -48,6 +49,7 @@
 		onAddSelected: () => void;
 		isPreviouslyUsedExercise: (exercise: Exercise) => boolean;
 		getPickerExercisePosition: (exerciseId: string) => number | null;
+		getExerciseMetadata?: ((exercise: Exercise) => string) | null;
 	} = $props();
 </script>
 
@@ -106,6 +108,9 @@
 								{exercise.source === 'custom' ? 'Custom' : 'Built-in'} · {exercise.unilateral
 									? 'Unilateral'
 									: 'Bilateral'}
+								{#if getExerciseMetadata?.(exercise)}
+									<span> · {getExerciseMetadata(exercise)}</span>
+								{/if}
 								{#if isPreviouslyUsedExercise(exercise)}
 									<span class="text-emerald-200"> · Previously used</span>
 								{/if}
