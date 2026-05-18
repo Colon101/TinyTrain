@@ -87,7 +87,7 @@
 			<div class="mt-4 grid gap-3">
 				{#each visiblePickerExercises as exercise (exercise.id)}
 					<button
-						class={`flex min-h-14 items-start justify-between gap-3 rounded-lg border px-4 py-3 text-left transition ${
+						class={`flex min-h-14 w-full items-start justify-between gap-3 overflow-hidden rounded-lg border px-4 py-3 text-left transition ${
 							selectedExerciseIds.has(exercise.id)
 								? 'border-white/10 bg-white/[0.02] text-zinc-500'
 								: selectedPickerExerciseIdSet.has(exercise.id)
@@ -98,8 +98,8 @@
 						disabled={selectedExerciseIds.has(exercise.id)}
 						onclick={() => onTogglePickerExercise(exercise.id)}
 					>
-						<div class="min-w-0 flex-1">
-							<p class="line-clamp-2 text-sm leading-5 font-semibold break-words">
+						<div class="min-w-0 flex-1 overflow-hidden">
+							<p class="line-clamp-2 text-sm leading-5 font-semibold wrap-break-word">
 								{exercise.name}
 							</p>
 							<p class="mt-1 text-xs text-zinc-400">

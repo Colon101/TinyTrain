@@ -1742,6 +1742,26 @@ function compareSessionRows(
 	);
 }
 
+function getWorkoutSessionRecencyTimestamp(session: WorkoutSession) {
+	return session.completedAt ?? session.startedAt ?? session.createdAt;
+}
+
+function compareOptionalRecency(first?: string, second?: string) {
+	if (first && second && first !== second) {
+		return second.localeCompare(first);
+	}
+
+	if (first && !second) {
+		return -1;
+	}
+
+	if (!first && second) {
+		return 1;
+	}
+
+	return 0;
+}
+
 function getSessionExerciseSortTime(
 	sessionExercise: Pick<SessionExercise, 'performedAt'>,
 	session: Pick<WorkoutSession, 'startedAt' | 'createdAt'>
@@ -1763,7 +1783,7 @@ function compareHistoricalSessionExerciseMatches(
 }
 
 async function listEquivalentExerciseIds(exerciseId: string) {
-	const exercise = await db.exercises.get(exerciseId);
+	const exercise = await getExercise(exerciseId);
 
 	if (!exercise) {
 		return [exerciseId];
@@ -1788,7 +1808,7 @@ async function listEquivalentExerciseIds(exerciseId: string) {
 async function listHistoricalSessionExerciseMatches(
 	exerciseId: string
 ): Promise<HistoricalSessionExerciseMatch[]> {
-	const exercise = await db.exercises.get(exerciseId);
+	const exercise = await getExercise(exerciseId);
 	const equivalentExerciseIds = await listEquivalentExerciseIds(exerciseId);
 	const normalizedName = exercise ? normalizeName(exercise.normalizedName || exercise.name) : '';
 	const [idMatchedSessionExercises, nameMatchedSessionExercises] = await Promise.all([
@@ -2454,6 +2474,119 @@ export async function listCustomExerciseItems(): Promise<ExerciseListItem[]> {
 	}));
 }
 
+export async function listExerciseItems(): Promise<ExerciseListItem[]> {
+	const [customExercises, sessionExercises] = await Promise.all([
+		listCustomExercises(),
+		db.sessionExercises.toArray()
+	]);
+	const sessionIds = [
+		...new Set(sessionExercises.map((sessionExercise) => sessionExercise.sessionId))
+	];
+	const sessions = sessionIds.length === 0 ? [] : await db.workoutSessions.bulkGet(sessionIds);
+	const sessionById = new Map(sessions.filter(isDefined).map((session) => [session.id, session]));
+	const usageByNormalizedName = new Map<
+		string,
+		{
+			historySessionIds: Set<string>;
+			lastPerformedAt?: string;
+		}
+	>();
+
+	for (const sessionExercise of sessionExercises) {
+		const session = sessionById.get(sessionExercise.sessionId);
+
+		if (!session || session.status === 'planned') {
+			continue;
+		}
+
+		const normalizedName = normalizeName(sessionExercise.exerciseNameSnapshot);
+
+		if (!normalizedName) {
+			continue;
+		}
+
+		const performedAt =
+			session.completedAt ?? session.startedAt ?? sessionExercise.performedAt ?? session.createdAt;
+		const usage = usageByNormalizedName.get(normalizedName) ?? {
+			historySessionIds: new Set<string>(),
+			lastPerformedAt: undefined
+		};
+
+		usage.historySessionIds.add(sessionExercise.sessionId);
+
+		if (!usage.lastPerformedAt || usage.lastPerformedAt < performedAt) {
+			usage.lastPerformedAt = performedAt;
+		}
+
+		usageByNormalizedName.set(normalizedName, usage);
+	}
+
+	const customByNormalizedName = new Map(
+		customExercises.map((exercise) => [exercise.normalizedName, exercise])
+	);
+	const performedNormalizedNames = [...usageByNormalizedName.keys()];
+	const preferredExercises = await getPreferredExerciseByNormalizedNames(performedNormalizedNames);
+	const itemsByNormalizedName = new Map<string, ExerciseListItem>();
+
+	for (const [normalizedName, usage] of usageByNormalizedName.entries()) {
+		const exercise = [
+			preferredExercises.get(normalizedName),
+			BASELINE_EXERCISE_BY_NORMALIZED_NAME.get(normalizedName),
+			customByNormalizedName.get(normalizedName)
+		]
+			.filter(isDefined)
+			.find((candidate) => !candidate.archived);
+
+		if (!exercise) {
+			continue;
+		}
+
+		itemsByNormalizedName.set(normalizedName, {
+			exercise,
+			historyCount: usage.historySessionIds.size,
+			lastPerformedAt: usage.lastPerformedAt
+		});
+	}
+
+	for (const exercise of customExercises) {
+		if (itemsByNormalizedName.has(exercise.normalizedName)) {
+			continue;
+		}
+
+		itemsByNormalizedName.set(exercise.normalizedName, {
+			exercise,
+			historyCount: 0
+		});
+	}
+
+	const exerciseIds = [...itemsByNormalizedName.values()].map((item) => item.exercise.id);
+	const resetEvents =
+		exerciseIds.length === 0
+			? []
+			: await db.exerciseResetEvents.where('exerciseId').anyOf(exerciseIds).toArray();
+	const latestResetAtByExerciseId = new Map<string, string>();
+
+	for (const resetEvent of resetEvents) {
+		const currentValue = latestResetAtByExerciseId.get(resetEvent.exerciseId);
+
+		if (!currentValue || currentValue < resetEvent.resetAt) {
+			latestResetAtByExerciseId.set(resetEvent.exerciseId, resetEvent.resetAt);
+		}
+	}
+
+	return [...itemsByNormalizedName.values()]
+		.map((item) => ({
+			...item,
+			latestResetAt: latestResetAtByExerciseId.get(item.exercise.id)
+		}))
+		.sort(
+			(first, second) =>
+				compareOptionalRecency(first.lastPerformedAt, second.lastPerformedAt) ||
+				second.historyCount - first.historyCount ||
+				first.exercise.name.localeCompare(second.exercise.name)
+		);
+}
+
 export async function getExercise(exerciseId: string) {
 	const baselineExercise = BASELINE_EXERCISE_BY_ID.get(exerciseId);
 
@@ -2628,6 +2761,32 @@ export async function listWorkouts() {
 	return workouts
 		.filter((workout) => !workout.archived)
 		.sort((first, second) => first.name.localeCompare(second.name));
+}
+
+export async function listWorkoutSchedulingOptions() {
+	const [workouts, sessions] = await Promise.all([listWorkouts(), db.workoutSessions.toArray()]);
+	const latestSessionAtByWorkoutId = new Map<string, string>();
+
+	for (const session of sessions) {
+		if (session.status === 'planned') {
+			continue;
+		}
+
+		const sessionAt = getWorkoutSessionRecencyTimestamp(session);
+		const currentValue = latestSessionAtByWorkoutId.get(session.workoutId);
+
+		if (!currentValue || currentValue < sessionAt) {
+			latestSessionAtByWorkoutId.set(session.workoutId, sessionAt);
+		}
+	}
+
+	return workouts.sort(
+		(first, second) =>
+			compareOptionalRecency(
+				latestSessionAtByWorkoutId.get(first.id),
+				latestSessionAtByWorkoutId.get(second.id)
+			) || first.name.localeCompare(second.name)
+	);
 }
 
 export async function createWorkout(name: string) {

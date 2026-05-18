@@ -172,7 +172,7 @@
 		const [nextDayOverview, nextCurrentSession, nextWorkouts] = await Promise.all([
 			api.getDayOverview(selectedDayKey),
 			api.getCurrentInProgressSession(),
-			api.listWorkouts()
+			api.listWorkoutSchedulingOptions()
 		]);
 		dayOverview = nextDayOverview;
 		currentSession = nextCurrentSession;

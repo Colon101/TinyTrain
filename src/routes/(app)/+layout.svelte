@@ -333,7 +333,7 @@
 			return `${resolve('/')}${path.slice(1)}`;
 		}
 
-		return resolve(path as '/' | '/workouts' | `/sessions/${string}`);
+		return resolve(path as '/' | '/workouts' | '/exercises' | `/sessions/${string}`);
 	}
 
 	function getParentPath(pathname: string): string {
@@ -343,6 +343,12 @@
 
 		if (pathname === '/workouts/new') {
 			return '/workouts';
+		}
+
+		const exerciseDetailMatch = pathname.match(/^\/exercises\/.+$/);
+
+		if (exerciseDetailMatch) {
+			return '/exercises';
 		}
 
 		const workoutDetailMatch = pathname.match(/^\/workouts\/[^/]+$/);

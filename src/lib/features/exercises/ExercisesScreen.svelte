@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import type { ExerciseDetail, ExerciseListItem } from '$lib/db';
@@ -13,6 +14,7 @@
 	type DatabaseApi = typeof import('$lib/db');
 	type DetailTab = 'summary' | 'history';
 
+	let { exerciseId = null }: { exerciseId?: string | null } = $props();
 	let api = $state<DatabaseApi | null>(null);
 	let items = $state<ExerciseListItem[]>([]);
 	let selectedDetail = $state<ExerciseDetail | null>(null);
@@ -36,7 +38,11 @@
 
 				api = dbApi;
 				await dbApi.ensureDbOpen();
-				await loadItems();
+				if (exerciseId) {
+					await loadDetail(exerciseId);
+				} else {
+					await loadItems();
+				}
 			} catch (error) {
 				errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
 				isLoading = false;
@@ -54,18 +60,25 @@
 		}
 
 		isLoading = true;
-		items = await api.listCustomExerciseItems();
+		items = await api.listExerciseItems();
 		isLoading = false;
 	}
 
-	async function openExercise(exerciseId: string) {
+	async function loadDetail(nextExerciseId: string) {
 		if (!api) {
 			return;
 		}
 
+		isLoading = true;
 		errorMessage = '';
-		selectedDetail = await api.getExerciseDetail(exerciseId);
+		selectedDetail = await api.getExerciseDetail(nextExerciseId);
+		errorMessage = selectedDetail ? '' : 'Exercise not found.';
 		detailTab = 'summary';
+		isLoading = false;
+	}
+
+	async function openExercise(nextExerciseId: string) {
+		await goto(`${resolve('/exercises')}/${encodeURIComponent(nextExerciseId)}`);
 	}
 
 	async function handleCreateExercise(event: SubmitEvent) {
@@ -82,7 +95,6 @@
 			const exercise = await api.createCustomExercise(draftName, draftUnilateral);
 			draftName = '';
 			draftUnilateral = false;
-			await loadItems();
 			await openExercise(exercise.id);
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
@@ -92,7 +104,12 @@
 	}
 
 	async function toggleUnilateral(nextValue: boolean) {
-		if (!api || !selectedDetail || selectedDetail.exercise.unilateral === nextValue) {
+		if (
+			!api ||
+			!selectedDetail ||
+			selectedDetail.exercise.source !== 'custom' ||
+			selectedDetail.exercise.unilateral === nextValue
+		) {
 			return;
 		}
 
@@ -150,17 +167,21 @@
 		</section>
 	{:else if selectedDetail}
 		<div class="pb-5">
-			<button
-				class="flex min-h-10 items-center gap-2 rounded-lg border border-white/10 px-3 text-sm font-medium text-zinc-300"
-				type="button"
-				onclick={() => (selectedDetail = null)}
-			>
-				<Icon name="arrow-left" class="h-4 w-4" />
-				Back
-			</button>
+			{#if !exerciseId}
+				<button
+					class="flex min-h-10 items-center gap-2 rounded-lg border border-white/10 px-3 text-sm font-medium text-zinc-300"
+					type="button"
+					onclick={() => (selectedDetail = null)}
+				>
+					<Icon name="arrow-left" class="h-4 w-4" />
+					Back
+				</button>
+			{/if}
 			<h1 class="mt-4 text-3xl font-semibold text-white">{selectedDetail.exercise.name}</h1>
 			<p class="mt-2 text-sm leading-6 text-zinc-400">
-				Manage how this custom movement behaves in the tracker.
+				{selectedDetail.exercise.source === 'custom'
+					? 'Manage how this custom movement behaves in the tracker.'
+					: 'Review your history for this built-in movement.'}
 			</p>
 		</div>
 
@@ -192,6 +213,7 @@
 							: 'border border-white/10 text-zinc-300'
 					}`}
 					type="button"
+					disabled={selectedDetail.exercise.source !== 'custom' || isSaving}
 					onclick={() => toggleUnilateral(false)}
 				>
 					Bilateral
@@ -203,6 +225,7 @@
 							: 'border border-white/10 text-zinc-300'
 					}`}
 					type="button"
+					disabled={selectedDetail.exercise.source !== 'custom' || isSaving}
 					onclick={() => toggleUnilateral(true)}
 				>
 					Unilateral
@@ -303,7 +326,7 @@
 			<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">TinyTrain</p>
 			<h1 class="mt-2 text-3xl font-semibold text-white">Exercises</h1>
 			<p class="mt-2 text-sm leading-6 text-zinc-400">
-				Manage your custom movements without mixing them into the built-in library.
+				Review your performed movements and manage custom exercises.
 			</p>
 		</div>
 
@@ -356,18 +379,22 @@
 
 		<section class="py-5">
 			<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
-				Custom library
+				Exercise history
 			</p>
 			{#if items.length > 0}
 				<div class="mt-4 grid gap-3">
 					{#each items as item (item.exercise.id)}
 						<button
-							class="flex min-h-16 items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-4 text-left transition hover:border-emerald-300/50"
+							class="flex min-h-16 w-full items-center justify-between gap-3 overflow-hidden rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-left transition hover:border-emerald-300/50"
 							type="button"
 							onclick={() => openExercise(item.exercise.id)}
 						>
-							<div class="min-w-0">
-								<p class="truncate text-base font-semibold text-white">{item.exercise.name}</p>
+							<div class="min-w-0 flex-1 overflow-hidden">
+								<p
+									class="line-clamp-2 text-base leading-5 font-semibold wrap-break-word text-white"
+								>
+									{item.exercise.name}
+								</p>
 								<p class="mt-1 text-sm text-zinc-400">
 									{item.exercise.unilateral ? 'Unilateral' : 'Bilateral'} · {formatHistoryCount(
 										item.historyCount
@@ -382,7 +409,7 @@
 				<div
 					class="mt-4 rounded-lg border border-dashed border-white/10 px-4 py-5 text-sm leading-6 text-zinc-400"
 				>
-					You have not created any custom exercises yet.
+					No exercise history yet.
 				</div>
 			{/if}
 		</section>
