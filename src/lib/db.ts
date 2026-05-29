@@ -257,6 +257,11 @@ type HistoricalSessionExerciseMatch = {
 	sessionExercise: SessionExercise;
 	sets: SessionSet[];
 };
+type SessionInputDraftSet = Partial<Record<`${SessionInputField}Input`, string>>;
+type SessionInputDraft = {
+	sessionId: string;
+	sets?: Record<string, SessionInputDraftSet>;
+};
 
 const EXAMPLE_WORKOUT_NAME = 'Upper Builder Demo';
 const EXAMPLE_EXERCISE_NAMES = ['Barbell Bench Press', 'Wide Grip Pull-up', 'Cable Lateral Raise'];
@@ -3584,26 +3589,79 @@ async function updateSessionSetInputs(
 		throw new Error('Set not found.');
 	}
 
-	const nextSet = withSessionSetDefaults(sessionSet);
 	const cleanInputValue = toCleanSessionInputValue(rawValue, field);
 	const parsedValue = toParsedInputValue(cleanInputValue, field);
 	const updatedAt = timestamp();
+	const patch: Partial<SessionSet> = { updatedAt };
 
 	if (field === 'weight') {
-		nextSet.weightInput = cleanInputValue;
-		nextSet.weight = parsedValue;
+		patch.weightInput = cleanInputValue;
+		patch.weight = parsedValue;
 	} else if (field === 'reps') {
-		nextSet.repsInput = cleanInputValue;
-		nextSet.reps = parsedValue;
+		patch.repsInput = cleanInputValue;
+		patch.reps = parsedValue;
 	} else {
-		nextSet.rirInput = cleanInputValue;
-		nextSet.rir = parsedValue;
+		patch.rirInput = cleanInputValue;
+		patch.rir = parsedValue;
 	}
 
-	nextSet.updatedAt = updatedAt;
-	await db.sessionSets.put(nextSet);
+	await db.sessionSets.update(sessionSetId, patch);
+	const nextSet = await db.sessionSets.get(sessionSetId);
 
-	return nextSet;
+	if (!nextSet) {
+		throw new Error('Set not found.');
+	}
+
+	return withSessionSetDefaults(nextSet);
+}
+
+function getSessionInputDraftKey(sessionId: string) {
+	return `tinytrain:session-input-draft:${sessionId}`;
+}
+
+function readSessionInputDraft(sessionId: string) {
+	if (!browser) {
+		return null;
+	}
+
+	try {
+		const rawDraft = localStorage.getItem(getSessionInputDraftKey(sessionId));
+		const draft = rawDraft ? (JSON.parse(rawDraft) as SessionInputDraft) : null;
+
+		if (!draft || draft.sessionId !== sessionId || !draft.sets) {
+			return null;
+		}
+
+		return draft;
+	} catch {
+		return null;
+	}
+}
+
+function clearSessionInputDraft(sessionId: string) {
+	if (browser) {
+		localStorage.removeItem(getSessionInputDraftKey(sessionId));
+	}
+}
+
+async function flushSessionInputDraft(sessionId: string) {
+	const draft = readSessionInputDraft(sessionId);
+
+	if (!draft?.sets) {
+		return;
+	}
+
+	for (const [sessionSetId, draftSet] of Object.entries(draft.sets)) {
+		for (const field of ['weight', 'reps', 'rir'] as const) {
+			const fieldKey = `${field}Input` as const;
+
+			if (!Object.hasOwn(draftSet, fieldKey)) {
+				continue;
+			}
+
+			await updateSessionSetInputs(sessionSetId, field, draftSet[fieldKey] ?? '');
+		}
+	}
 }
 
 export async function cleanupStaleSessions(todayDayKey = toDayKey(new Date())) {
@@ -4256,6 +4314,8 @@ export async function completeWorkoutSession(sessionId: string) {
 		return;
 	}
 
+	await flushSessionInputDraft(sessionId);
+
 	const now = timestamp();
 
 	await db.transaction(
@@ -4274,6 +4334,8 @@ export async function completeWorkoutSession(sessionId: string) {
 			});
 		}
 	);
+
+	clearSessionInputDraft(sessionId);
 
 	void syncNow().catch((error) => {
 		console.warn('Background Supabase sync failed.', error);

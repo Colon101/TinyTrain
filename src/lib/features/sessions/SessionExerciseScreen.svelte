@@ -2,6 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { browser } from '$app/environment';
 	import { onMount, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import type {
@@ -25,6 +26,15 @@
 
 	type DatabaseApi = typeof import('$lib/db');
 	type PickerMode = 'add' | 'swap';
+	type SessionInputFieldKey = `${SessionInputField}Input`;
+	type SessionInputDraftSet = Partial<Record<SessionInputFieldKey, string>> & {
+		updatedAt: number;
+	};
+	type SessionInputDraft = {
+		sessionId: string;
+		sets: Record<string, SessionInputDraftSet>;
+		updatedAt: number;
+	};
 
 	let {
 		sessionId,
@@ -35,9 +45,15 @@
 	} = $props();
 	const cachedSessionData = untrack(() => readSessionDataCache(sessionId));
 	const cachedExercisePickerData = untrack(() => readExercisePickerCache());
+	const cachedSessionInputDraft = untrack(
+		() => readSessionInputDraft(sessionId) ?? createEmptySessionInputDraft(sessionId)
+	);
 
 	let api = $state<DatabaseApi | null>(null);
-	let overview = $state<SessionOverview | null>(cachedSessionData?.overview ?? null);
+	let sessionInputDraft = $state<SessionInputDraft>(cachedSessionInputDraft);
+	let overview = $state<SessionOverview | null>(
+		applySessionInputDraft(cachedSessionData?.overview ?? null)
+	);
 	let exercises = $state<Exercise[]>(
 		cachedSessionData?.exercises ?? cachedExercisePickerData?.exercises ?? []
 	);
@@ -176,10 +192,11 @@
 		const dbApi = requireApi();
 		void dbApi.cleanupStaleSessions();
 		const nextOverview = await dbApi.getEditableSession(sessionId);
+		const nextOverviewWithDraft = applySessionInputDraft(nextOverview);
 
-		overview = nextOverview;
+		overview = nextOverviewWithDraft;
 		writeSessionDataCache(sessionId, {
-			overview: nextOverview,
+			overview: nextOverviewWithDraft,
 			exercises,
 			exerciseUsagePreferences
 		});
@@ -255,6 +272,123 @@
 		}
 
 		return field === 'reps' || field === 'rir' ? `${Math.round(value)}` : formatInputValue(value);
+	}
+
+	function getSessionInputDraftKey(draftSessionId: string) {
+		return `tinytrain:session-input-draft:${draftSessionId}`;
+	}
+
+	function createEmptySessionInputDraft(draftSessionId: string): SessionInputDraft {
+		return {
+			sessionId: draftSessionId,
+			sets: {},
+			updatedAt: Date.now()
+		};
+	}
+
+	function readSessionInputDraft(draftSessionId: string) {
+		if (!browser) {
+			return null;
+		}
+
+		try {
+			const rawDraft = localStorage.getItem(getSessionInputDraftKey(draftSessionId));
+			const parsedDraft = rawDraft ? (JSON.parse(rawDraft) as Partial<SessionInputDraft>) : null;
+
+			if (!parsedDraft || parsedDraft.sessionId !== draftSessionId || !parsedDraft.sets) {
+				return null;
+			}
+
+			return {
+				sessionId: draftSessionId,
+				sets: parsedDraft.sets,
+				updatedAt: parsedDraft.updatedAt ?? Date.now()
+			};
+		} catch {
+			return null;
+		}
+	}
+
+	function writeSessionInputDraft(draft: SessionInputDraft) {
+		if (!browser) {
+			return;
+		}
+
+		localStorage.setItem(getSessionInputDraftKey(draft.sessionId), JSON.stringify(draft));
+	}
+
+	function clearSessionInputDraft(draftSessionId: string) {
+		sessionInputDraft = createEmptySessionInputDraft(draftSessionId);
+
+		if (browser) {
+			localStorage.removeItem(getSessionInputDraftKey(draftSessionId));
+		}
+	}
+
+	function getInputFieldKey(field: SessionInputField): SessionInputFieldKey {
+		return `${field}Input`;
+	}
+
+	function hasDraftInputValue(
+		draftSet: SessionInputDraftSet | undefined,
+		fieldKey: SessionInputFieldKey
+	) {
+		return Boolean(draftSet && Object.hasOwn(draftSet, fieldKey));
+	}
+
+	function writeDraftInput(sessionSetId: string, field: SessionInputField, rawValue: string) {
+		const now = Date.now();
+		const fieldKey = getInputFieldKey(field);
+		const nextDraft = {
+			...sessionInputDraft,
+			sets: {
+				...sessionInputDraft.sets,
+				[sessionSetId]: {
+					...(sessionInputDraft.sets[sessionSetId] ?? { updatedAt: now }),
+					[fieldKey]: rawValue,
+					updatedAt: now
+				}
+			},
+			updatedAt: now
+		};
+
+		sessionInputDraft = nextDraft;
+		writeSessionInputDraft(nextDraft);
+	}
+
+	function applyDraftToSessionSet(sessionSet: SessionSetOverview) {
+		const draftSet = sessionInputDraft.sets[sessionSet.id];
+		const overrides: Partial<SessionSetOverview> = {};
+
+		for (const field of ['weight', 'reps', 'rir'] as const) {
+			const fieldKey = getInputFieldKey(field);
+
+			if (!hasDraftInputValue(draftSet, fieldKey)) {
+				continue;
+			}
+
+			const rawValue = draftSet?.[fieldKey] ?? '';
+			overrides[fieldKey] = rawValue;
+			overrides[field] = parseInputValue(rawValue);
+		}
+
+		return Object.keys(overrides).length > 0
+			? rebuildSetOverview(sessionSet, overrides)
+			: sessionSet;
+	}
+
+	function applySessionInputDraft(nextOverview: SessionOverview | null) {
+		if (!nextOverview || nextOverview.summary.status !== 'in_progress') {
+			return nextOverview;
+		}
+
+		return {
+			...nextOverview,
+			exercises: nextOverview.exercises.map((sessionExercise) => ({
+				...sessionExercise,
+				sets: sessionExercise.sets.map(applyDraftToSessionSet)
+			}))
+		};
 	}
 
 	function createFieldDelta(current?: number, previous?: number): SessionFieldDelta {
@@ -372,19 +506,13 @@
 		}
 
 		const key = `${sessionSetId}:${field}`;
-		const nextVersion = (inputVersions.get(key) ?? 0) + 1;
-		inputVersions.set(key, nextVersion);
+		inputVersions.set(key, (inputVersions.get(key) ?? 0) + 1);
+		writeDraftInput(sessionSetId, field, rawValue);
 		applyLocalInput(sessionSetId, field, rawValue);
 
 		void (async () => {
 			try {
-				const updatedSet = await requireApi().updateSessionSetInput(sessionSetId, field, rawValue);
-
-				if (inputVersions.get(key) !== nextVersion) {
-					return;
-				}
-
-				updateOverviewSet(sessionSetId, (sessionSet) => rebuildSetOverview(sessionSet, updatedSet));
+				await requireApi().updateSessionSetInput(sessionSetId, field, rawValue);
 			} catch (error) {
 				errorMessage = getErrorMessage(error);
 				await loadData();
@@ -440,6 +568,7 @@
 		);
 
 		for (const [field, rawValue] of values) {
+			writeDraftInput(sessionSet.id, field, rawValue);
 			applyLocalInput(sessionSet.id, field, rawValue);
 		}
 
@@ -704,6 +833,7 @@
 				await requireApi().completeWorkoutSession(sessionId);
 			},
 			async () => {
+				clearSessionInputDraft(sessionId);
 				await goto(resolve('/(app)/sessions/[sessionId]', { sessionId }), { replaceState: true });
 			}
 		);
