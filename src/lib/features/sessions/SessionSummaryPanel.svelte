@@ -96,7 +96,7 @@
 </script>
 
 <section class="border-y border-white/10 py-5">
-	{#if overview.summary.status == 'completed' || overview.summary.status === 'abandoned'} 
+	{#if overview.summary.status == 'completed' || overview.summary.status === 'abandoned'}
 		<div class="grid grid-cols-2 gap-x-5 gap-y-5">
 			{#each metrics as metric (metric.label)}
 				<div>
@@ -112,16 +112,16 @@
 				</div>
 			{/each}
 		</div>
-		{/if}
+	{/if}
 
-		{#if overview.summary.status === 'planned'}
-			<button
-				class="mt-4 flex min-h-12 w-full items-center justify-center rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
-				type="button"
-				disabled={isSaving}
-				onclick={onStartSession}
-			>
-				Start session
-			</button>
-		{/if}
-	</section>
+	{#if overview.summary.status === 'planned'}
+		<button
+			class="mt-4 flex min-h-12 w-full items-center justify-center rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
+			type="button"
+			disabled={isSaving}
+			onclick={onStartSession}
+		>
+			Start session
+		</button>
+	{/if}
+</section>

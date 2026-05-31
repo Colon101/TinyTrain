@@ -2,11 +2,7 @@
 	import { resolve } from '$app/paths';
 	import type { SessionSummary } from '$lib/db';
 	import Icon from '$lib/ui/Icon.svelte';
-	import {
-		formatDuration,
-		formatSessionStatus,
-		formatSessionTime
-	} from '$lib/features/sessions/session-format';
+	import { formatDuration, formatSessionTime } from '$lib/features/sessions/session-format';
 
 	let {
 		session,
@@ -23,30 +19,6 @@
 	} = $props();
 
 	let isPlanned = $derived(session.status === 'planned');
-
-	function getStatusIconName() {
-		if (session.status === 'completed') {
-			return 'check-circle';
-		}
-
-		if (session.status === 'abandoned') {
-			return 'x';
-		}
-
-		return 'activity';
-	}
-
-	function getStatusIconTone() {
-		if (session.status === 'completed') {
-			return 'text-emerald-300';
-		}
-
-		if (session.status === 'abandoned') {
-			return 'text-red-300';
-		}
-
-		return session.status === 'planned' ? 'text-zinc-400' : 'text-amber-300';
-	}
 </script>
 
 <article class="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-4">
@@ -61,13 +33,6 @@
 			</p>
 			<h2 class="mt-1 truncate text-xl font-semibold text-white">{session.workoutNameSnapshot}</h2>
 		</div>
-
-		<!-- <span
-			class="inline-flex items-center gap-2 rounded-full bg-white/[0.05] px-3 py-1 text-xs font-medium text-zinc-200"
-		>
-			<Icon name={getStatusIconName()} class={`h-3.5 w-3.5 ${getStatusIconTone()}`} />
-			{formatSessionStatus(session.status)}
-		</span> -->
 	</div>
 
 	<div class="mt-4 grid grid-cols-3 gap-3 border-t border-white/10 pt-4">

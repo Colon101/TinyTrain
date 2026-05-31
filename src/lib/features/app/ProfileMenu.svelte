@@ -117,9 +117,7 @@
 				<Icon name="loader-circle" class="h-8 w-8 animate-spin" />
 			</div>
 			<div class="grid gap-2">
-				<p id="manual-sync-title" class="text-xl font-semibold text-white">
-					Syncing
-				</p>
+				<p id="manual-sync-title" class="text-xl font-semibold text-white">Syncing</p>
 				<p class="text-sm font-semibold text-zinc-300">
 					{syncProgress.completedTables} / {syncProgress.totalTables} synced
 				</p>

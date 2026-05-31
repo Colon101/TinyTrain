@@ -47,8 +47,14 @@ function sqlString(value) {
 	return `'${String(value).replaceAll("'", "''")}'`;
 }
 
-const bilateral = readNames('BILATERAL_EXERCISE_NAMES').map((name) => ({ name, unilateral: false }));
-const unilateral = readNames('UNILATERAL_EXERCISE_NAMES').map((name) => ({ name, unilateral: true }));
+const bilateral = readNames('BILATERAL_EXERCISE_NAMES').map((name) => ({
+	name,
+	unilateral: false
+}));
+const unilateral = readNames('UNILATERAL_EXERCISE_NAMES').map((name) => ({
+	name,
+	unilateral: true
+}));
 const jointAction = readNames('JOINT_ACTION_EXERCISE_NAMES').map((name) => ({
 	name,
 	unilateral:

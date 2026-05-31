@@ -71,7 +71,9 @@ async function getCachedResponse(
 	return (
 		(await cache.match(request)) ??
 		(await cache.match(url.pathname)) ??
-		(options.appShellFallback && request.mode === 'navigate' ? await cache.match(APP_SHELL) : undefined)
+		(options.appShellFallback && request.mode === 'navigate'
+			? await cache.match(APP_SHELL)
+			: undefined)
 	);
 }
 

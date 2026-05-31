@@ -249,7 +249,8 @@
 		} else {
 			nextUrl.searchParams.delete('date');
 		}
-		void goto(`${nextUrl.pathname}${nextUrl.search}`, {
+		const nextPath = nextUrl.search ? (`/${nextUrl.search}` as `/?${string}`) : '/';
+		void goto(resolve(nextPath), {
 			keepFocus: true,
 			noScroll: true,
 			replaceState: true

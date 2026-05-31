@@ -24,4 +24,3 @@ export function writeSessionDataCache(
 		updatedAt: Date.now()
 	});
 }
-

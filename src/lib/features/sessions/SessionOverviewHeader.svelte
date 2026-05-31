@@ -22,12 +22,14 @@
 <div class={isInProgress ? 'pb-3' : 'pb-5'}>
 	<div class="min-w-0 pr-12">
 		{#if isInProgress}
-			<p class="text-md font-semibold tracking-[0.18em] text-emerald-200 uppercase pt-5 pb-3">Exercises</p>
+			<p class="text-md pt-5 pb-3 font-semibold tracking-[0.18em] text-emerald-200 uppercase">
+				Exercises
+			</p>
 		{:else}
 			<!-- <h1 class="text-3xl font-semibold text-white">
 				{overview.summary.workoutNameSnapshot}
 			</h1> -->
-			<p class="pt-3 mt-2 text-sm leading-6 text-zinc-400">
+			<p class="mt-2 pt-3 text-sm leading-6 text-zinc-400">
 				{formatDayHeading(overview.summary.dayKey)}
 				{#if isPlanned}
 					<span class="text-zinc-600"> · </span>Not started

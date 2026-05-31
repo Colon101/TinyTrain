@@ -78,7 +78,11 @@
 	}
 
 	async function openExercise(nextExerciseId: string) {
-		await goto(`${resolve('/exercises')}/${encodeURIComponent(nextExerciseId)}`);
+		await goto(
+			resolve('/(app)/exercises/[...exerciseId]', {
+				exerciseId: encodeURIComponent(nextExerciseId)
+			})
+		);
 	}
 
 	async function handleCreateExercise(event: SubmitEvent) {

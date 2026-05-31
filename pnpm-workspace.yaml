@@ -1,4 +1,5 @@
 overrides:
+  cookie: 0.7.2
   dexie: 4.4.2
 
 onlyBuiltDependencies:

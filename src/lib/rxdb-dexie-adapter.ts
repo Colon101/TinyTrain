@@ -140,7 +140,9 @@ class RxCollectionQuery<T extends PlainDoc> {
 	}
 
 	async sortBy(field: string) {
-		return (await this.toArray()).sort((first, second) => compareValues(first[field], second[field]));
+		return (await this.toArray()).sort((first, second) =>
+			compareValues(first[field], second[field])
+		);
 	}
 }
 
