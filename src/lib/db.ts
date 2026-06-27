@@ -3638,9 +3638,31 @@ function readSessionInputDraft(sessionId: string) {
 	}
 }
 
+function isSessionInputDraftSet(value: unknown): value is SessionInputDraftSet {
+	return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
 function clearSessionInputDraft(sessionId: string) {
-	if (browser) {
+	if (!browser) {
+		return;
+	}
+
+	try {
 		localStorage.removeItem(getSessionInputDraftKey(sessionId));
+	} catch {
+		// Draft cleanup should not block the underlying workout mutation.
+	}
+}
+
+function writeSessionInputDraft(sessionId: string, draft: SessionInputDraft) {
+	if (!browser) {
+		return;
+	}
+
+	try {
+		localStorage.setItem(getSessionInputDraftKey(sessionId), JSON.stringify(draft));
+	} catch {
+		// Draft cleanup should not block the underlying workout mutation.
 	}
 }
 
@@ -3651,7 +3673,39 @@ async function flushSessionInputDraft(sessionId: string) {
 		return;
 	}
 
-	for (const [sessionSetId, draftSet] of Object.entries(draft.sets)) {
+	const rawDraftEntries = Object.entries(draft.sets);
+	const draftEntries = rawDraftEntries.filter((entry): entry is [string, SessionInputDraftSet] =>
+		isSessionInputDraftSet(entry[1])
+	);
+	const staleSetIds = new Set(
+		rawDraftEntries
+			.filter(([, draftSet]) => !isSessionInputDraftSet(draftSet))
+			.map(([sessionSetId]) => sessionSetId)
+	);
+
+	if (draftEntries.length === 0) {
+		clearSessionInputDraft(sessionId);
+		return;
+	}
+
+	const existingSets = await db.sessionSets.bulkGet(
+		draftEntries.map(([sessionSetId]) => sessionSetId)
+	);
+	const existingSetIds = new Set(
+		existingSets.flatMap((sessionSet) => (sessionSet ? [sessionSet.id] : []))
+	);
+
+	for (const [sessionSetId] of draftEntries) {
+		if (!existingSetIds.has(sessionSetId)) {
+			staleSetIds.add(sessionSetId);
+		}
+	}
+
+	for (const [sessionSetId, draftSet] of draftEntries) {
+		if (staleSetIds.has(sessionSetId)) {
+			continue;
+		}
+
 		for (const field of ['weight', 'reps', 'rir'] as const) {
 			const fieldKey = `${field}Input` as const;
 
@@ -3659,9 +3713,36 @@ async function flushSessionInputDraft(sessionId: string) {
 				continue;
 			}
 
-			await updateSessionSetInputs(sessionSetId, field, draftSet[fieldKey] ?? '');
+			try {
+				await updateSessionSetInputs(sessionSetId, field, draftSet[fieldKey] ?? '');
+			} catch (error) {
+				if (error instanceof Error && error.message === 'Set not found.') {
+					staleSetIds.add(sessionSetId);
+					break;
+				}
+
+				throw error;
+			}
 		}
 	}
+
+	if (staleSetIds.size === 0) {
+		return;
+	}
+
+	const nextSets = Object.fromEntries(
+		draftEntries.filter(([sessionSetId]) => !staleSetIds.has(sessionSetId))
+	);
+
+	if (Object.keys(nextSets).length === 0) {
+		clearSessionInputDraft(sessionId);
+		return;
+	}
+
+	writeSessionInputDraft(sessionId, {
+		...draft,
+		sets: nextSets
+	});
 }
 
 export async function cleanupStaleSessions(todayDayKey = toDayKey(new Date())) {
