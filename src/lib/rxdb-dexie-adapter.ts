@@ -51,6 +51,18 @@ function stripRxMeta<T>(doc: RxDocument<T> | null | undefined): T | undefined {
 	return json as T;
 }
 
+function stripUndefinedValues<T extends Record<string, unknown>>(doc: T) {
+	const cleanDoc = { ...doc };
+
+	for (const [key, value] of Object.entries(cleanDoc)) {
+		if (value === undefined) {
+			delete cleanDoc[key];
+		}
+	}
+
+	return cleanDoc;
+}
+
 function compareValues(first: unknown, second: unknown) {
 	if (typeof first === 'number' && typeof second === 'number') {
 		return first - second;
@@ -165,10 +177,10 @@ export class RxTableAdapter<T extends PlainDoc> {
 	}
 
 	private withUserId(doc: Partial<T>) {
-		return {
+		return stripUndefinedValues({
 			...doc,
 			user_id: this.userId
-		} as T;
+		} as T);
 	}
 
 	async toArray() {
@@ -264,7 +276,24 @@ export class RxTableAdapter<T extends PlainDoc> {
 			return 0;
 		}
 
-		await doc.incrementalPatch(this.withUserId(patch));
+		const nextPatch = {
+			...patch,
+			user_id: this.userId
+		} as Record<string, unknown>;
+
+		await doc.incrementalModify((docData) => {
+			const mutableDocData = docData as Record<string, unknown>;
+
+			for (const [key, value] of Object.entries(nextPatch)) {
+				if (value === undefined) {
+					delete mutableDocData[key];
+				} else {
+					mutableDocData[key] = value;
+				}
+			}
+
+			return docData;
+		});
 		return 1;
 	}
 

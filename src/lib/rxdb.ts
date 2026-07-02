@@ -332,6 +332,21 @@ function normalizePulledDoc<T extends Record<string, unknown>>(
 	return nextDoc as T;
 }
 
+function normalizePushedDoc<T extends Record<string, unknown>>(
+	collectionName: CollectionKey,
+	doc: T
+) {
+	const nextDoc = { ...doc } as Record<string, unknown>;
+
+	for (const key of optionalFieldsByCollection[collectionName]) {
+		if (!(key in nextDoc) || nextDoc[key] === undefined) {
+			nextDoc[key] = null;
+		}
+	}
+
+	return nextDoc as T;
+}
+
 export function toSupabaseRowId(userId: string, localId: string) {
 	return localId.startsWith(`${userId}:`) ? localId : `${userId}:${localId}`;
 }
@@ -419,6 +434,16 @@ export async function reopenTinyTrainRxDatabase(userId: string): Promise<TinyTra
 	return getTinyTrainRxDatabase(userId);
 }
 
+export function stopSupabaseReplication(userId: string) {
+	const replications = replicationByUserId.get(userId);
+
+	for (const replication of replications ?? []) {
+		replication.cancel();
+	}
+
+	replicationByUserId.delete(userId);
+}
+
 export async function resetTinyTrainRxDatabase(userId: string) {
 	const existing = databaseByUserId.get(userId);
 	const replications = replicationByUserId.get(userId);
@@ -489,7 +514,11 @@ export async function startSupabaseReplication(userId: string) {
 						}
 				},
 				push: {
-					batchSize: replicationBatchSize
+					batchSize: replicationBatchSize,
+					modifier: (doc) =>
+						normalizePushedDoc(collectionName, doc as Record<string, unknown>) as SyncedRow & {
+							_deleted: boolean;
+						}
 				}
 			})
 	);

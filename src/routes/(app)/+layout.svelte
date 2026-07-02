@@ -119,6 +119,8 @@
 					clearCallbackTimeout();
 
 					if (!nextUser.isLoggedIn) {
+						isCheckingAuth = true;
+						sessionTimer = null;
 						void goto(resolve('/login'), { replaceState: true });
 						return;
 					}

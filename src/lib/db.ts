@@ -494,12 +494,18 @@ function startAuthBridge() {
 	authBridgeStarted = true;
 	void initializeSupabaseAuth();
 	subscribeToSupabaseAuth((snapshot) => {
+		if (!snapshot.user) {
+			if (!snapshot.isLoading) {
+				clearSupabaseRuntimeState();
+			}
+
+			activeUser.set(toSupabaseCloudUser());
+			return;
+		}
+
 		activeUser.set(toSupabaseCloudUser());
 
-		if (
-			snapshot.user &&
-			(activeBackend !== 'supabase-rxdb' || activeSupabaseUserId !== snapshot.user.id)
-		) {
+		if (activeBackend !== 'supabase-rxdb' || activeSupabaseUserId !== snapshot.user.id) {
 			activeUser.set({ isLoading: true });
 			dbOpenPromise = null;
 			supabaseBackendActivationPromise ??= selectBackend()
@@ -516,6 +522,28 @@ function startAuthBridge() {
 				});
 		}
 	});
+}
+
+function clearSupabaseRuntimeState() {
+	const previousUserId = activeSupabaseUserId;
+
+	lastStaleSessionCleanupKey = null;
+	backgroundSyncUserId = null;
+	activeBackend = 'supabase-rxdb';
+	activeSupabaseUserId = null;
+	rxDataDb = null;
+	dbOpenPromise = null;
+	activeSyncState.set({ phase: 'initial', status: 'not-started' });
+
+	if (!previousUserId) {
+		return;
+	}
+
+	void getRxRuntime()
+		.then(({ rxdb }) => rxdb.stopSupabaseReplication(previousUserId))
+		.catch((error) => {
+			console.warn('Supabase replication shutdown failed.', error);
+		});
 }
 
 async function getRxRuntime() {
@@ -566,10 +594,7 @@ async function selectBackend() {
 	const user = await getSupabaseUser();
 
 	if (!user) {
-		lastStaleSessionCleanupKey = null;
-		activeBackend = 'supabase-rxdb';
-		activeSupabaseUserId = null;
-		rxDataDb = null;
+		clearSupabaseRuntimeState();
 		activeUser.set(toSupabaseCloudUser());
 		return;
 	}
@@ -860,6 +885,8 @@ export async function runWithClosedDatabaseRetry<T>(operation: () => Promise<T>)
 export async function logoutFromCloud() {
 	await ensureDbOpen();
 	await logoutFromSupabase();
+	clearSupabaseRuntimeState();
+	activeUser.set(toSupabaseCloudUser());
 }
 
 export async function syncNow(options: SyncNowOptions = {}) {
@@ -1180,12 +1207,32 @@ function stripUndefinedFields(row: Record<string, unknown>) {
 	return cleanRow;
 }
 
-function toSupabaseUpsertRow(userId: string, row: SyncableRow) {
-	return stripUndefinedFields({
+const optionalSupabaseFieldsByTable: Record<SupabaseTableName, string[]> = {
+	exercises: [],
+	workouts: [],
+	workout_exercises: [],
+	workout_sessions: ['startedAt', 'completedAt'],
+	session_exercises: [],
+	session_sets: ['weightInput', 'repsInput', 'rirInput', 'weight', 'reps', 'rir'],
+	exercise_reset_events: []
+};
+
+function toSupabaseUpsertRow(userId: string, tableName: SupabaseTableName, row: SyncableRow) {
+	const upsertRow = stripUndefinedFields({
 		...row,
 		user_id: userId,
 		_deleted: false
 	});
+
+	const sourceRow = row as Record<string, unknown>;
+
+	for (const key of optionalSupabaseFieldsByTable[tableName]) {
+		if (!(key in sourceRow) || sourceRow[key] === undefined) {
+			upsertRow[key] = null;
+		}
+	}
+
+	return upsertRow;
 }
 
 async function fetchAllSupabaseRows<T extends SyncableRow>(
@@ -1234,7 +1281,7 @@ async function upsertSupabaseRows(
 	for (let index = 0; index < rows.length; index += pageSize) {
 		const pageRows = rows
 			.slice(index, index + pageSize)
-			.map((row) => toSupabaseUpsertRow(userId, row));
+			.map((row) => toSupabaseUpsertRow(userId, tableName, row));
 
 		if (pageRows.length === 0) {
 			continue;

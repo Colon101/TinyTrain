@@ -22,6 +22,16 @@ const DEPLOYMENT_MANIFEST = '/deployment.json';
 const DEV = import.meta.env.DEV;
 const LOG_PREFIX = '[TinyTrain service worker]';
 const CACHE_UPDATE_MESSAGE = 'TINYTRAIN_CACHE_UPDATE_CHECK';
+const AUTH_CACHE_PARAM_NAMES = [
+	'code',
+	'state',
+	'error',
+	'error_description',
+	'access_token',
+	'refresh_token',
+	'provider_token',
+	'provider_refresh_token'
+];
 
 const ASSETS = [
 	...build, // the app itself
@@ -108,6 +118,20 @@ function announceCacheUpdate(message: Omit<CacheUpdateMessage, 'type'>) {
 		.catch(() => undefined);
 }
 
+function hasAuthCacheParams(url: URL) {
+	for (const paramName of AUTH_CACHE_PARAM_NAMES) {
+		if (url.searchParams.has(paramName)) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+function isCacheableSameOriginUrl(url: URL) {
+	return url.origin === self.location.origin && !hasAuthCacheParams(url);
+}
+
 async function hasCurrentDeployment(cache: Cache) {
 	announceCacheUpdate({ status: 'checking' });
 
@@ -144,7 +168,7 @@ function hasVerifiedCurrentDeployment(cache: Cache) {
 }
 
 function cacheResponse(event: FetchEvent, cache: Cache, request: Request, response: Response) {
-	if (response.status === 200) {
+	if (response.status === 200 && isCacheableSameOriginUrl(new URL(request.url))) {
 		event.waitUntil(cache.put(request, response.clone()).catch(() => undefined));
 	}
 }
@@ -165,7 +189,7 @@ async function cacheUrls(urls: unknown) {
 			try {
 				const parsedUrl = new URL(url, self.location.origin);
 
-				if (parsedUrl.origin !== self.location.origin) {
+				if (!isCacheableSameOriginUrl(parsedUrl)) {
 					return;
 				}
 
@@ -249,19 +273,20 @@ self.addEventListener('fetch', (event) => {
 	async function respond() {
 		const url = new URL(event.request.url);
 		const isSameOrigin = url.origin === self.location.origin;
+		const isCacheableSameOrigin = isSameOrigin && isCacheableSameOriginUrl(url);
 		const cache = await caches.open(CACHE);
 
 		if (DEV) {
 			try {
 				const response = await fetchFresh(event.request);
 
-				if (isSameOrigin) {
+				if (isCacheableSameOrigin) {
 					cacheResponse(event, cache, event.request, response);
 				}
 
 				return response;
 			} catch (err) {
-				if (isSameOrigin) {
+				if (isCacheableSameOrigin) {
 					const response = await getCachedResponse(cache, event.request, url, {
 						appShellFallback: true
 					});
@@ -277,6 +302,10 @@ self.addEventListener('fetch', (event) => {
 
 		if (!isSameOrigin) {
 			return fetch(event.request);
+		}
+
+		if (!isCacheableSameOrigin) {
+			return fetchFresh(event.request);
 		}
 
 		if (url.pathname === DEPLOYMENT_MANIFEST) {
