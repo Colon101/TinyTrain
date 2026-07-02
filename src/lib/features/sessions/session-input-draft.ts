@@ -15,6 +15,9 @@ export type SessionInputDraft = {
 	sets: Record<string, SessionInputDraftSet>;
 	updatedAt: number;
 };
+type ApplySessionInputDraftOptions = {
+	includeCompleted?: boolean;
+};
 
 export function getSessionInputDraftKey(sessionId: string) {
 	return `tinytrain:session-input-draft:${sessionId}`;
@@ -115,14 +118,14 @@ export function rebuildSessionSetOverview(
 
 export function applySessionInputDraft(
 	nextOverview: SessionOverview | null,
-	draft = nextOverview ? readSessionInputDraft(nextOverview.summary.id) : null
+	draft = nextOverview ? readSessionInputDraft(nextOverview.summary.id) : null,
+	options: ApplySessionInputDraftOptions = {}
 ) {
-	if (
-		!nextOverview ||
-		nextOverview.summary.status !== 'in_progress' ||
-		!draft ||
-		draft.sessionId !== nextOverview.summary.id
-	) {
+	const canApplyDraft =
+		nextOverview?.summary.status === 'in_progress' ||
+		(options.includeCompleted === true && nextOverview?.summary.status === 'completed');
+
+	if (!nextOverview || !canApplyDraft || !draft || draft.sessionId !== nextOverview.summary.id) {
 		return nextOverview;
 	}
 

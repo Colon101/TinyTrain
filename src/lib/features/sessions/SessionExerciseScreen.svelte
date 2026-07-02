@@ -52,7 +52,9 @@
 	let api = $state<DatabaseApi | null>(null);
 	let sessionInputDraft = $state<SessionInputDraft>(cachedSessionInputDraft);
 	let overview = $state<SessionOverview | null>(
-		applySessionInputDraft(cachedSessionData?.overview ?? null, cachedSessionInputDraft)
+		applySessionInputDraft(cachedSessionData?.overview ?? null, cachedSessionInputDraft, {
+			includeCompleted: isCompletedEditRoute()
+		})
 	);
 	let exercises = $state<Exercise[]>(
 		cachedSessionData?.exercises ?? cachedExercisePickerData?.exercises ?? []
@@ -72,7 +74,9 @@
 	let selectedPickerExerciseIds = $state<string[]>([]);
 	let newExerciseName = $state('');
 	let isNewExerciseUnilateral = $state(false);
+	let loadDataGeneration = 0;
 	let inputVersions = new SvelteMap<string, number>();
+	let setInputSaveChains = new SvelteMap<string, Promise<void>>();
 	let pendingSetInputSaves = new SvelteSet<Promise<void>>();
 	let isReplayingInputNavigation = false;
 
@@ -209,14 +213,26 @@
 		return api;
 	}
 
+	function isCompletedEditRoute() {
+		return page.url.searchParams.get('edit') === '1';
+	}
+
 	async function loadData() {
+		const generation = ++loadDataGeneration;
 		const dbApi = requireApi();
 		void dbApi.cleanupStaleSessions();
 		const nextOverview = await dbApi.runWithClosedDatabaseRetry(() =>
 			dbApi.getEditableSession(sessionId)
 		);
+
+		if (generation !== loadDataGeneration) {
+			return;
+		}
+
 		sessionInputDraft = readSessionInputDraft(sessionId) ?? createEmptySessionInputDraft(sessionId);
-		const nextOverviewWithDraft = applySessionInputDraft(nextOverview, sessionInputDraft);
+		const nextOverviewWithDraft = applySessionInputDraft(nextOverview, sessionInputDraft, {
+			includeCompleted: isCompletedEditRoute()
+		});
 
 		overview = nextOverviewWithDraft;
 		writeSessionDataCache(sessionId, {
@@ -225,17 +241,21 @@
 			exerciseUsagePreferences
 		});
 		isMenuOpen = false;
-		void loadExercisePickerData().catch((error) => {
+		void loadExercisePickerData(generation).catch((error) => {
 			errorMessage = getErrorMessage(error);
 		});
 	}
 
-	async function loadExercisePickerData() {
+	async function loadExercisePickerData(generation = loadDataGeneration) {
 		const dbApi = requireApi();
 		const [nextExercises, nextExerciseUsagePreferences] = await Promise.all([
 			dbApi.listExercises(),
 			dbApi.listExerciseUsagePreferences()
 		]);
+
+		if (generation !== loadDataGeneration) {
+			return;
+		}
 
 		exercises = nextExercises;
 		exerciseUsagePreferences = nextExerciseUsagePreferences;
@@ -294,6 +314,17 @@
 		clearStoredSessionInputDraft(draftSessionId);
 	}
 
+	function persistSessionInputDraft(nextDraft: SessionInputDraft) {
+		sessionInputDraft = nextDraft;
+
+		if (Object.keys(nextDraft.sets).length === 0) {
+			clearStoredSessionInputDraft(nextDraft.sessionId);
+			return;
+		}
+
+		writeSessionInputDraft(nextDraft);
+	}
+
 	function writeDraftInput(sessionSetId: string, field: SessionInputField, rawValue: string) {
 		const now = Date.now();
 		const fieldKey = getSessionInputFieldKey(field);
@@ -310,8 +341,36 @@
 			updatedAt: now
 		};
 
-		sessionInputDraft = nextDraft;
-		writeSessionInputDraft(nextDraft);
+		persistSessionInputDraft(nextDraft);
+	}
+
+	function clearDraftInput(sessionSetId: string, field: SessionInputField) {
+		const draftSet = sessionInputDraft.sets[sessionSetId];
+		const fieldKey = getSessionInputFieldKey(field);
+
+		if (!draftSet || !Object.hasOwn(draftSet, fieldKey)) {
+			return;
+		}
+
+		const nextDraftSet = { ...draftSet };
+		delete nextDraftSet[fieldKey];
+
+		const hasRemainingInput = (['weightInput', 'repsInput', 'rirInput'] as const).some(
+			(nextFieldKey) => Object.hasOwn(nextDraftSet, nextFieldKey)
+		);
+		const nextSets = { ...sessionInputDraft.sets };
+
+		if (hasRemainingInput) {
+			nextSets[sessionSetId] = nextDraftSet;
+		} else {
+			delete nextSets[sessionSetId];
+		}
+
+		persistSessionInputDraft({
+			...sessionInputDraft,
+			sets: nextSets,
+			updatedAt: Date.now()
+		});
 	}
 
 	function updateOverviewSet(
@@ -380,6 +439,57 @@
 		);
 	}
 
+	function getSetInputKey(sessionSetId: string, field: SessionInputField) {
+		return `${sessionSetId}:${field}`;
+	}
+
+	function queueSetInputSave(
+		sessionSetId: string,
+		field: SessionInputField,
+		rawValue: string,
+		version: number
+	) {
+		const key = getSetInputKey(sessionSetId, field);
+		const previousSave = setInputSaveChains.get(key) ?? Promise.resolve();
+		const savePromise = previousSave
+			.catch(() => undefined)
+			.then(async () => {
+				if (inputVersions.get(key) !== version) {
+					return;
+				}
+
+				try {
+					const dbApi = requireApi();
+
+					await dbApi.runWithClosedDatabaseRetry(() =>
+						dbApi.updateSessionSetInput(sessionSetId, field, rawValue)
+					);
+
+					if (inputVersions.get(key) === version) {
+						clearDraftInput(sessionSetId, field);
+					}
+				} catch (error) {
+					if (inputVersions.get(key) !== version) {
+						return;
+					}
+
+					errorMessage = getErrorMessage(error);
+
+					if (api) {
+						await loadData();
+					}
+				}
+			});
+
+		setInputSaveChains.set(key, savePromise);
+		trackPendingSetInputSave(savePromise);
+		void savePromise.finally(() => {
+			if (setInputSaveChains.get(key) === savePromise) {
+				setInputSaveChains.delete(key);
+			}
+		});
+	}
+
 	async function waitForPendingSetInputSaves() {
 		while (pendingSetInputSaves.size > 0) {
 			await Promise.allSettled([...pendingSetInputSaves]);
@@ -427,25 +537,12 @@
 			input.value = rawValue;
 		}
 
-		const key = `${sessionSetId}:${field}`;
-		inputVersions.set(key, (inputVersions.get(key) ?? 0) + 1);
+		const key = getSetInputKey(sessionSetId, field);
+		const version = (inputVersions.get(key) ?? 0) + 1;
+		inputVersions.set(key, version);
 		writeDraftInput(sessionSetId, field, rawValue);
 		applyLocalInput(sessionSetId, field, rawValue);
-
-		trackPendingSetInputSave(
-			(async () => {
-				try {
-					const dbApi = requireApi();
-
-					await dbApi.runWithClosedDatabaseRetry(() =>
-						dbApi.updateSessionSetInput(sessionSetId, field, rawValue)
-					);
-				} catch (error) {
-					errorMessage = getErrorMessage(error);
-					await loadData();
-				}
-			})()
-		);
+		queueSetInputSave(sessionSetId, field, rawValue, version);
 	}
 
 	function focusNextSetInput(currentInput: HTMLInputElement) {
@@ -485,50 +582,15 @@
 			['reps', formatAutofillInputValue('reps', previousReference.reps)],
 			['rir', formatAutofillInputValue('rir', previousReference.rir)]
 		];
-		const versions = new Map(
-			values.map(([field]) => {
-				const key = `${sessionSet.id}:${field}`;
-				const nextVersion = (inputVersions.get(key) ?? 0) + 1;
-				inputVersions.set(key, nextVersion);
-
-				return [field, nextVersion] as const;
-			})
-		);
 
 		for (const [field, rawValue] of values) {
+			const key = getSetInputKey(sessionSet.id, field);
+			const version = (inputVersions.get(key) ?? 0) + 1;
+			inputVersions.set(key, version);
 			writeDraftInput(sessionSet.id, field, rawValue);
 			applyLocalInput(sessionSet.id, field, rawValue);
+			queueSetInputSave(sessionSet.id, field, rawValue, version);
 		}
-
-		trackPendingSetInputSave(
-			(async () => {
-				try {
-					let updatedSet: Awaited<ReturnType<DatabaseApi['updateSessionSetInput']>> | null = null;
-					const dbApi = requireApi();
-
-					for (const [field, rawValue] of values) {
-						updatedSet = await dbApi.runWithClosedDatabaseRetry(() =>
-							dbApi.updateSessionSetInput(sessionSet.id, field, rawValue)
-						);
-					}
-
-					for (const [field, version] of versions) {
-						if (inputVersions.get(`${sessionSet.id}:${field}`) !== version) {
-							return;
-						}
-					}
-
-					if (updatedSet) {
-						updateOverviewSet(sessionSet.id, (currentSet) =>
-							rebuildSessionSetOverview(currentSet, updatedSet)
-						);
-					}
-				} catch (error) {
-					errorMessage = getErrorMessage(error);
-					await loadData();
-				}
-			})()
-		);
 	}
 
 	function openExercisePicker(mode: PickerMode) {

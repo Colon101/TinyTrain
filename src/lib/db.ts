@@ -975,6 +975,11 @@ type SupabaseSyncedRow = Record<string, unknown> & {
 	_modified?: string;
 	updatedAt?: string;
 };
+type RemoteReconcileRow<T extends SyncableRow> = {
+	row: T;
+	deleted: boolean;
+	modifiedAt?: string;
+};
 
 function stripSupabaseSyncFields<T extends { id: string }>(row: SupabaseSyncedRow): T {
 	const doc = { ...row };
@@ -1096,6 +1101,24 @@ function getRowTimestamp(row: SyncableRow) {
 	return Number.isFinite(time) ? time : 0;
 }
 
+function getRemoteReconcileTimestamp(row: RemoteReconcileRow<SyncableRow>) {
+	const modifiedTime = row.modifiedAt ? new Date(row.modifiedAt).getTime() : 0;
+
+	return Number.isFinite(modifiedTime) && modifiedTime > 0
+		? modifiedTime
+		: getRowTimestamp(row.row);
+}
+
+function getRowCreatedTimestamp(row: SyncableRow) {
+	const time = row.createdAt ? new Date(row.createdAt).getTime() : 0;
+
+	return Number.isFinite(time) ? time : 0;
+}
+
+function wasRowEditedAfterCreate(row: SyncableRow) {
+	return getRowTimestamp(row) > getRowCreatedTimestamp(row);
+}
+
 function chooseReconciledRow<T extends SyncableRow>(
 	tableName: SupabaseTableName,
 	localRow: T | undefined,
@@ -1116,6 +1139,19 @@ function chooseReconciledRow<T extends SyncableRow>(
 
 	if (mode === 'local-preferred') {
 		return { row: localRow, winner: 'local' };
+	}
+
+	if (tableName === 'session_sets') {
+		const localTimestamp = getRowTimestamp(localRow);
+		const remoteTimestamp = getRowTimestamp(remoteRow);
+		const localIsNewer = localTimestamp > remoteTimestamp;
+		const newerRow = localIsNewer ? localRow : remoteRow;
+
+		if (localTimestamp !== remoteTimestamp && wasRowEditedAfterCreate(newerRow)) {
+			return localIsNewer
+				? { row: localRow, winner: 'local' }
+				: { row: remoteRow, winner: 'remote' };
+		}
 	}
 
 	const localScore = getRowCompletenessScore(tableName, localRow);
@@ -1158,7 +1194,7 @@ async function fetchAllSupabaseRows<T extends SyncableRow>(
 	normalize: (row: T) => T = (row) => row
 ) {
 	const pageSize = 1000;
-	const rows: T[] = [];
+	const rows: RemoteReconcileRow<T>[] = [];
 	let from = 0;
 
 	while (true) {
@@ -1166,16 +1202,17 @@ async function fetchAllSupabaseRows<T extends SyncableRow>(
 			.from(tableName)
 			.select('*')
 			.eq('user_id', userId)
-			.eq('_deleted', false)
 			.range(from, from + pageSize - 1);
 
 		if (error) {
 			throw error;
 		}
 
-		const pageRows = ((data ?? []) as SupabaseSyncedRow[]).map((row) =>
-			normalize(stripSupabaseSyncFields<T>(row))
-		);
+		const pageRows = ((data ?? []) as SupabaseSyncedRow[]).map((row) => ({
+			row: normalize(stripSupabaseSyncFields<T>(row)),
+			deleted: row._deleted === true,
+			modifiedAt: typeof row._modified === 'string' ? row._modified : undefined
+		}));
 
 		rows.push(...pageRows);
 
@@ -1228,19 +1265,34 @@ async function reconcileTable<T extends SyncableRow>(
 		.map(normalize);
 	const remoteRows = await fetchAllSupabaseRows(userId, options.tableName, normalize);
 	const localRowsById = new Map(localRows.map((row) => [row.id, row]));
-	const remoteRowsById = new Map(remoteRows.map((row) => [row.id, row]));
+	const remoteRowsById = new Map(remoteRows.map((row) => [row.row.id, row]));
 	const ids = [...new Set([...localRowsById.keys(), ...remoteRowsById.keys()])];
 	const mergedRows: T[] = [];
 	let localWins = 0;
 	let remoteWins = 0;
 
 	for (const id of ids) {
-		const choice = chooseReconciledRow(
-			options.tableName,
-			localRowsById.get(id),
-			remoteRowsById.get(id),
-			mode
-		);
+		const localRow = localRowsById.get(id);
+		const remoteRow = remoteRowsById.get(id);
+
+		if (remoteRow?.deleted) {
+			if (!localRow) {
+				remoteWins += 1;
+				continue;
+			}
+
+			if (getRemoteReconcileTimestamp(remoteRow) >= getRowTimestamp(localRow)) {
+				await options.localTable.delete(id);
+				remoteWins += 1;
+				continue;
+			}
+
+			mergedRows.push(localRow);
+			localWins += 1;
+			continue;
+		}
+
+		const choice = chooseReconciledRow(options.tableName, localRow, remoteRow?.row, mode);
 
 		if (!choice) {
 			continue;
@@ -3951,23 +4003,7 @@ export async function flushSessionInputDraft(sessionId: string) {
 		}
 	}
 
-	if (staleSetIds.size === 0) {
-		return;
-	}
-
-	const nextSets = Object.fromEntries(
-		draftEntries.filter(([sessionSetId]) => !staleSetIds.has(sessionSetId))
-	);
-
-	if (Object.keys(nextSets).length === 0) {
-		clearSessionInputDraft(sessionId);
-		return;
-	}
-
-	writeSessionInputDraft(sessionId, {
-		...draft,
-		sets: nextSets
-	});
+	clearSessionInputDraft(sessionId);
 }
 
 export async function cleanupStaleSessions(todayDayKey = toDayKey(new Date())) {

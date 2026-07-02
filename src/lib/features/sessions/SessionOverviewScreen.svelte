@@ -63,7 +63,9 @@
 
 	let api = $state<DatabaseApi | null>(null);
 	let overview = $state<SessionOverview | null>(
-		applySessionInputDraft(cachedSessionData?.overview ?? null)
+		applySessionInputDraft(cachedSessionData?.overview ?? null, undefined, {
+			includeCompleted: isCompletedEditRoute()
+		})
 	);
 	let exercises = $state<Exercise[]>(
 		cachedSessionData?.exercises ?? cachedExercisePickerData?.exercises ?? []
@@ -93,6 +95,7 @@
 	let selectedPickerExerciseIds = $state<string[]>([]);
 	let newExerciseName = $state('');
 	let isNewExerciseUnilateral = $state(false);
+	let loadDataGeneration = 0;
 	let openExerciseMenuId = $state('');
 	let draggedSessionExerciseId = $state('');
 	let dragStartSessionExerciseIds = $state<string[]>([]);
@@ -268,13 +271,25 @@
 		return api;
 	}
 
+	function isCompletedEditRoute() {
+		return page.url.searchParams.get('edit') === '1';
+	}
+
 	async function loadData() {
+		const generation = ++loadDataGeneration;
 		const dbApi = requireApi();
 		void dbApi.cleanupStaleSessions();
 		const nextOverview = await dbApi.runWithClosedDatabaseRetry(() =>
 			dbApi.getEditableSession(sessionId)
 		);
-		const nextOverviewWithDraft = applySessionInputDraft(nextOverview);
+
+		if (generation !== loadDataGeneration) {
+			return;
+		}
+
+		const nextOverviewWithDraft = applySessionInputDraft(nextOverview, undefined, {
+			includeCompleted: isCompletedEditRoute()
+		});
 
 		overview = nextOverviewWithDraft;
 		writeSessionDataCache(sessionId, {
@@ -284,17 +299,21 @@
 		});
 		nowMs = Date.now();
 		openExerciseMenuId = '';
-		void loadExercisePickerData().catch((error) => {
+		void loadExercisePickerData(generation).catch((error) => {
 			errorMessage = getErrorMessage(error);
 		});
 	}
 
-	async function loadExercisePickerData() {
+	async function loadExercisePickerData(generation = loadDataGeneration) {
 		const dbApi = requireApi();
 		const [nextExercises, nextExerciseUsagePreferences] = await Promise.all([
 			dbApi.listExercises(),
 			dbApi.listExerciseUsagePreferences()
 		]);
+
+		if (generation !== loadDataGeneration) {
+			return;
+		}
 
 		exercises = nextExercises;
 		exerciseUsagePreferences = nextExerciseUsagePreferences;
@@ -396,9 +415,18 @@
 
 		draftStartedAt = storedDraft?.startedAt ?? overview.summary.startedAt ?? '';
 		draftCompletedAt = storedDraft?.completedAt ?? overview.summary.completedAt ?? '';
+		overview = applySessionInputDraft(overview, undefined, { includeCompleted: true });
 		isEditMode = true;
 		openExerciseMenuId = '';
 		void syncEditUrl(true);
+	}
+
+	async function refreshAfterLeavingEditMode() {
+		try {
+			await loadData();
+		} catch (error) {
+			errorMessage = getErrorMessage(error);
+		}
 	}
 
 	function openTimeEditor() {
@@ -467,6 +495,7 @@
 		clearStoredEditDraft();
 		isEditMode = false;
 		isTimeEditorOpen = false;
+		await refreshAfterLeavingEditMode();
 	}
 
 	async function saveEditMode() {
@@ -479,6 +508,7 @@
 			clearStoredEditDraft();
 			isEditMode = false;
 			isTimeEditorOpen = false;
+			await refreshAfterLeavingEditMode();
 			return;
 		}
 
