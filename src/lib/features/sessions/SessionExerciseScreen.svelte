@@ -215,6 +215,7 @@
 		const nextOverview = await dbApi.runWithClosedDatabaseRetry(() =>
 			dbApi.getEditableSession(sessionId)
 		);
+		sessionInputDraft = readSessionInputDraft(sessionId) ?? createEmptySessionInputDraft(sessionId);
 		const nextOverviewWithDraft = applySessionInputDraft(nextOverview, sessionInputDraft);
 
 		overview = nextOverviewWithDraft;

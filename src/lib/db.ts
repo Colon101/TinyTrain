@@ -3858,6 +3858,37 @@ function writeSessionInputDraft(sessionId: string, draft: SessionInputDraft) {
 	}
 }
 
+function removeSessionInputDraftSets(sessionId: string, sessionSetIds: string[]) {
+	if (sessionSetIds.length === 0) {
+		return;
+	}
+
+	const draft = readSessionInputDraft(sessionId);
+
+	if (!draft?.sets) {
+		return;
+	}
+
+	const sessionSetIdSet = new Set(sessionSetIds);
+	const nextSets = Object.fromEntries(
+		Object.entries(draft.sets).filter(([sessionSetId]) => !sessionSetIdSet.has(sessionSetId))
+	);
+
+	if (Object.keys(nextSets).length === Object.keys(draft.sets).length) {
+		return;
+	}
+
+	if (Object.keys(nextSets).length === 0) {
+		clearSessionInputDraft(sessionId);
+		return;
+	}
+
+	writeSessionInputDraft(sessionId, {
+		...draft,
+		sets: nextSets
+	});
+}
+
 export async function flushSessionInputDraft(sessionId: string) {
 	requireLoggedInUser();
 
@@ -4454,6 +4485,8 @@ export async function removeSessionSetRow(sessionSetId: string) {
 		return;
 	}
 
+	let deletedSetIds: string[] = [];
+
 	await db.transaction('rw', db.sessionSets, db.sessionExercises, db.workoutSessions, async () => {
 		const currentSets = await db.sessionSets
 			.where('sessionExerciseId')
@@ -4462,6 +4495,7 @@ export async function removeSessionSetRow(sessionSetId: string) {
 		const deleteSetIds = currentSets
 			.filter((currentSet) => currentSet.order === sessionSet.order)
 			.map((currentSet) => currentSet.id);
+		deletedSetIds = deleteSetIds;
 
 		if (deleteSetIds.length > 0) {
 			await db.sessionSets.bulkDelete(deleteSetIds);
@@ -4495,6 +4529,8 @@ export async function removeSessionSetRow(sessionSetId: string) {
 		await db.sessionExercises.update(sessionExercise.id, { updatedAt: now });
 		await db.workoutSessions.update(sessionExercise.sessionId, { updatedAt: now });
 	});
+
+	removeSessionInputDraftSets(sessionExercise.sessionId, deletedSetIds);
 }
 
 export async function updateSessionSetInput(
