@@ -1289,6 +1289,8 @@
 						<input
 							class="h-11 rounded-lg border border-white/10 bg-white/[0.04] px-3 text-right text-xl font-semibold text-white tabular-nums outline-none focus:border-emerald-300/60"
 							type="time"
+							name="tinytrain-session-start-time"
+							autocomplete="off"
 							bind:value={timeEditorStartTime}
 							required
 						/>
@@ -1309,6 +1311,8 @@
 							<input
 								class="h-13 min-w-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-center text-2xl font-semibold text-white tabular-nums outline-none focus:border-emerald-300/60"
 								type="number"
+								name="tinytrain-session-duration-hours"
+								autocomplete="off"
 								min="0"
 								inputmode="numeric"
 								bind:value={timeEditorDurationHours}
@@ -1323,6 +1327,8 @@
 							<input
 								class="h-13 min-w-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-center text-2xl font-semibold text-white tabular-nums outline-none focus:border-emerald-300/60"
 								type="number"
+								name="tinytrain-session-duration-minutes"
+								autocomplete="off"
 								min="0"
 								inputmode="numeric"
 								bind:value={timeEditorDurationMinutes}
@@ -1337,6 +1343,8 @@
 							<input
 								class="h-13 min-w-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-center text-2xl font-semibold text-white tabular-nums outline-none focus:border-emerald-300/60"
 								type="number"
+								name="tinytrain-session-duration-seconds"
+								autocomplete="off"
 								min="0"
 								inputmode="numeric"
 								bind:value={timeEditorDurationSeconds}

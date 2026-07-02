@@ -320,7 +320,7 @@
 			</a>
 		</div>
 	{:else}
-		<form class="grid gap-5 py-5" onsubmit={handleSubmit}>
+		<form class="grid gap-5 py-5" autocomplete="off" onsubmit={handleSubmit}>
 			<section class="grid gap-3 border-b border-white/10 pb-5">
 				<label class="block" for="backfill-workout">
 					<span class="mb-2 block text-sm font-medium text-zinc-300">Workout</span>
@@ -344,6 +344,8 @@
 							id="backfill-date"
 							class="min-h-12 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-base text-white outline-none focus:border-emerald-300/60"
 							type="date"
+							name="tinytrain-backfill-date"
+							autocomplete="off"
 							value={dayKey}
 							disabled={isSaving}
 							oninput={(event) => (dayKey = (event.currentTarget as HTMLInputElement).value)}
@@ -356,6 +358,8 @@
 							id="backfill-start"
 							class="min-h-12 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-base text-white outline-none focus:border-emerald-300/60"
 							type="time"
+							name="tinytrain-backfill-start"
+							autocomplete="off"
 							value={startTime}
 							disabled={isSaving}
 							oninput={(event) => (startTime = (event.currentTarget as HTMLInputElement).value)}
@@ -369,6 +373,8 @@
 						id="backfill-duration"
 						class="min-h-12 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-base text-white outline-none focus:border-emerald-300/60"
 						type="number"
+						name="tinytrain-backfill-duration"
+						autocomplete="off"
 						min="1"
 						step="1"
 						inputmode="numeric"
@@ -436,6 +442,8 @@
 									<p class="text-sm font-semibold text-zinc-400">{getSetLabel(set)}</p>
 									<input
 										class="min-h-11 min-w-0 rounded-lg border border-white/10 bg-zinc-950/60 px-2 text-base text-white outline-none placeholder:text-zinc-700 focus:border-emerald-300/60"
+										name={`tinytrain-backfill-${set.id}-weight`}
+										autocomplete="off"
 										value={set.weightInput}
 										inputmode="decimal"
 										placeholder="-"
@@ -451,6 +459,8 @@
 									/>
 									<input
 										class="min-h-11 min-w-0 rounded-lg border border-white/10 bg-zinc-950/60 px-2 text-base text-white outline-none placeholder:text-zinc-700 focus:border-emerald-300/60"
+										name={`tinytrain-backfill-${set.id}-reps`}
+										autocomplete="off"
 										value={set.repsInput}
 										inputmode="numeric"
 										placeholder="-"
@@ -466,6 +476,8 @@
 									/>
 									<input
 										class="min-h-11 min-w-0 rounded-lg border border-white/10 bg-zinc-950/60 px-2 text-base text-white outline-none placeholder:text-zinc-700 focus:border-emerald-300/60"
+										name={`tinytrain-backfill-${set.id}-rir`}
+										autocomplete="off"
 										value={set.rirInput}
 										inputmode="numeric"
 										placeholder="-"

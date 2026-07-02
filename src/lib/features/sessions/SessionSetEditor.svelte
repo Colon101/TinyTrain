@@ -110,6 +110,8 @@
 						<input
 							class={`${setInputBaseClass} ${getFieldInputClass(set.weightDelta.state)}`}
 							type="text"
+							name={`tinytrain-set-${set.id}-weight`}
+							autocomplete="off"
 							inputmode="decimal"
 							enterkeyhint="next"
 							data-session-set-input="true"
@@ -131,6 +133,8 @@
 						<input
 							class={`${setInputBaseClass} ${getFieldInputClass(set.repsDelta.state)}`}
 							type="text"
+							name={`tinytrain-set-${set.id}-reps`}
+							autocomplete="off"
 							inputmode="numeric"
 							pattern="[0-9]*"
 							enterkeyhint="next"
@@ -153,6 +157,8 @@
 						<input
 							class={`${setInputBaseClass} ${getFieldInputClass(set.rirDelta.state)}`}
 							type="text"
+							name={`tinytrain-set-${set.id}-rir`}
+							autocomplete="off"
 							inputmode="numeric"
 							pattern="[0-9]*"
 							enterkeyhint="next"
