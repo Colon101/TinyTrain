@@ -1,14 +1,12 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { goto } from '$app/navigation';
+	import { beforeNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { browser } from '$app/environment';
 	import { onMount, untrack } from 'svelte';
-	import { SvelteMap } from 'svelte/reactivity';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import type {
 		Exercise,
 		ExerciseUsagePreference,
-		SessionFieldDelta,
 		SessionInputField,
 		SessionOverview,
 		SessionSetOverview
@@ -22,19 +20,21 @@
 	import SessionExerciseHeader from './SessionExerciseHeader.svelte';
 	import SessionSetEditor from './SessionSetEditor.svelte';
 	import { readSessionDataCache, writeSessionDataCache } from './session-data-cache';
+	import {
+		applySessionInputDraft,
+		clearSessionInputDraft as clearStoredSessionInputDraft,
+		createEmptySessionInputDraft,
+		getSessionInputFieldKey,
+		parseSessionInputValue,
+		readSessionInputDraft,
+		rebuildSessionSetOverview,
+		writeSessionInputDraft,
+		type SessionInputDraft
+	} from './session-input-draft';
 	// import { formatSessionStatus, formatSessionTime } from './session-format';
 
 	type DatabaseApi = typeof import('$lib/db');
 	type PickerMode = 'add' | 'swap';
-	type SessionInputFieldKey = `${SessionInputField}Input`;
-	type SessionInputDraftSet = Partial<Record<SessionInputFieldKey, string>> & {
-		updatedAt: number;
-	};
-	type SessionInputDraft = {
-		sessionId: string;
-		sets: Record<string, SessionInputDraftSet>;
-		updatedAt: number;
-	};
 
 	let {
 		sessionId,
@@ -52,7 +52,7 @@
 	let api = $state<DatabaseApi | null>(null);
 	let sessionInputDraft = $state<SessionInputDraft>(cachedSessionInputDraft);
 	let overview = $state<SessionOverview | null>(
-		applySessionInputDraft(cachedSessionData?.overview ?? null)
+		applySessionInputDraft(cachedSessionData?.overview ?? null, cachedSessionInputDraft)
 	);
 	let exercises = $state<Exercise[]>(
 		cachedSessionData?.exercises ?? cachedExercisePickerData?.exercises ?? []
@@ -73,6 +73,8 @@
 	let newExerciseName = $state('');
 	let isNewExerciseUnilateral = $state(false);
 	let inputVersions = new SvelteMap<string, number>();
+	let pendingSetInputSaves = new SvelteSet<Promise<void>>();
+	let isReplayingInputNavigation = false;
 
 	let activeExercise = $derived(
 		overview?.exercises.find((sessionExercise) => sessionExercise.id === sessionExerciseId) ?? null
@@ -176,6 +178,25 @@
 		};
 	});
 
+	beforeNavigate((navigation) => {
+		if (
+			isReplayingInputNavigation ||
+			navigation.willUnload ||
+			!hasPendingSetInputWork() ||
+			!navigation.to?.url
+		) {
+			return;
+		}
+
+		const targetUrl = navigation.to.url;
+		const targetPath = `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`;
+
+		navigation.cancel();
+		void navigateAfterSavingSetInputs(targetPath, {
+			replaceState: navigation.type === 'popstate'
+		});
+	});
+
 	function getErrorMessage(error: unknown) {
 		return error instanceof Error ? error.message : 'Something went wrong.';
 	}
@@ -191,8 +212,10 @@
 	async function loadData() {
 		const dbApi = requireApi();
 		void dbApi.cleanupStaleSessions();
-		const nextOverview = await dbApi.getEditableSession(sessionId);
-		const nextOverviewWithDraft = applySessionInputDraft(nextOverview);
+		const nextOverview = await dbApi.runWithClosedDatabaseRetry(() =>
+			dbApi.getEditableSession(sessionId)
+		);
+		const nextOverviewWithDraft = applySessionInputDraft(nextOverview, sessionInputDraft);
 
 		overview = nextOverviewWithDraft;
 		writeSessionDataCache(sessionId, {
@@ -231,6 +254,7 @@
 		errorMessage = '';
 
 		try {
+			await flushPendingSetInputs();
 			await action();
 			await loadData();
 			await afterSuccess?.();
@@ -239,16 +263,6 @@
 		} finally {
 			isSaving = false;
 		}
-	}
-
-	function parseInputValue(rawValue: string) {
-		if (!rawValue.trim()) {
-			return undefined;
-		}
-
-		const nextValue = Number(rawValue.trim());
-
-		return Number.isFinite(nextValue) ? nextValue : undefined;
 	}
 
 	function sanitizeInputValue(field: SessionInputField, rawValue: string) {
@@ -274,71 +288,14 @@
 		return field === 'reps' || field === 'rir' ? `${Math.round(value)}` : formatInputValue(value);
 	}
 
-	function getSessionInputDraftKey(draftSessionId: string) {
-		return `tinytrain:session-input-draft:${draftSessionId}`;
-	}
-
-	function createEmptySessionInputDraft(draftSessionId: string): SessionInputDraft {
-		return {
-			sessionId: draftSessionId,
-			sets: {},
-			updatedAt: Date.now()
-		};
-	}
-
-	function readSessionInputDraft(draftSessionId: string) {
-		if (!browser) {
-			return null;
-		}
-
-		try {
-			const rawDraft = localStorage.getItem(getSessionInputDraftKey(draftSessionId));
-			const parsedDraft = rawDraft ? (JSON.parse(rawDraft) as Partial<SessionInputDraft>) : null;
-
-			if (!parsedDraft || parsedDraft.sessionId !== draftSessionId || !parsedDraft.sets) {
-				return null;
-			}
-
-			return {
-				sessionId: draftSessionId,
-				sets: parsedDraft.sets,
-				updatedAt: parsedDraft.updatedAt ?? Date.now()
-			};
-		} catch {
-			return null;
-		}
-	}
-
-	function writeSessionInputDraft(draft: SessionInputDraft) {
-		if (!browser) {
-			return;
-		}
-
-		localStorage.setItem(getSessionInputDraftKey(draft.sessionId), JSON.stringify(draft));
-	}
-
-	function clearSessionInputDraft(draftSessionId: string) {
+	function clearLocalSessionInputDraft(draftSessionId: string) {
 		sessionInputDraft = createEmptySessionInputDraft(draftSessionId);
-
-		if (browser) {
-			localStorage.removeItem(getSessionInputDraftKey(draftSessionId));
-		}
-	}
-
-	function getInputFieldKey(field: SessionInputField): SessionInputFieldKey {
-		return `${field}Input`;
-	}
-
-	function hasDraftInputValue(
-		draftSet: SessionInputDraftSet | undefined,
-		fieldKey: SessionInputFieldKey
-	) {
-		return Boolean(draftSet && Object.hasOwn(draftSet, fieldKey));
+		clearStoredSessionInputDraft(draftSessionId);
 	}
 
 	function writeDraftInput(sessionSetId: string, field: SessionInputField, rawValue: string) {
 		const now = Date.now();
-		const fieldKey = getInputFieldKey(field);
+		const fieldKey = getSessionInputFieldKey(field);
 		const nextDraft = {
 			...sessionInputDraft,
 			sets: {
@@ -354,93 +311,6 @@
 
 		sessionInputDraft = nextDraft;
 		writeSessionInputDraft(nextDraft);
-	}
-
-	function applyDraftToSessionSet(sessionSet: SessionSetOverview) {
-		const draftSet = sessionInputDraft.sets[sessionSet.id];
-		const overrides: Partial<SessionSetOverview> = {};
-
-		for (const field of ['weight', 'reps', 'rir'] as const) {
-			const fieldKey = getInputFieldKey(field);
-
-			if (!hasDraftInputValue(draftSet, fieldKey)) {
-				continue;
-			}
-
-			const rawValue = draftSet?.[fieldKey] ?? '';
-			overrides[fieldKey] = rawValue;
-			overrides[field] = parseInputValue(rawValue);
-		}
-
-		return Object.keys(overrides).length > 0
-			? rebuildSetOverview(sessionSet, overrides)
-			: sessionSet;
-	}
-
-	function applySessionInputDraft(nextOverview: SessionOverview | null) {
-		if (!nextOverview || nextOverview.summary.status !== 'in_progress') {
-			return nextOverview;
-		}
-
-		return {
-			...nextOverview,
-			exercises: nextOverview.exercises.map((sessionExercise) => ({
-				...sessionExercise,
-				sets: sessionExercise.sets.map(applyDraftToSessionSet)
-			}))
-		};
-	}
-
-	function createFieldDelta(current?: number, previous?: number): SessionFieldDelta {
-		if (
-			typeof current !== 'number' ||
-			!Number.isFinite(current) ||
-			typeof previous !== 'number' ||
-			!Number.isFinite(previous)
-		) {
-			return {
-				state: 'empty',
-				label: ''
-			};
-		}
-
-		const diff = Number((current - previous).toFixed(2));
-
-		if (diff > 0) {
-			return {
-				state: 'improved',
-				label: `+${Number(diff.toFixed(2))}`
-			};
-		}
-
-		if (diff < 0) {
-			return {
-				state: 'regressed',
-				label: `${Number(diff.toFixed(2))}`
-			};
-		}
-
-		return {
-			state: 'matched',
-			label: ''
-		};
-	}
-
-	function rebuildSetOverview(
-		sessionSet: SessionSetOverview,
-		overrides: Partial<SessionSetOverview>
-	): SessionSetOverview {
-		const nextSet = {
-			...sessionSet,
-			...overrides
-		};
-
-		return {
-			...nextSet,
-			weightDelta: createFieldDelta(nextSet.weight, nextSet.previousReference?.weight),
-			repsDelta: createFieldDelta(nextSet.reps, nextSet.previousReference?.reps),
-			rirDelta: createFieldDelta(nextSet.rir, nextSet.previousReference?.rir)
-		};
 	}
 
 	function updateOverviewSet(
@@ -473,28 +343,79 @@
 	}
 
 	function applyLocalInput(sessionSetId: string, field: SessionInputField, rawValue: string) {
-		const parsedValue = parseInputValue(rawValue);
+		const parsedValue = parseSessionInputValue(rawValue);
 
 		updateOverviewSet(sessionSetId, (sessionSet) => {
 			if (field === 'weight') {
-				return rebuildSetOverview(sessionSet, {
+				return rebuildSessionSetOverview(sessionSet, {
 					weightInput: rawValue,
 					weight: parsedValue
 				});
 			}
 
 			if (field === 'reps') {
-				return rebuildSetOverview(sessionSet, {
+				return rebuildSessionSetOverview(sessionSet, {
 					repsInput: rawValue,
 					reps: parsedValue
 				});
 			}
 
-			return rebuildSetOverview(sessionSet, {
+			return rebuildSessionSetOverview(sessionSet, {
 				rirInput: rawValue,
 				rir: parsedValue
 			});
 		});
+	}
+
+	function hasPendingSetInputWork() {
+		return pendingSetInputSaves.size > 0 || Object.keys(sessionInputDraft.sets).length > 0;
+	}
+
+	function trackPendingSetInputSave(savePromise: Promise<void>) {
+		pendingSetInputSaves.add(savePromise);
+		void savePromise.then(
+			() => pendingSetInputSaves.delete(savePromise),
+			() => pendingSetInputSaves.delete(savePromise)
+		);
+	}
+
+	async function waitForPendingSetInputSaves() {
+		while (pendingSetInputSaves.size > 0) {
+			await Promise.allSettled([...pendingSetInputSaves]);
+		}
+	}
+
+	async function flushPendingSetInputs() {
+		await waitForPendingSetInputSaves();
+
+		if (Object.keys(sessionInputDraft.sets).length === 0) {
+			return;
+		}
+
+		const dbApi = requireApi();
+
+		await dbApi.runWithClosedDatabaseRetry(() => dbApi.flushSessionInputDraft(sessionId));
+		sessionInputDraft = readSessionInputDraft(sessionId) ?? createEmptySessionInputDraft(sessionId);
+	}
+
+	async function navigateAfterSavingSetInputs(
+		targetPath: string,
+		options?: Parameters<typeof goto>[1]
+	) {
+		isSaving = true;
+		errorMessage = '';
+
+		try {
+			await flushPendingSetInputs();
+			isReplayingInputNavigation = true;
+			// eslint-disable-next-line svelte/no-navigation-without-resolve
+			await goto(targetPath, options);
+		} catch (error) {
+			errorMessage = getErrorMessage(error);
+		} finally {
+			isReplayingInputNavigation = false;
+			isSaving = false;
+		}
 	}
 
 	function handleSetInput(sessionSetId: string, field: SessionInputField, event: Event) {
@@ -510,14 +431,20 @@
 		writeDraftInput(sessionSetId, field, rawValue);
 		applyLocalInput(sessionSetId, field, rawValue);
 
-		void (async () => {
-			try {
-				await requireApi().updateSessionSetInput(sessionSetId, field, rawValue);
-			} catch (error) {
-				errorMessage = getErrorMessage(error);
-				await loadData();
-			}
-		})();
+		trackPendingSetInputSave(
+			(async () => {
+				try {
+					const dbApi = requireApi();
+
+					await dbApi.runWithClosedDatabaseRetry(() =>
+						dbApi.updateSessionSetInput(sessionSetId, field, rawValue)
+					);
+				} catch (error) {
+					errorMessage = getErrorMessage(error);
+					await loadData();
+				}
+			})()
+		);
 	}
 
 	function focusNextSetInput(currentInput: HTMLInputElement) {
@@ -572,30 +499,35 @@
 			applyLocalInput(sessionSet.id, field, rawValue);
 		}
 
-		void (async () => {
-			try {
-				let updatedSet: Awaited<ReturnType<DatabaseApi['updateSessionSetInput']>> | null = null;
+		trackPendingSetInputSave(
+			(async () => {
+				try {
+					let updatedSet: Awaited<ReturnType<DatabaseApi['updateSessionSetInput']>> | null = null;
+					const dbApi = requireApi();
 
-				for (const [field, rawValue] of values) {
-					updatedSet = await requireApi().updateSessionSetInput(sessionSet.id, field, rawValue);
-				}
-
-				for (const [field, version] of versions) {
-					if (inputVersions.get(`${sessionSet.id}:${field}`) !== version) {
-						return;
+					for (const [field, rawValue] of values) {
+						updatedSet = await dbApi.runWithClosedDatabaseRetry(() =>
+							dbApi.updateSessionSetInput(sessionSet.id, field, rawValue)
+						);
 					}
-				}
 
-				if (updatedSet) {
-					updateOverviewSet(sessionSet.id, (currentSet) =>
-						rebuildSetOverview(currentSet, updatedSet)
-					);
+					for (const [field, version] of versions) {
+						if (inputVersions.get(`${sessionSet.id}:${field}`) !== version) {
+							return;
+						}
+					}
+
+					if (updatedSet) {
+						updateOverviewSet(sessionSet.id, (currentSet) =>
+							rebuildSessionSetOverview(currentSet, updatedSet)
+						);
+					}
+				} catch (error) {
+					errorMessage = getErrorMessage(error);
+					await loadData();
 				}
-			} catch (error) {
-				errorMessage = getErrorMessage(error);
-				await loadData();
-			}
-		})();
+			})()
+		);
 	}
 
 	function openExercisePicker(mode: PickerMode) {
@@ -725,8 +657,9 @@
 					);
 
 					if (addedExercise) {
-						// eslint-disable-next-line svelte/no-navigation-without-resolve
-						await goto(getSessionExercisePath(addedExercise.id), { replaceState: true });
+						await navigateAfterSavingSetInputs(getSessionExercisePath(addedExercise.id), {
+							replaceState: true
+						});
 					}
 				}
 			}
@@ -754,8 +687,9 @@
 					);
 
 					if (addedExercise) {
-						// eslint-disable-next-line svelte/no-navigation-without-resolve
-						await goto(getSessionExercisePath(addedExercise.id), { replaceState: true });
+						await navigateAfterSavingSetInputs(getSessionExercisePath(addedExercise.id), {
+							replaceState: true
+						});
 					}
 				}
 			}
@@ -812,13 +746,13 @@
 			},
 			async () => {
 				if (nextRouteTarget) {
-					// eslint-disable-next-line svelte/no-navigation-without-resolve
-					await goto(getSessionExercisePath(nextRouteTarget.id), { replaceState: true });
+					await navigateAfterSavingSetInputs(getSessionExercisePath(nextRouteTarget.id), {
+						replaceState: true
+					});
 					return;
 				}
 
-				// eslint-disable-next-line svelte/no-navigation-without-resolve
-				await goto(getSessionOverviewPath(), { replaceState: true });
+				await navigateAfterSavingSetInputs(getSessionOverviewPath(), { replaceState: true });
 			}
 		);
 	}
@@ -830,11 +764,14 @@
 
 		void runMutation(
 			async () => {
+				await flushPendingSetInputs();
 				await requireApi().completeWorkoutSession(sessionId);
 			},
 			async () => {
-				clearSessionInputDraft(sessionId);
-				await goto(resolve('/(app)/sessions/[sessionId]', { sessionId }), { replaceState: true });
+				clearLocalSessionInputDraft(sessionId);
+				await navigateAfterSavingSetInputs(resolve('/(app)/sessions/[sessionId]', { sessionId }), {
+					replaceState: true
+				});
 			}
 		);
 	}
@@ -856,15 +793,13 @@
 
 	function goToNextExercise() {
 		if (nextExercise) {
-			// eslint-disable-next-line svelte/no-navigation-without-resolve
-			void goto(getSessionExercisePath(nextExercise.id));
+			void navigateAfterSavingSetInputs(getSessionExercisePath(nextExercise.id));
 		}
 	}
 
 	function goToPreviousExercise() {
 		if (previousExercise) {
-			// eslint-disable-next-line svelte/no-navigation-without-resolve
-			void goto(getSessionExercisePath(previousExercise.id));
+			void navigateAfterSavingSetInputs(getSessionExercisePath(previousExercise.id));
 		}
 	}
 </script>

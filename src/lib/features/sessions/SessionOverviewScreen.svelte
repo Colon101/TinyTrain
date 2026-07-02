@@ -30,6 +30,7 @@
 	import { writeSessionEditDraft } from './session-overview-actions';
 	import { formatDayHeading, formatDuration } from './session-format';
 	import { hasLoggedValues } from './session-overview';
+	import { applySessionInputDraft } from './session-input-draft';
 	import { shareOrDownloadSessionImage } from './session-share-image';
 	import { readSessionDataCache, writeSessionDataCache } from './session-data-cache';
 
@@ -61,7 +62,9 @@
 	const cachedExercisePickerData = untrack(() => readExercisePickerCache());
 
 	let api = $state<DatabaseApi | null>(null);
-	let overview = $state<SessionOverview | null>(cachedSessionData?.overview ?? null);
+	let overview = $state<SessionOverview | null>(
+		applySessionInputDraft(cachedSessionData?.overview ?? null)
+	);
 	let exercises = $state<Exercise[]>(
 		cachedSessionData?.exercises ?? cachedExercisePickerData?.exercises ?? []
 	);
@@ -268,11 +271,14 @@
 	async function loadData() {
 		const dbApi = requireApi();
 		void dbApi.cleanupStaleSessions();
-		const nextOverview = await dbApi.getEditableSession(sessionId);
+		const nextOverview = await dbApi.runWithClosedDatabaseRetry(() =>
+			dbApi.getEditableSession(sessionId)
+		);
+		const nextOverviewWithDraft = applySessionInputDraft(nextOverview);
 
-		overview = nextOverview;
+		overview = nextOverviewWithDraft;
 		writeSessionDataCache(sessionId, {
-			overview: nextOverview,
+			overview: nextOverviewWithDraft,
 			exercises,
 			exerciseUsagePreferences
 		});

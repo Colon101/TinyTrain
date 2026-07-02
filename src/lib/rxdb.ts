@@ -355,7 +355,16 @@ export async function getTinyTrainRxDatabase(userId: string): Promise<TinyTrainR
 	const existing = databaseByUserId.get(userId);
 
 	if (existing) {
-		return existing;
+		const database = await existing.catch((error) => {
+			databaseByUserId.delete(userId);
+			throw error;
+		});
+
+		if (!database.closed) {
+			return database;
+		}
+
+		databaseByUserId.delete(userId);
 	}
 
 	registerRxdbPlugins();
@@ -386,6 +395,28 @@ export async function getTinyTrainRxDatabase(userId: string): Promise<TinyTrainR
 
 	databaseByUserId.set(userId, next);
 	return next;
+}
+
+export async function reopenTinyTrainRxDatabase(userId: string): Promise<TinyTrainRxDatabase> {
+	const existing = databaseByUserId.get(userId);
+	const replications = replicationByUserId.get(userId);
+
+	for (const replication of replications ?? []) {
+		replication.cancel();
+	}
+
+	replicationByUserId.delete(userId);
+	databaseByUserId.delete(userId);
+
+	if (existing) {
+		const database = await existing.catch(() => null);
+
+		if (database && !database.closed) {
+			await database.close().catch(() => undefined);
+		}
+	}
+
+	return getTinyTrainRxDatabase(userId);
 }
 
 export async function resetTinyTrainRxDatabase(userId: string) {

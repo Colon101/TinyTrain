@@ -1,5 +1,9 @@
 import type { RxCollection, RxDocument } from 'rxdb';
-import { getTinyTrainRxDatabase, startSupabaseReplication } from './rxdb';
+import {
+	getTinyTrainRxDatabase,
+	reopenTinyTrainRxDatabase,
+	startSupabaseReplication
+} from './rxdb';
 import { BASELINE_EXERCISE_ROWS } from './exercises';
 
 type PlainDoc = Record<string, unknown> & { id: string; user_id?: string };
@@ -293,6 +297,65 @@ export type RxDexieLikeDatabase = {
 
 const adaptersByUserId = new Map<string, Promise<RxDexieLikeDatabase>>();
 
+async function createRxDexieLikeDatabase(
+	userId: string,
+	options: { reopen?: boolean } = {}
+): Promise<RxDexieLikeDatabase> {
+	const database = options.reopen
+		? await reopenTinyTrainRxDatabase(userId)
+		: await getTinyTrainRxDatabase(userId);
+
+	await startSupabaseReplication(userId);
+
+	return {
+		exercises: new RxTableAdapter(
+			database.exercises as unknown as RxCollection<PlainDoc>,
+			userId,
+			'exercises',
+			BASELINE_EXERCISE_ROWS as PlainDoc[]
+		),
+		workouts: new RxTableAdapter(
+			database.workouts as unknown as RxCollection<PlainDoc>,
+			userId,
+			'workouts'
+		),
+		workoutExercises: new RxTableAdapter(
+			database.workoutExercises as unknown as RxCollection<PlainDoc>,
+			userId,
+			'workoutExercises'
+		),
+		workoutSessions: new RxTableAdapter(
+			database.workoutSessions as unknown as RxCollection<PlainDoc>,
+			userId,
+			'workoutSessions'
+		),
+		sessionExercises: new RxTableAdapter(
+			database.sessionExercises as unknown as RxCollection<PlainDoc>,
+			userId,
+			'sessionExercises'
+		),
+		sessionSets: new RxTableAdapter(
+			database.sessionSets as unknown as RxCollection<PlainDoc>,
+			userId,
+			'sessionSets'
+		),
+		exerciseResetEvents: new RxTableAdapter(
+			database.exerciseResetEvents as unknown as RxCollection<PlainDoc>,
+			userId,
+			'exerciseResetEvents'
+		),
+		async transaction<T>(_mode: string, ...args: unknown[]) {
+			const callback = args.at(-1);
+
+			if (typeof callback !== 'function') {
+				return undefined as T;
+			}
+
+			return (callback as () => Promise<T> | T)();
+		}
+	};
+}
+
 export async function getRxDexieLikeDatabase(userId: string): Promise<RxDexieLikeDatabase> {
 	const existing = adaptersByUserId.get(userId);
 
@@ -300,57 +363,16 @@ export async function getRxDexieLikeDatabase(userId: string): Promise<RxDexieLik
 		return existing;
 	}
 
-	const next = getTinyTrainRxDatabase(userId).then(async (database) => {
-		await startSupabaseReplication(userId);
+	const next = createRxDexieLikeDatabase(userId);
 
-		return {
-			exercises: new RxTableAdapter(
-				database.exercises as unknown as RxCollection<PlainDoc>,
-				userId,
-				'exercises',
-				BASELINE_EXERCISE_ROWS as PlainDoc[]
-			),
-			workouts: new RxTableAdapter(
-				database.workouts as unknown as RxCollection<PlainDoc>,
-				userId,
-				'workouts'
-			),
-			workoutExercises: new RxTableAdapter(
-				database.workoutExercises as unknown as RxCollection<PlainDoc>,
-				userId,
-				'workoutExercises'
-			),
-			workoutSessions: new RxTableAdapter(
-				database.workoutSessions as unknown as RxCollection<PlainDoc>,
-				userId,
-				'workoutSessions'
-			),
-			sessionExercises: new RxTableAdapter(
-				database.sessionExercises as unknown as RxCollection<PlainDoc>,
-				userId,
-				'sessionExercises'
-			),
-			sessionSets: new RxTableAdapter(
-				database.sessionSets as unknown as RxCollection<PlainDoc>,
-				userId,
-				'sessionSets'
-			),
-			exerciseResetEvents: new RxTableAdapter(
-				database.exerciseResetEvents as unknown as RxCollection<PlainDoc>,
-				userId,
-				'exerciseResetEvents'
-			),
-			async transaction<T>(_mode: string, ...args: unknown[]) {
-				const callback = args.at(-1);
+	adaptersByUserId.set(userId, next);
+	return next;
+}
 
-				if (typeof callback !== 'function') {
-					return undefined as T;
-				}
+export async function reopenRxDexieLikeDatabase(userId: string): Promise<RxDexieLikeDatabase> {
+	adaptersByUserId.delete(userId);
 
-				return (callback as () => Promise<T> | T)();
-			}
-		};
-	});
+	const next = createRxDexieLikeDatabase(userId, { reopen: true });
 
 	adaptersByUserId.set(userId, next);
 	return next;

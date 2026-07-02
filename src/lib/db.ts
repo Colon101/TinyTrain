@@ -370,6 +370,7 @@ let activeSupabaseUserId: string | null = null;
 let dbOpenPromise: Promise<typeof db> | null = null;
 let authBridgeStarted = false;
 let supabaseBackendActivationPromise: Promise<void> | null = null;
+let closedDatabaseRecoveryPromise: Promise<boolean> | null = null;
 let rxChangeSubscription: SubscriptionLike | null = null;
 let rxRuntimePromise: Promise<{
 	adapter: typeof import('./rxdb-dexie-adapter');
@@ -597,6 +598,131 @@ type AppDatabase = {
 	transaction<T>(mode: string, ...args: unknown[]): Promise<T>;
 };
 
+type RxDataTableKey = Exclude<keyof RxDexieLikeDatabase, 'transaction'>;
+
+function getRxDataTable(tableName: RxDataTableKey) {
+	if (!rxDataDb) {
+		throw new Error('The local database is still loading.');
+	}
+
+	return rxDataDb[tableName];
+}
+
+async function runRecoveringDatabaseOperation<T>(
+	operation: () => Promise<T>,
+	retryOperation: () => Promise<T>
+) {
+	try {
+		return await operation();
+	} catch (error) {
+		if (!isClosedDatabaseError(error) || !(await recoverClosedDatabase())) {
+			throw error;
+		}
+	}
+
+	return retryOperation();
+}
+
+function createRecoveringQueryResult<T>(
+	queryResult: QueryResult<T>,
+	rebuildQueryResult: () => QueryResult<T>
+): QueryResult<T> {
+	return new Proxy(queryResult, {
+		get(target, prop) {
+			const value = target[prop as keyof QueryResult<T>];
+
+			if (typeof value !== 'function') {
+				return value;
+			}
+
+			return (...args: unknown[]) =>
+				runRecoveringDatabaseOperation(
+					() => (value as (...methodArgs: unknown[]) => Promise<unknown>).apply(target, args),
+					() => {
+						const nextQueryResult = rebuildQueryResult();
+						const nextValue = nextQueryResult[prop as keyof QueryResult<T>];
+
+						return (nextValue as (...methodArgs: unknown[]) => Promise<unknown>).apply(
+							nextQueryResult,
+							args
+						);
+					}
+				);
+		}
+	}) as QueryResult<T>;
+}
+
+function createRecoveringWhereClause<T>(
+	whereClause: WhereClause<T>,
+	rebuildWhereClause: () => WhereClause<T>
+): WhereClause<T> {
+	return new Proxy(whereClause, {
+		get(target, prop) {
+			const value = target[prop as keyof WhereClause<T>];
+
+			if (typeof value !== 'function') {
+				return value;
+			}
+
+			return (...args: unknown[]) => {
+				const queryResult = (value as (...methodArgs: unknown[]) => QueryResult<T>).apply(
+					target,
+					args
+				);
+
+				return createRecoveringQueryResult(queryResult, () => {
+					const nextWhereClause = rebuildWhereClause();
+					const nextValue = nextWhereClause[prop as keyof WhereClause<T>];
+
+					return (nextValue as (...methodArgs: unknown[]) => QueryResult<T>).apply(
+						nextWhereClause,
+						args
+					);
+				});
+			};
+		}
+	}) as WhereClause<T>;
+}
+
+function createRecoveringDataTable<T extends { id: string }>(
+	tableName: RxDataTableKey,
+	table: DataTable<T>
+): DataTable<T> {
+	return new Proxy(table, {
+		get(target, prop) {
+			const value = target[prop as keyof DataTable<T>];
+
+			if (prop === 'where' && typeof value === 'function') {
+				return (field: string) => {
+					const whereClause = target.where(field);
+
+					return createRecoveringWhereClause(whereClause, () =>
+						(getRxDataTable(tableName) as unknown as DataTable<T>).where(field)
+					);
+				};
+			}
+
+			if (typeof value !== 'function') {
+				return value;
+			}
+
+			return (...args: unknown[]) =>
+				runRecoveringDatabaseOperation(
+					() => (value as (...methodArgs: unknown[]) => Promise<unknown>).apply(target, args),
+					() => {
+						const nextTable = getRxDataTable(tableName) as unknown as DataTable<T>;
+						const nextValue = nextTable[prop as keyof DataTable<T>];
+
+						return (nextValue as (...methodArgs: unknown[]) => Promise<unknown>).apply(
+							nextTable,
+							args
+						);
+					}
+				);
+		}
+	}) as DataTable<T>;
+}
+
 export const db = new Proxy(
 	{},
 	{
@@ -609,8 +735,16 @@ export const db = new Proxy(
 				return rxDataDb.transaction.bind(rxDataDb);
 			}
 
-			if (activeBackend === 'supabase-rxdb' && rxDataDb && prop in rxDataDb) {
-				return rxDataDb[prop as keyof RxDexieLikeDatabase];
+			if (
+				activeBackend === 'supabase-rxdb' &&
+				rxDataDb &&
+				typeof prop === 'string' &&
+				prop in rxDataDb
+			) {
+				return createRecoveringDataTable(
+					prop as RxDataTableKey,
+					rxDataDb[prop as RxDataTableKey] as unknown as DataTable<{ id: string }>
+				);
 			}
 
 			if (prop === 'open') {
@@ -663,6 +797,64 @@ export async function ensureDbOpen() {
 	}
 
 	return dbOpenPromise;
+}
+
+function isClosedDatabaseError(error: unknown) {
+	if (!(error instanceof Error)) {
+		return false;
+	}
+
+	return (
+		error.name === 'DatabaseClosedError' ||
+		error.name === 'DatabaseClosed' ||
+		error.message.includes('Database has been closed') ||
+		error.message.includes('db.open() was cancelled') ||
+		error.message.includes('closed or removed')
+	);
+}
+
+async function recoverClosedDatabase() {
+	if (activeBackend !== 'supabase-rxdb' || !activeSupabaseUserId) {
+		return false;
+	}
+
+	const userId = activeSupabaseUserId;
+
+	closedDatabaseRecoveryPromise ??= (async () => {
+		const { adapter } = await getRxRuntime();
+
+		activeSyncState.set({ phase: 'pulling', status: 'syncing' });
+		rxDataDb = await adapter.reopenRxDexieLikeDatabase(userId);
+
+		if (activeSupabaseUserId !== userId || activeBackend !== 'supabase-rxdb') {
+			return false;
+		}
+
+		dbOpenPromise = Promise.resolve(db);
+		backgroundSyncUserId = null;
+		activeUser.set(toSupabaseCloudUser());
+		startProgressiveSync(userId);
+
+		return true;
+	})().finally(() => {
+		closedDatabaseRecoveryPromise = null;
+	});
+
+	return closedDatabaseRecoveryPromise;
+}
+
+export async function runWithClosedDatabaseRetry<T>(operation: () => Promise<T>): Promise<T> {
+	await ensureDbOpen();
+
+	try {
+		return await operation();
+	} catch (error) {
+		if (!isClosedDatabaseError(error) || !(await recoverClosedDatabase())) {
+			throw error;
+		}
+	}
+
+	return operation();
 }
 
 export async function logoutFromCloud() {
@@ -3666,7 +3858,9 @@ function writeSessionInputDraft(sessionId: string, draft: SessionInputDraft) {
 	}
 }
 
-async function flushSessionInputDraft(sessionId: string) {
+export async function flushSessionInputDraft(sessionId: string) {
+	requireLoggedInUser();
+
 	const draft = readSessionInputDraft(sessionId);
 
 	if (!draft?.sets) {
@@ -4380,6 +4574,8 @@ export async function resetSessionInputs(sessionId: string) {
 
 		await db.workoutSessions.update(sessionId, { updatedAt: now });
 	});
+
+	clearSessionInputDraft(sessionId);
 }
 
 export async function completeWorkoutSession(sessionId: string) {
