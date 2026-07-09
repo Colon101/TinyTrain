@@ -16,6 +16,24 @@ import {
 	BASELINE_EXERCISE_ROWS,
 	createBaselineExerciseId as createSharedBaselineExerciseId
 } from './exercises';
+import {
+	dbCloudSync,
+	type DatabaseUploadMode,
+	type DatabaseUploadSummary,
+	type LocalDatabaseStats,
+	type SupabaseSyncedRow,
+	type SupabaseTableName,
+	type SyncableRow,
+	type SyncProgress
+} from './db-cloud-sync';
+
+export type {
+	DatabaseTableUploadSummary,
+	DatabaseUploadMode,
+	DatabaseUploadSummary,
+	LocalDatabaseStats,
+	SyncProgress
+} from './db-cloud-sync';
 
 export type SessionStatus = 'planned' | 'in_progress' | 'completed' | 'abandoned';
 export type ExerciseSource = 'baseline' | 'custom';
@@ -921,532 +939,44 @@ export async function syncNow(options: SyncNowOptions = {}) {
 	}
 }
 
-export type DatabaseUploadMode = 'local-preferred' | 'richest';
-
-export type SyncProgress = {
-	completedTables: number;
-	totalTables: number;
-};
-
 type SyncNowOptions = {
 	onProgress?: (progress: SyncProgress) => void;
 };
 
-export type DatabaseTableUploadSummary = {
-	table: string;
-	localRows: number;
-	remoteRows: number;
-	mergedRows: number;
-	uploadedRows: number;
-	localWins: number;
-	remoteWins: number;
-};
-
-export type DatabaseUploadSummary = {
-	mode: DatabaseUploadMode;
-	tables: DatabaseTableUploadSummary[];
-	localRows: number;
-	remoteRows: number;
-	mergedRows: number;
-	uploadedRows: number;
-	localWins: number;
-	remoteWins: number;
-};
-
-export type LocalDatabaseStats = {
-	workouts: number;
-	customExercises: number;
-	previousWorkouts: number;
-	sessionExercises: number;
-	sessionSets: number;
-	filledSessionSets: number;
-	lastWorkoutAt?: string;
-};
-
-type SyncableRow = {
-	id: string;
-	createdAt?: string;
-	updatedAt?: string;
-};
-
-type SupabaseTableName =
-	| 'exercises'
-	| 'workouts'
-	| 'workout_exercises'
-	| 'workout_sessions'
-	| 'session_exercises'
-	| 'session_sets'
-	| 'exercise_reset_events';
-
-type ReconcileTableOptions<T extends SyncableRow> = {
-	tableName: SupabaseTableName;
-	localTable: DataTable<T>;
-	normalize?: (row: T) => T;
-	filterLocal?: (row: T) => boolean;
-};
-type ReconcileDatabaseOptions = {
-	onProgress?: (progress: SyncProgress) => void;
-};
-
-type ReconcileWinner = 'local' | 'remote';
-
-type ReconcileChoice<T extends SyncableRow> = {
-	row: T;
-	winner: ReconcileWinner;
-};
-
-type SupabaseSyncedRow = Record<string, unknown> & {
-	id: string;
-	user_id?: string;
-	_deleted?: boolean;
-	_modified?: string;
-	updatedAt?: string;
-};
-type RemoteReconcileRow<T extends SyncableRow> = {
-	row: T;
-	deleted: boolean;
-	modifiedAt?: string;
-};
-
-function stripSupabaseSyncFields<T extends { id: string }>(row: SupabaseSyncedRow): T {
-	const doc = { ...row };
-	delete doc.user_id;
-	delete doc._deleted;
-	delete doc._modified;
-
-	return doc as T;
-}
-
-function areRowsEqual(first: unknown, second: unknown) {
-	return JSON.stringify(first) === JSON.stringify(second);
-}
-
-function toRemoteOptionalNumber(value: unknown) {
-	if (typeof value === 'number' && Number.isFinite(value)) {
-		return value;
-	}
-
-	if (typeof value === 'string' && value.trim()) {
-		const nextValue = Number(value);
-		return Number.isFinite(nextValue) ? nextValue : undefined;
-	}
-
-	return undefined;
+function getCloudSyncDeps() {
+	return {
+		db,
+		getActiveSupabaseUserId: () => activeSupabaseUserId,
+		markSupabaseCacheHydrated,
+		markRecentBackfillComplete,
+		withExerciseDefaults,
+		withSessionSetDefaults,
+		hasInputValue
+	};
 }
 
 function normalizeRemoteSessionSet(row: SessionSet): SessionSet {
-	return withSessionSetDefaults({
-		...row,
-		weight: toRemoteOptionalNumber(row.weight),
-		reps: toRemoteOptionalNumber(row.reps),
-		rir: toRemoteOptionalNumber(row.rir)
-	});
+	return dbCloudSync.normalizeRemoteSessionSet(getCloudSyncDeps(), row);
 }
 
 function shouldSyncExercise(exercise: Exercise) {
-	const normalizedExercise = withExerciseDefaults(exercise);
-
-	return normalizedExercise.source !== 'baseline' && !BASELINE_EXERCISE_BY_ID.has(exercise.id);
-}
-
-function hasMeaningfulValue(value: unknown) {
-	if (value === undefined || value === null) {
-		return false;
-	}
-
-	if (typeof value === 'string') {
-		return value.trim().length > 0;
-	}
-
-	if (typeof value === 'number') {
-		return Number.isFinite(value);
-	}
-
-	if (typeof value === 'boolean') {
-		return true;
-	}
-
-	return false;
-}
-
-function getSessionSetCompletenessScore(sessionSet: SessionSet) {
-	const normalizedSessionSet = withSessionSetDefaults(sessionSet);
-	const setValueScore =
-		(Number(hasInputValue(normalizedSessionSet.weightInput)) +
-			Number(hasInputValue(normalizedSessionSet.repsInput)) +
-			Number(hasInputValue(normalizedSessionSet.rirInput))) *
-		2;
-	const numericScore =
-		Number(
-			typeof normalizedSessionSet.weight === 'number' &&
-				Number.isFinite(normalizedSessionSet.weight)
-		) +
-		Number(
-			typeof normalizedSessionSet.reps === 'number' && Number.isFinite(normalizedSessionSet.reps)
-		) +
-		Number(
-			typeof normalizedSessionSet.rir === 'number' && Number.isFinite(normalizedSessionSet.rir)
-		);
-
-	return setValueScore + numericScore;
-}
-
-function getGenericCompletenessScore(row: SyncableRow) {
-	const ignoredFields = new Set([
-		'id',
-		'user_id',
-		'_deleted',
-		'_modified',
-		'createdAt',
-		'updatedAt'
-	]);
-
-	return Object.entries(row).reduce((score, [key, value]) => {
-		if (ignoredFields.has(key)) {
-			return score;
-		}
-
-		return score + Number(hasMeaningfulValue(value));
-	}, 0);
-}
-
-function getRowCompletenessScore(tableName: SupabaseTableName, row: SyncableRow) {
-	if (tableName === 'session_sets') {
-		return getSessionSetCompletenessScore(row as SessionSet);
-	}
-
-	return getGenericCompletenessScore(row);
+	return dbCloudSync.shouldSyncExercise(getCloudSyncDeps(), exercise);
 }
 
 function getRowTimestamp(row: SyncableRow) {
-	const rawTimestamp =
-		row.updatedAt ??
-		row.createdAt ??
-		('resetAt' in row && typeof row.resetAt === 'string' ? row.resetAt : undefined);
-	const time = rawTimestamp ? new Date(rawTimestamp).getTime() : 0;
-
-	return Number.isFinite(time) ? time : 0;
+	return dbCloudSync.getRowTimestamp(row);
 }
 
-function getRemoteReconcileTimestamp(row: RemoteReconcileRow<SyncableRow>) {
-	const modifiedTime = row.modifiedAt ? new Date(row.modifiedAt).getTime() : 0;
-
-	return Number.isFinite(modifiedTime) && modifiedTime > 0
-		? modifiedTime
-		: getRowTimestamp(row.row);
-}
-
-function getRowCreatedTimestamp(row: SyncableRow) {
-	const time = row.createdAt ? new Date(row.createdAt).getTime() : 0;
-
-	return Number.isFinite(time) ? time : 0;
-}
-
-function wasRowEditedAfterCreate(row: SyncableRow) {
-	return getRowTimestamp(row) > getRowCreatedTimestamp(row);
-}
-
-function chooseReconciledRow<T extends SyncableRow>(
-	tableName: SupabaseTableName,
-	localRow: T | undefined,
-	remoteRow: T | undefined,
-	mode: DatabaseUploadMode
-): ReconcileChoice<T> | null {
-	if (localRow && !remoteRow) {
-		return { row: localRow, winner: 'local' };
-	}
-
-	if (!localRow && remoteRow) {
-		return { row: remoteRow, winner: 'remote' };
-	}
-
-	if (!localRow || !remoteRow) {
-		return null;
-	}
-
-	if (mode === 'local-preferred') {
-		return { row: localRow, winner: 'local' };
-	}
-
-	if (tableName === 'session_sets') {
-		const localTimestamp = getRowTimestamp(localRow);
-		const remoteTimestamp = getRowTimestamp(remoteRow);
-		const localIsNewer = localTimestamp > remoteTimestamp;
-		const newerRow = localIsNewer ? localRow : remoteRow;
-
-		if (localTimestamp !== remoteTimestamp && wasRowEditedAfterCreate(newerRow)) {
-			return localIsNewer
-				? { row: localRow, winner: 'local' }
-				: { row: remoteRow, winner: 'remote' };
-		}
-	}
-
-	const localScore = getRowCompletenessScore(tableName, localRow);
-	const remoteScore = getRowCompletenessScore(tableName, remoteRow);
-
-	if (localScore !== remoteScore) {
-		return localScore > remoteScore
-			? { row: localRow, winner: 'local' }
-			: { row: remoteRow, winner: 'remote' };
-	}
-
-	return getRowTimestamp(localRow) >= getRowTimestamp(remoteRow)
-		? { row: localRow, winner: 'local' }
-		: { row: remoteRow, winner: 'remote' };
-}
-
-function stripUndefinedFields(row: Record<string, unknown>) {
-	const cleanRow: Record<string, unknown> = {};
-
-	for (const [key, value] of Object.entries(row)) {
-		if (value !== undefined) {
-			cleanRow[key] = value;
-		}
-	}
-
-	return cleanRow;
-}
-
-const optionalSupabaseFieldsByTable: Record<SupabaseTableName, string[]> = {
-	exercises: [],
-	workouts: [],
-	workout_exercises: [],
-	workout_sessions: ['startedAt', 'completedAt'],
-	session_exercises: [],
-	session_sets: ['weightInput', 'repsInput', 'rirInput', 'weight', 'reps', 'rir'],
-	exercise_reset_events: []
-};
-
-function toSupabaseUpsertRow(userId: string, tableName: SupabaseTableName, row: SyncableRow) {
-	const upsertRow = stripUndefinedFields({
-		...row,
-		user_id: userId,
-		_deleted: false
-	});
-
-	const sourceRow = row as Record<string, unknown>;
-
-	for (const key of optionalSupabaseFieldsByTable[tableName]) {
-		if (!(key in sourceRow) || sourceRow[key] === undefined) {
-			upsertRow[key] = null;
-		}
-	}
-
-	return upsertRow;
-}
-
-async function fetchAllSupabaseRows<T extends SyncableRow>(
-	userId: string,
-	tableName: SupabaseTableName,
-	normalize: (row: T) => T = (row) => row
-) {
-	const pageSize = 1000;
-	const rows: RemoteReconcileRow<T>[] = [];
-	let from = 0;
-
-	while (true) {
-		const { data, error } = await supabase
-			.from(tableName)
-			.select('*')
-			.eq('user_id', userId)
-			.range(from, from + pageSize - 1);
-
-		if (error) {
-			throw error;
-		}
-
-		const pageRows = ((data ?? []) as SupabaseSyncedRow[]).map((row) => ({
-			row: normalize(stripSupabaseSyncFields<T>(row)),
-			deleted: row._deleted === true,
-			modifiedAt: typeof row._modified === 'string' ? row._modified : undefined
-		}));
-
-		rows.push(...pageRows);
-
-		if (pageRows.length < pageSize) {
-			return rows;
-		}
-
-		from += pageSize;
-	}
-}
-
-async function upsertSupabaseRows(
-	userId: string,
-	tableName: SupabaseTableName,
-	rows: SyncableRow[]
-) {
-	const pageSize = 200;
-
-	for (let index = 0; index < rows.length; index += pageSize) {
-		const pageRows = rows
-			.slice(index, index + pageSize)
-			.map((row) => toSupabaseUpsertRow(userId, tableName, row));
-
-		if (pageRows.length === 0) {
-			continue;
-		}
-
-		const { error } = await supabase.from(tableName).upsert(pageRows, { onConflict: 'id' });
-
-		if (error) {
-			throw error;
-		}
-	}
-}
-
-async function putReconciledRows<T extends SyncableRow>(table: DataTable<T>, rows: T[]) {
-	for (const row of rows) {
-		await table.put(row);
-	}
-}
-
-async function reconcileTable<T extends SyncableRow>(
-	userId: string,
-	mode: DatabaseUploadMode,
-	options: ReconcileTableOptions<T>
-): Promise<DatabaseTableUploadSummary> {
-	const normalize = options.normalize ?? ((row: T) => row);
-	const localRows = (await options.localTable.toArray())
-		.filter((row) => options.filterLocal?.(row) ?? true)
-		.map(normalize);
-	const remoteRows = await fetchAllSupabaseRows(userId, options.tableName, normalize);
-	const localRowsById = new Map(localRows.map((row) => [row.id, row]));
-	const remoteRowsById = new Map(remoteRows.map((row) => [row.row.id, row]));
-	const ids = [...new Set([...localRowsById.keys(), ...remoteRowsById.keys()])];
-	const mergedRows: T[] = [];
-	let localWins = 0;
-	let remoteWins = 0;
-
-	for (const id of ids) {
-		const localRow = localRowsById.get(id);
-		const remoteRow = remoteRowsById.get(id);
-
-		if (remoteRow?.deleted) {
-			if (!localRow) {
-				remoteWins += 1;
-				continue;
-			}
-
-			if (getRemoteReconcileTimestamp(remoteRow) >= getRowTimestamp(localRow)) {
-				await options.localTable.delete(id);
-				remoteWins += 1;
-				continue;
-			}
-
-			mergedRows.push(localRow);
-			localWins += 1;
-			continue;
-		}
-
-		const choice = chooseReconciledRow(options.tableName, localRow, remoteRow?.row, mode);
-
-		if (!choice) {
-			continue;
-		}
-
-		mergedRows.push(choice.row);
-
-		if (choice.winner === 'local') {
-			localWins += 1;
-		} else {
-			remoteWins += 1;
-		}
-	}
-
-	await putReconciledRows(options.localTable, mergedRows);
-	await upsertSupabaseRows(userId, options.tableName, mergedRows);
-
-	return {
-		table: options.tableName,
-		localRows: localRows.length,
-		remoteRows: remoteRows.length,
-		mergedRows: mergedRows.length,
-		uploadedRows: mergedRows.length,
-		localWins,
-		remoteWins
-	};
+function stripSupabaseSyncFields<T extends { id: string }>(row: SupabaseSyncedRow): T {
+	return dbCloudSync.stripSupabaseSyncFields<T>(row);
 }
 
 async function reconcileSupabaseDatabase(
 	userId: string,
 	mode: DatabaseUploadMode,
-	options: ReconcileDatabaseOptions = {}
-) {
-	const totalTables = 7;
-	let completedTables = 0;
-
-	options.onProgress?.({ completedTables, totalTables });
-
-	async function reconcileNextTable<T extends SyncableRow>(
-		tableOptions: ReconcileTableOptions<T>
-	): Promise<DatabaseTableUploadSummary> {
-		const summary = await reconcileTable<T>(userId, mode, tableOptions);
-		completedTables += 1;
-		options.onProgress?.({ completedTables, totalTables });
-		return summary;
-	}
-
-	const tables = [
-		await reconcileNextTable<Exercise>({
-			tableName: 'exercises',
-			localTable: db.exercises,
-			normalize: withExerciseDefaults,
-			filterLocal: shouldSyncExercise
-		}),
-		await reconcileNextTable<Workout>({
-			tableName: 'workouts',
-			localTable: db.workouts
-		}),
-		await reconcileNextTable<WorkoutExercise>({
-			tableName: 'workout_exercises',
-			localTable: db.workoutExercises
-		}),
-		await reconcileNextTable<WorkoutSession>({
-			tableName: 'workout_sessions',
-			localTable: db.workoutSessions
-		}),
-		await reconcileNextTable<SessionExercise>({
-			tableName: 'session_exercises',
-			localTable: db.sessionExercises
-		}),
-		await reconcileNextTable<SessionSet>({
-			tableName: 'session_sets',
-			localTable: db.sessionSets,
-			normalize: normalizeRemoteSessionSet
-		}),
-		await reconcileNextTable<ExerciseResetEvent>({
-			tableName: 'exercise_reset_events',
-			localTable: db.exerciseResetEvents
-		})
-	];
-
-	const summary = tables.reduce<DatabaseUploadSummary>(
-		(total, table) => ({
-			mode,
-			tables,
-			localRows: total.localRows + table.localRows,
-			remoteRows: total.remoteRows + table.remoteRows,
-			mergedRows: total.mergedRows + table.mergedRows,
-			uploadedRows: total.uploadedRows + table.uploadedRows,
-			localWins: total.localWins + table.localWins,
-			remoteWins: total.remoteWins + table.remoteWins
-		}),
-		{
-			mode,
-			tables,
-			localRows: 0,
-			remoteRows: 0,
-			mergedRows: 0,
-			uploadedRows: 0,
-			localWins: 0,
-			remoteWins: 0
-		}
-	);
-
-	markSupabaseCacheHydrated(userId);
-
-	return summary;
+	options: SyncNowOptions = {}
+): Promise<DatabaseUploadSummary> {
+	return dbCloudSync.reconcileSupabaseDatabase(getCloudSyncDeps(), userId, mode, options);
 }
 
 async function putMergedRemoteRow<T extends SyncableRow>(
@@ -1455,18 +985,7 @@ async function putMergedRemoteRow<T extends SyncableRow>(
 	row: T,
 	normalize: (row: T) => T = (nextRow) => nextRow
 ) {
-	const currentRow = await table.get(row.id);
-	const choice = chooseReconciledRow(tableName, currentRow, normalize(row), 'richest');
-
-	if (!choice) {
-		return;
-	}
-
-	if (currentRow && areRowsEqual(currentRow, choice.row)) {
-		return;
-	}
-
-	await table.put(choice.row);
+	return dbCloudSync.putMergedRemoteRow(getCloudSyncDeps(), tableName, table, row, normalize);
 }
 
 async function putMergedRemoteRows<T extends SyncableRow>(
@@ -1475,47 +994,7 @@ async function putMergedRemoteRows<T extends SyncableRow>(
 	rows: T[],
 	normalize: (row: T) => T = (nextRow) => nextRow
 ) {
-	for (const row of rows) {
-		await putMergedRemoteRow(tableName, table, row, normalize);
-	}
-}
-
-type SyncedTableConfig<T extends SyncableRow = SyncableRow> = {
-	tableName: SupabaseTableName;
-	localTable: () => DataTable<T>;
-	normalize?: (row: T) => T;
-};
-
-function getSyncedTableConfigs(): SyncedTableConfig[] {
-	return [
-		{
-			tableName: 'exercises',
-			localTable: () => db.exercises as unknown as DataTable<SyncableRow>,
-			normalize: withExerciseDefaults as unknown as (row: SyncableRow) => SyncableRow
-		},
-		{ tableName: 'workouts', localTable: () => db.workouts as unknown as DataTable<SyncableRow> },
-		{
-			tableName: 'workout_exercises',
-			localTable: () => db.workoutExercises as unknown as DataTable<SyncableRow>
-		},
-		{
-			tableName: 'workout_sessions',
-			localTable: () => db.workoutSessions as unknown as DataTable<SyncableRow>
-		},
-		{
-			tableName: 'session_exercises',
-			localTable: () => db.sessionExercises as unknown as DataTable<SyncableRow>
-		},
-		{
-			tableName: 'session_sets',
-			localTable: () => db.sessionSets as unknown as DataTable<SyncableRow>,
-			normalize: normalizeRemoteSessionSet as unknown as (row: SyncableRow) => SyncableRow
-		},
-		{
-			tableName: 'exercise_reset_events',
-			localTable: () => db.exerciseResetEvents as unknown as DataTable<SyncableRow>
-		}
-	];
+	return dbCloudSync.putMergedRemoteRows(getCloudSyncDeps(), tableName, table, rows, normalize);
 }
 
 async function fetchSupabaseRows<T extends SyncableRow>(
@@ -1524,47 +1003,7 @@ async function fetchSupabaseRows<T extends SyncableRow>(
 	buildQuery: (query: any) => PromiseLike<{ data: unknown; error: unknown }>,
 	normalize: (row: T) => T = (row) => row
 ) {
-	const { data, error } = await buildQuery(
-		supabase.from(tableName).select('*').eq('user_id', activeSupabaseUserId).eq('_deleted', false)
-	);
-
-	if (error) {
-		throw error;
-	}
-
-	return ((data ?? []) as SupabaseSyncedRow[]).map((row) =>
-		normalize(stripSupabaseSyncFields<T>(row))
-	);
-}
-
-async function fetchRecentSupabaseRows<T extends SyncableRow>(
-	tableName: SupabaseTableName,
-	sinceIso: string,
-	normalize: (row: T) => T = (row) => row
-) {
-	const pageSize = 1000;
-	const rows: T[] = [];
-	let from = 0;
-
-	while (true) {
-		const pageRows = await fetchSupabaseRows<T>(
-			tableName,
-			(query) =>
-				query
-					.gte('_modified', sinceIso)
-					.order('_modified', { ascending: false })
-					.range(from, from + pageSize - 1),
-			normalize
-		);
-
-		rows.push(...pageRows);
-
-		if (pageRows.length < pageSize) {
-			return rows;
-		}
-
-		from += pageSize;
-	}
+	return dbCloudSync.fetchSupabaseRows(getCloudSyncDeps(), tableName, buildQuery, normalize);
 }
 
 async function backfillRecentRows(userId: string, days = recentBackfillDays) {
@@ -1572,24 +1011,7 @@ async function backfillRecentRows(userId: string, days = recentBackfillDays) {
 		return;
 	}
 
-	const sinceDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-
-	for (const tableConfig of getSyncedTableConfigs()) {
-		const rows = await fetchRecentSupabaseRows(
-			tableConfig.tableName,
-			sinceDate,
-			tableConfig.normalize
-		);
-		await putMergedRemoteRows(
-			tableConfig.tableName,
-			tableConfig.localTable(),
-			rows,
-			tableConfig.normalize
-		);
-	}
-
-	markRecentBackfillComplete(userId);
-	markSupabaseCacheHydrated(userId);
+	await dbCloudSync.backfillRecentRows(getCloudSyncDeps(), userId, days);
 }
 
 function startProgressiveSync(userId: string) {

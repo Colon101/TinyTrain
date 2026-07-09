@@ -507,8 +507,14 @@
 			<div class="rounded-lg border border-white/10 bg-white/[0.04] p-4">
 				<dl class="grid gap-3 text-sm">
 					<div class="flex items-center justify-between gap-4">
-						<dt class="text-zinc-400">Workouts</dt>
+						<dt class="text-zinc-400">Splits</dt>
 						<dd class="font-semibold text-white">{formatNumber(stats?.workouts ?? 0)}</dd>
+					</div>
+					<div class="flex items-center justify-between gap-4">
+						<dt class="text-zinc-400">Workouts</dt>
+						<dd class="font-semibold text-white">
+							{formatNumber(stats?.previousWorkouts ?? 0)}
+						</dd>
 					</div>
 					<div class="flex items-center justify-between gap-4">
 						<dt class="text-zinc-400">Custom exercises</dt>
