@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
-	import type { WorkoutSession } from '$lib/db';
+	import type { SessionSummary } from '$lib/db';
 
 	const WARNING_AFTER_MS = 2 * 60 * 60 * 1000;
 	const ABANDON_AFTER_MS = 3 * 60 * 60 * 1000;
@@ -10,7 +10,7 @@
 		summary,
 		onAbandoned
 	}: {
-		summary: WorkoutSession | null;
+		summary: SessionSummary | null;
 		onAbandoned: () => Promise<void> | void;
 	} = $props();
 
