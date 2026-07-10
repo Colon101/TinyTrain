@@ -22,6 +22,9 @@ export type ExerciseSource = 'baseline' | 'custom';
 export type SessionSetSide = 'bilateral' | 'left' | 'right';
 export type SessionInputField = 'weight' | 'reps' | 'rir';
 
+export const SESSION_INACTIVITY_WARNING_MS = 2 * 60 * 60 * 1000;
+export const SESSION_INACTIVITY_ABANDON_MS = 3 * 60 * 60 * 1000;
+
 export interface Exercise {
 	id: string;
 	name: string;
@@ -58,6 +61,7 @@ export interface WorkoutSession {
 	dayKey: string;
 	startedAt?: string;
 	completedAt?: string;
+	lastInputAt?: string;
 	status: SessionStatus;
 	createdAt: string;
 	updatedAt: string;
@@ -3880,6 +3884,7 @@ async function updateSessionSetInputs(
 		throw new Error('Set not found.');
 	}
 
+	const sessionExercise = await db.sessionExercises.get(sessionSet.sessionExerciseId);
 	const cleanInputValue = toCleanSessionInputValue(rawValue, field);
 	const parsedValue = toParsedInputValue(cleanInputValue, field);
 	const updatedAt = timestamp();
@@ -3896,7 +3901,23 @@ async function updateSessionSetInputs(
 		patch.rir = parsedValue;
 	}
 
-	await db.sessionSets.update(sessionSetId, patch);
+	await db.transaction('rw', db.sessionSets, db.workoutSessions, async () => {
+		await db.sessionSets.update(sessionSetId, patch);
+
+		if (!sessionExercise) {
+			return;
+		}
+
+		const session = await db.workoutSessions.get(sessionExercise.sessionId);
+
+		if (session?.status === 'in_progress') {
+			await db.workoutSessions.update(session.id, {
+				lastInputAt: updatedAt,
+				updatedAt
+			});
+		}
+	});
+
 	const nextSet = await db.sessionSets.get(sessionSetId);
 
 	if (!nextSet) {
@@ -4053,6 +4074,55 @@ export async function flushSessionInputDraft(sessionId: string) {
 	clearSessionInputDraft(sessionId);
 }
 
+function getSessionLastInputAt(session: WorkoutSession) {
+	const value = session.lastInputAt ?? session.startedAt;
+	const time = value ? new Date(value).getTime() : NaN;
+
+	return value && Number.isFinite(time) ? { value, time } : null;
+}
+
+function isSessionInactive(session: WorkoutSession, nowMs = Date.now()) {
+	const lastInput = getSessionLastInputAt(session);
+
+	return (
+		session.status === 'in_progress' &&
+		Boolean(lastInput && nowMs - lastInput.time >= SESSION_INACTIVITY_ABANDON_MS)
+	);
+}
+
+export async function abandonInactiveWorkoutSession(sessionId: string, nowMs = Date.now()) {
+	await ensureDbOpen();
+	requireLoggedInUser();
+	await flushSessionInputDraft(sessionId);
+
+	const session = await db.workoutSessions.get(sessionId);
+
+	if (!session || !isSessionInactive(session, nowMs)) {
+		return false;
+	}
+
+	const lastInput = getSessionLastInputAt(session);
+
+	if (!lastInput) {
+		return false;
+	}
+
+	const updatedAt = timestamp();
+
+	await db.workoutSessions.update(session.id, {
+		status: 'abandoned',
+		completedAt: lastInput.value,
+		updatedAt
+	});
+	clearSessionInputDraft(session.id);
+
+	void syncNow().catch((error) => {
+		console.warn('Background Supabase sync failed.', error);
+	});
+
+	return true;
+}
+
 export async function cleanupStaleSessions(todayDayKey = toDayKey(new Date())) {
 	await ensureDbOpen();
 
@@ -4062,25 +4132,32 @@ export async function cleanupStaleSessions(todayDayKey = toDayKey(new Date())) {
 		return;
 	}
 
-	const cleanupKey = `${userId}:${todayDayKey}`;
+	const nowMs = Date.now();
+	const cleanupKey = `${userId}:${todayDayKey}:${Math.floor(nowMs / 60_000)}`;
 
 	if (lastStaleSessionCleanupKey === cleanupKey) {
 		return;
 	}
 
-	const [plannedSessions, runningSessions] = await Promise.all([
+	const [plannedSessions, initialRunningSessions] = await Promise.all([
 		db.workoutSessions.where('status').equals('planned').toArray(),
 		db.workoutSessions.where('status').equals('in_progress').toArray()
 	]);
+
+	for (const runningSession of initialRunningSessions) {
+		await flushSessionInputDraft(runningSession.id);
+	}
+
+	const runningSessions = await db.workoutSessions.where('status').equals('in_progress').toArray();
 	const stalePlannedSessions = plannedSessions.filter((session) => session.dayKey < todayDayKey);
-	const staleRunningSessions = runningSessions.filter((session) => session.dayKey < todayDayKey);
+	const staleRunningSessions = runningSessions.filter((session) => isSessionInactive(session, nowMs));
 
 	if (stalePlannedSessions.length === 0 && staleRunningSessions.length === 0) {
 		lastStaleSessionCleanupKey = cleanupKey;
 		return;
 	}
 
-	const now = timestamp();
+	const updatedAt = timestamp();
 
 	await db.transaction('rw', db.workoutSessions, db.sessionExercises, db.sessionSets, async () => {
 		for (const stalePlannedSession of stalePlannedSessions) {
@@ -4088,17 +4165,23 @@ export async function cleanupStaleSessions(todayDayKey = toDayKey(new Date())) {
 		}
 
 		for (const staleRunningSession of staleRunningSessions) {
+			const lastInput = getSessionLastInputAt(staleRunningSession);
+
+			if (!lastInput) {
+				continue;
+			}
+
 			await db.workoutSessions.update(staleRunningSession.id, {
 				status: 'abandoned',
-				completedAt: now,
-				updatedAt: now
+				completedAt: lastInput.value,
+				updatedAt
 			});
+			clearSessionInputDraft(staleRunningSession.id);
 		}
 	});
 
 	lastStaleSessionCleanupKey = cleanupKey;
 }
-
 export async function getCurrentInProgressSession() {
 	const sessions = await db.workoutSessions.where('status').equals('in_progress').toArray();
 	const latestSession = sessions.sort((first, second) => compareSessionRows(second, first)).at(0);
@@ -4274,6 +4357,7 @@ export async function startWorkoutSession(sessionId: string) {
 		await db.workoutSessions.update(sessionId, {
 			status: 'in_progress',
 			startedAt: now,
+			lastInputAt: now,
 			updatedAt: now
 		});
 
