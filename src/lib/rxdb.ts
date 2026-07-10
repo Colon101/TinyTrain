@@ -68,7 +68,7 @@ const optionalFieldsByCollection: Record<CollectionKey, string[]> = {
 	exercises: [],
 	workouts: [],
 	workoutExercises: [],
-	workoutSessions: ['startedAt', 'completedAt', 'lastInputAt'],
+	workoutSessions: ['startedAt', 'completedAt'],
 	sessionExercises: [],
 	sessionSets: ['weightInput', 'repsInput', 'rirInput', 'weight', 'reps', 'rir'],
 	exerciseResetEvents: []
@@ -154,7 +154,7 @@ const schemas: Record<CollectionKey, RxJsonSchema<any>> = {
 		]
 	}),
 	workoutSessions: createSchema<SupabaseWorkoutSession>({
-		version: 2,
+		version: 1,
 		properties: {
 			id: stringProperty,
 			user_id: stringProperty,
@@ -163,7 +163,6 @@ const schemas: Record<CollectionKey, RxJsonSchema<any>> = {
 			dayKey: stringProperty,
 			startedAt: timestampProperty,
 			completedAt: timestampProperty,
-			lastInputAt: timestampProperty,
 			status: {
 				type: 'string',
 				enum: ['planned', 'in_progress', 'completed', 'abandoned'],
@@ -398,8 +397,7 @@ export async function getTinyTrainRxDatabase(userId: string): Promise<TinyTrainR
 			workoutSessions: {
 				schema: schemas.workoutSessions,
 				migrationStrategies: {
-					1: (oldDoc: RxDocumentData<SupabaseWorkoutSession>) => oldDoc,
-					2: (oldDoc: RxDocumentData<SupabaseWorkoutSession>) => oldDoc
+					1: (oldDoc: RxDocumentData<SupabaseWorkoutSession>) => oldDoc
 				}
 			},
 			sessionExercises: { schema: schemas.sessionExercises },
@@ -473,7 +471,7 @@ export async function resetTinyTrainRxDatabase(userId: string) {
 		'sessionSets',
 		'exerciseResetEvents'
 	];
-	const knownVersions = [0, 1, 2];
+	const knownVersions = [0, 1];
 	const knownDatabaseNames = knownCollections.flatMap((collectionName) =>
 		knownVersions.map((version) => `rxdb-dexie-${databaseName}--${version}--${collectionName}`)
 	);
