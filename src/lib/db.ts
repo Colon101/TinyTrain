@@ -61,7 +61,6 @@ export interface WorkoutSession {
 	dayKey: string;
 	startedAt?: string;
 	completedAt?: string;
-	lastInputAt?: string;
 	status: SessionStatus;
 	createdAt: string;
 	updatedAt: string;
@@ -107,6 +106,7 @@ export type WorkoutExerciseWithExercise = WorkoutExercise & {
 };
 
 export type SessionSummary = WorkoutSession & {
+	lastInputAt?: string;
 	totalExercises: number;
 	totalSets: number;
 	totalReps: number;
@@ -2547,6 +2547,45 @@ function createBaselineExerciseId(normalizedName: string) {
 	return createSharedBaselineExerciseId(normalizedName);
 }
 
+function getLastSessionSetInputAt(sessionSets: SessionSet[]) {
+	let latestInput: { value: string; time: number } | null = null;
+
+	for (const sessionSet of sessionSets) {
+		const createdAtMs = new Date(sessionSet.createdAt).getTime();
+		const updatedAtMs = new Date(sessionSet.updatedAt).getTime();
+
+		if (
+			!Number.isFinite(createdAtMs) ||
+			!Number.isFinite(updatedAtMs) ||
+			updatedAtMs <= createdAtMs ||
+			(latestInput && updatedAtMs <= latestInput.time)
+		) {
+			continue;
+		}
+
+		latestInput = {
+			value: sessionSet.updatedAt,
+			time: updatedAtMs
+		};
+	}
+
+	return latestInput;
+}
+
+function getSessionActivityAt(session: WorkoutSession, sessionSets: SessionSet[]) {
+	const lastInput = getLastSessionSetInputAt(sessionSets);
+
+	if (lastInput) {
+		return lastInput;
+	}
+
+	const startedAtMs = session.startedAt ? new Date(session.startedAt).getTime() : NaN;
+
+	return session.startedAt && Number.isFinite(startedAtMs)
+		? { value: session.startedAt, time: startedAtMs }
+		: null;
+}
+
 function summarizeSession(
 	session: WorkoutSession,
 	sessionExercises: SessionExercise[],
@@ -2573,6 +2612,7 @@ function summarizeSession(
 	return {
 		...session,
 		dayKey: session.dayKey || toDayKey(session.startedAt ?? session.createdAt),
+		lastInputAt: getLastSessionSetInputAt(sessionSets)?.value,
 		totalExercises: sessionExercises.length,
 		totalSets: sessionSets.length,
 		totalReps,
@@ -3884,7 +3924,6 @@ async function updateSessionSetInputs(
 		throw new Error('Set not found.');
 	}
 
-	const sessionExercise = await db.sessionExercises.get(sessionSet.sessionExerciseId);
 	const cleanInputValue = toCleanSessionInputValue(rawValue, field);
 	const parsedValue = toParsedInputValue(cleanInputValue, field);
 	const updatedAt = timestamp();
@@ -3901,23 +3940,7 @@ async function updateSessionSetInputs(
 		patch.rir = parsedValue;
 	}
 
-	await db.transaction('rw', db.sessionSets, db.workoutSessions, async () => {
-		await db.sessionSets.update(sessionSetId, patch);
-
-		if (!sessionExercise) {
-			return;
-		}
-
-		const session = await db.workoutSessions.get(sessionExercise.sessionId);
-
-		if (session?.status === 'in_progress') {
-			await db.workoutSessions.update(session.id, {
-				lastInputAt: updatedAt,
-				updatedAt
-			});
-		}
-	});
-
+	await db.sessionSets.update(sessionSetId, patch);
 	const nextSet = await db.sessionSets.get(sessionSetId);
 
 	if (!nextSet) {
@@ -3926,7 +3949,6 @@ async function updateSessionSetInputs(
 
 	return withSessionSetDefaults(nextSet);
 }
-
 function getSessionInputDraftKey(sessionId: string) {
 	return `tinytrain:session-input-draft:${sessionId}`;
 }
@@ -4074,19 +4096,22 @@ export async function flushSessionInputDraft(sessionId: string) {
 	clearSessionInputDraft(sessionId);
 }
 
-function getSessionLastInputAt(session: WorkoutSession) {
-	const value = session.lastInputAt ?? session.startedAt;
-	const time = value ? new Date(value).getTime() : NaN;
+async function getStoredSessionActivityAt(session: WorkoutSession) {
+	const sessionSets = (await listSessionExerciseDetails(session.id)).flatMap(
+		(sessionExercise) => sessionExercise.sets
+	);
 
-	return value && Number.isFinite(time) ? { value, time } : null;
+	return getSessionActivityAt(session, sessionSets);
 }
 
-function isSessionInactive(session: WorkoutSession, nowMs = Date.now()) {
-	const lastInput = getSessionLastInputAt(session);
-
+function isSessionInactive(
+	session: WorkoutSession,
+	activityAt: { value: string; time: number } | null,
+	nowMs = Date.now()
+) {
 	return (
 		session.status === 'in_progress' &&
-		Boolean(lastInput && nowMs - lastInput.time >= SESSION_INACTIVITY_ABANDON_MS)
+		Boolean(activityAt && nowMs - activityAt.time >= SESSION_INACTIVITY_ABANDON_MS)
 	);
 }
 
@@ -4097,13 +4122,13 @@ export async function abandonInactiveWorkoutSession(sessionId: string, nowMs = D
 
 	const session = await db.workoutSessions.get(sessionId);
 
-	if (!session || !isSessionInactive(session, nowMs)) {
+	if (!session) {
 		return false;
 	}
 
-	const lastInput = getSessionLastInputAt(session);
+	const activityAt = await getStoredSessionActivityAt(session);
 
-	if (!lastInput) {
+	if (!isSessionInactive(session, activityAt, nowMs) || !activityAt) {
 		return false;
 	}
 
@@ -4111,7 +4136,7 @@ export async function abandonInactiveWorkoutSession(sessionId: string, nowMs = D
 
 	await db.workoutSessions.update(session.id, {
 		status: 'abandoned',
-		completedAt: lastInput.value,
+		completedAt: activityAt.value,
 		updatedAt
 	});
 	clearSessionInputDraft(session.id);
@@ -4149,8 +4174,16 @@ export async function cleanupStaleSessions(todayDayKey = toDayKey(new Date())) {
 	}
 
 	const runningSessions = await db.workoutSessions.where('status').equals('in_progress').toArray();
+	const runningSessionActivity = await Promise.all(
+		runningSessions.map(async (session) => ({
+			session,
+			activityAt: await getStoredSessionActivityAt(session)
+		}))
+	);
 	const stalePlannedSessions = plannedSessions.filter((session) => session.dayKey < todayDayKey);
-	const staleRunningSessions = runningSessions.filter((session) => isSessionInactive(session, nowMs));
+	const staleRunningSessions = runningSessionActivity.filter(({ session, activityAt }) =>
+		isSessionInactive(session, activityAt, nowMs)
+	);
 
 	if (stalePlannedSessions.length === 0 && staleRunningSessions.length === 0) {
 		lastStaleSessionCleanupKey = cleanupKey;
@@ -4164,19 +4197,17 @@ export async function cleanupStaleSessions(todayDayKey = toDayKey(new Date())) {
 			await deleteWorkoutSessionRows(stalePlannedSession.id);
 		}
 
-		for (const staleRunningSession of staleRunningSessions) {
-			const lastInput = getSessionLastInputAt(staleRunningSession);
-
-			if (!lastInput) {
+		for (const { session, activityAt } of staleRunningSessions) {
+			if (!activityAt) {
 				continue;
 			}
 
-			await db.workoutSessions.update(staleRunningSession.id, {
+			await db.workoutSessions.update(session.id, {
 				status: 'abandoned',
-				completedAt: lastInput.value,
+				completedAt: activityAt.value,
 				updatedAt
 			});
-			clearSessionInputDraft(staleRunningSession.id);
+			clearSessionInputDraft(session.id);
 		}
 	});
 
@@ -4357,7 +4388,6 @@ export async function startWorkoutSession(sessionId: string) {
 		await db.workoutSessions.update(sessionId, {
 			status: 'in_progress',
 			startedAt: now,
-			lastInputAt: now,
 			updatedAt: now
 		});
 
