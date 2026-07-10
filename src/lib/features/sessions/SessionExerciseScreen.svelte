@@ -17,6 +17,7 @@
 		writeExercisePickerCache
 	} from '$lib/features/workouts/exercise-picker-cache';
 	import SessionExerciseFooter from './SessionExerciseFooter.svelte';
+	import SessionInactivityMonitor from './SessionInactivityMonitor.svelte';
 	import SessionExerciseHeader from './SessionExerciseHeader.svelte';
 	import SessionSetEditor from './SessionSetEditor.svelte';
 	import { readSessionDataCache, writeSessionDataCache } from './session-data-cache';
@@ -839,6 +840,11 @@
 		);
 	}
 
+	async function handleInactiveSessionAbandoned() {
+		clearLocalSessionInputDraft(sessionId);
+		await goto(resolve('/(app)/sessions/[sessionId]', { sessionId }), { replaceState: true });
+	}
+
 	function getSessionExercisePath(nextSessionExerciseId: string) {
 		const path = resolve('/(app)/sessions/[sessionId]/exercises/[sessionExerciseId]', {
 			sessionId,
@@ -868,6 +874,11 @@
 </script>
 
 <section class="flex min-h-0 flex-1 flex-col overflow-hidden">
+	<SessionInactivityMonitor
+		summary={overview?.summary ?? null}
+		onAbandoned={handleInactiveSessionAbandoned}
+	/>
+
 	{#if errorMessage}
 		<p
 			class="mb-4 rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-3 text-sm leading-5 text-red-100"
