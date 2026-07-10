@@ -18,6 +18,7 @@
 	import Icon from '$lib/ui/Icon.svelte';
 	import SessionDragPreview from './SessionDragPreview.svelte';
 	import SessionExerciseList from './SessionExerciseList.svelte';
+	import SessionInactivityMonitor from './SessionInactivityMonitor.svelte';
 	import SessionOverviewHeader from './SessionOverviewHeader.svelte';
 	import SessionSummaryPanel from './SessionSummaryPanel.svelte';
 	import {
@@ -1151,6 +1152,8 @@
 </script>
 
 <section class="box-border flex min-w-0 flex-1 flex-col px-1">
+	<SessionInactivityMonitor summary={overview?.summary ?? null} onAbandoned={loadData} />
+
 	{#if errorMessage}
 		<p
 			class="mb-4 rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-3 text-sm leading-5 text-red-100"
