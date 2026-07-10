@@ -37,6 +37,7 @@
 
 	type DatabaseApi = typeof import('$lib/db');
 	type PickerMode = 'add' | 'swap';
+	type TimeEditorEndMode = 'custom' | 'recorded_end' | 'last_input';
 	type DragPreview = {
 		pointerId: number;
 		x: number;
@@ -89,6 +90,7 @@
 	let timeEditorDurationHours = $state('0');
 	let timeEditorDurationMinutes = $state('0');
 	let timeEditorDurationSeconds = $state('0');
+	let timeEditorEndMode = $state<TimeEditorEndMode>('recorded_end');
 	let isExercisePickerOpen = $state(false);
 	let pickerMode = $state<PickerMode>('add');
 	let targetSessionExerciseId = $state('');
@@ -441,7 +443,41 @@
 		timeEditorDurationHours = `${Math.floor(durationSeconds / 3600)}`;
 		timeEditorDurationMinutes = `${Math.floor((durationSeconds % 3600) / 60)}`;
 		timeEditorDurationSeconds = `${durationSeconds % 60}`;
+		timeEditorEndMode = 'recorded_end';
 		isTimeEditorOpen = true;
+	}
+
+	function getTimeEditorStartedAt() {
+		if (!timerSummary?.startedAt || !timeEditorStartTime) {
+			return null;
+		}
+
+		const [hours = '0', minutes = '0'] = timeEditorStartTime.split(':');
+		const startedAt = new Date(timerSummary.startedAt);
+
+		if (Number.isNaN(startedAt.getTime())) {
+			return null;
+		}
+
+		startedAt.setHours(Number(hours), Number(minutes), 0, 0);
+		return startedAt;
+	}
+
+	function useTimeEditorEnd(mode: Exclude<TimeEditorEndMode, 'custom'>) {
+		const endAtValue =
+			mode === 'last_input' ? overview?.summary.lastInputAt : overview?.summary.completedAt;
+		const startedAt = getTimeEditorStartedAt();
+		const endAt = endAtValue ? new Date(endAtValue) : null;
+
+		if (!startedAt || !endAt || Number.isNaN(endAt.getTime()) || endAt < startedAt) {
+			return;
+		}
+
+		const durationSeconds = Math.max(Math.round((endAt.getTime() - startedAt.getTime()) / 1000), 0);
+		timeEditorDurationHours = `${Math.floor(durationSeconds / 3600)}`;
+		timeEditorDurationMinutes = `${Math.floor((durationSeconds % 3600) / 60)}`;
+		timeEditorDurationSeconds = `${durationSeconds % 60}`;
+		timeEditorEndMode = mode;
 	}
 
 	function closeTimeEditor() {
@@ -1295,9 +1331,48 @@
 							name="tinytrain-session-start-time"
 							autocomplete="off"
 							bind:value={timeEditorStartTime}
+							oninput={() => (timeEditorEndMode = 'custom')}
 							required
 						/>
 					</label>
+				</div>
+
+				<div class="px-4 pt-4">
+					<p class="mb-2 text-xs font-semibold tracking-[0.16em] text-zinc-500 uppercase">
+						Clock stops at
+					</p>
+					<div class="grid gap-2">
+						<button
+							class={`rounded-lg border px-3 py-3 text-left transition ${
+								timeEditorEndMode === 'recorded_end'
+									? 'border-emerald-300/60 bg-emerald-300/10'
+									: 'border-white/10 bg-white/[0.03]'
+							}`}
+							type="button"
+							disabled={!overview?.summary.completedAt}
+							onclick={() => useTimeEditorEnd('recorded_end')}
+						>
+							<span class="block text-sm font-semibold text-white">Session end</span>
+							<span class="mt-1 block text-xs leading-5 text-zinc-400">
+								Use the time saved when the session ended.
+							</span>
+						</button>
+						<button
+							class={`rounded-lg border px-3 py-3 text-left transition disabled:opacity-40 ${
+								timeEditorEndMode === 'last_input'
+									? 'border-emerald-300/60 bg-emerald-300/10'
+									: 'border-white/10 bg-white/[0.03]'
+							}`}
+							type="button"
+							disabled={!overview?.summary.lastInputAt}
+							onclick={() => useTimeEditorEnd('last_input')}
+						>
+							<span class="block text-sm font-semibold text-white">Last logged input</span>
+							<span class="mt-1 block text-xs leading-5 text-zinc-400">
+								Stop the clock when weight, reps, or RIR was last changed.
+							</span>
+						</button>
+					</div>
 				</div>
 
 				<div class="px-4 pt-4">
@@ -1319,6 +1394,7 @@
 								min="0"
 								inputmode="numeric"
 								bind:value={timeEditorDurationHours}
+								oninput={() => (timeEditorEndMode = 'custom')}
 							/>
 						</label>
 						<label class="grid gap-1.5">
@@ -1335,6 +1411,7 @@
 								min="0"
 								inputmode="numeric"
 								bind:value={timeEditorDurationMinutes}
+								oninput={() => (timeEditorEndMode = 'custom')}
 							/>
 						</label>
 						<label class="grid gap-1.5">
@@ -1351,6 +1428,7 @@
 								min="0"
 								inputmode="numeric"
 								bind:value={timeEditorDurationSeconds}
+								oninput={() => (timeEditorEndMode = 'custom')}
 							/>
 						</label>
 					</div>
