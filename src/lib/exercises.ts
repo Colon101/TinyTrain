@@ -892,11 +892,3 @@ export const BASELINE_EXERCISE_BY_ID = new Map(
 export const BASELINE_EXERCISE_BY_NORMALIZED_NAME = new Map(
 	BASELINE_EXERCISE_ROWS.map((exercise) => [exercise.normalizedName, exercise])
 );
-
-export function getBaselineExerciseById(id: string) {
-	return BASELINE_EXERCISE_BY_ID.get(id) ?? null;
-}
-
-export function getBaselineExerciseByNormalizedName(normalizedName: string) {
-	return BASELINE_EXERCISE_BY_NORMALIZED_NAME.get(normalizeExerciseName(normalizedName)) ?? null;
-}

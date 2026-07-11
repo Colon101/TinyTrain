@@ -75,7 +75,6 @@ VITE_SUPABASE_ANON_KEY=
 - `src/lib/tracked-import.ts`: Tracked export preview, import, and sync logic.
 - `src/lib/features/`: Svelte feature components grouped by app area.
 - `src/routes/`: SvelteKit routes and page shells.
-- `supabase/migrations/`: Supabase schema, RLS policies, seed data, and sync indexes.
 - `docs/legacy-cleanup.md`: audit of removed startup-era code and retained compatibility paths.
 
 ## Data Flow
@@ -89,33 +88,12 @@ The Supabase/RxDB path is:
 3. `rxdb.ts` starts Supabase replication.
 4. `db-cloud-sync.ts` handles explicit uploads, richest-row reconciliation, recent-row backfill, and remote row merges.
 
-## Supabase
-
-The initial schema is in:
-
-```sh
-supabase/migrations/20260428141722_tinytrain_bootstrap.sql
-```
-
-Progressive sync indexes are in:
-
-```sh
-supabase/migrations/20260516120000_add_progressive_sync_indexes.sql
-```
-
-The cleanup migration that removes the retired Dexie Cloud migration-status table is in:
-
-```sh
-supabase/migrations/20260711170000_drop_legacy_migration_status.sql
-```
-
-The bootstrap SQL is destructive by design for a new/empty project: it drops TinyTrain tables and deletes Supabase Auth users. Do not run it against production data.
-
 ## Development Notes
 
 - Prefer importing app data operations from `$lib/db`.
 - Keep UI components out of direct Supabase calls unless there is a specific auth-only reason.
 - Put cloud reconciliation behavior in `db-cloud-sync.ts`.
 - Keep Tracked import behavior in `tracked-import.ts`.
-- Add schema changes as new Supabase migrations; do not edit or regenerate applied migrations.
+- Keep the inline RxDB schemas aligned with the already-provisioned Supabase tables when changing
+  persisted models.
 - Add tests around the `db/` modules, `db-cloud-sync.ts`, and `tracked-import.ts` before changing sync or import semantics.

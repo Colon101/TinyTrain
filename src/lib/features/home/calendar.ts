@@ -53,16 +53,6 @@ export function addWeeks(date: Date | null | undefined, delta: number) {
 	return addDays(date, delta * 7);
 }
 
-export function isSameMonth(first: Date | null | undefined, second: Date | null | undefined) {
-	const safeFirst = getSafeDate(first);
-	const safeSecond = getSafeDate(second);
-
-	return (
-		safeFirst.getFullYear() === safeSecond.getFullYear() &&
-		safeFirst.getMonth() === safeSecond.getMonth()
-	);
-}
-
 export function getMonthCacheKey(date?: Date | null) {
 	const safeDate = getSafeDate(date);
 
@@ -105,14 +95,4 @@ export function buildCalendarMonth(date?: Date | null) {
 	}
 
 	return Array.from({ length: 6 }, (_, weekIndex) => cells.slice(weekIndex * 7, weekIndex * 7 + 7));
-}
-
-export function getDefaultSelectedDayKey(monthDate: Date, sessionDayKeys: string[]) {
-	const today = new Date();
-
-	if (isSameMonth(monthDate, today)) {
-		return toDayKey(today);
-	}
-
-	return sessionDayKeys[0] ?? toDayKey(startOfMonth(monthDate));
 }
