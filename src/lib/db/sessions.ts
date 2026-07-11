@@ -1,26 +1,28 @@
 export {
-	abandonInactiveWorkoutSession,
-	addExerciseToSession,
-	addSessionSetRow,
-	cleanupStaleSessions,
-	completeWorkoutSession,
-	deleteWorkoutSession,
-	flushSessionInputDraft,
 	getCurrentInProgressSession,
 	getDayOverview,
-	getEditableSession,
 	getSessionOverview,
-	getSessionTimerSummary,
 	listSessionCalendarRowsForWeek,
-	listSessionSummariesForMonth,
+	listSessionSummariesForMonth
+} from './sessions/data';
+export { flushSessionInputDraft } from './sessions/inputs';
+export {
+	addExerciseToSession,
+	addSessionSetRow,
 	removeSessionExercise,
 	removeSessionSetRow,
 	reorderSessionExercises,
 	replaceSessionExercise,
 	resetSessionInputs,
+	updateSessionSetInput
+} from './sessions/editing';
+export {
+	abandonInactiveWorkoutSession,
+	cleanupStaleSessions,
+	completeWorkoutSession,
+	deleteWorkoutSession,
+	getEditableSession,
 	scheduleWorkoutSession,
 	startWorkoutSession,
-	toDayKey,
-	updateSessionSetInput,
 	updateWorkoutSessionTiming
-} from './internal';
+} from './sessions/lifecycle';

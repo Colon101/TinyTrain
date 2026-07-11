@@ -1,12 +1,61 @@
 /**
- * TinyTrain's database facade.
+ * TinyTrain's canonical database API.
  *
- * Keep application imports pointed at this file. The exports below group the
- * database API by responsibility while preserving one canonical entry point.
+ * Feature code should import from this facade. Implementations live in focused
+ * runtime and domain modules so the public API stays stable without a God implementation.
  */
 export * from './db/models';
-export * from './db/runtime';
-export * from './db/exercises';
-export * from './db/workouts';
+export {
+	db,
+	ensureDbOpen,
+	getActiveStorageBackend,
+	getLocalDatabaseStats,
+	getPersistentStorageStatus,
+	getSessionTimerSummary,
+	hydrateVisibleScope,
+	loginWithGoogle,
+	loginWithSupabaseGoogleForApp,
+	logoutFromCloud,
+	requestPersistentStorage,
+	runWithClosedDatabaseRetry,
+	subscribeToDatabaseChanges,
+	syncNow,
+	uploadLocalDatabaseToCloud,
+	SESSION_INACTIVITY_ABANDON_MS,
+	SESSION_INACTIVITY_CHECK_INTERVAL_MS,
+	SESSION_INACTIVITY_WARNING_MS
+} from './db/runtime';
+export {
+	createCustomExercise,
+	createExercise,
+	ensureBaselineExercises,
+	getExercise,
+	getExerciseDetail,
+	listCustomExerciseItems,
+	listCustomExercises,
+	listExerciseHistory,
+	listExerciseItems,
+	listExerciseResetEvents,
+	listExercises,
+	listExerciseUsagePreferences,
+	recordExerciseReset,
+	setExerciseUnilateral
+} from './db/exercises';
+export { listExerciseMergeOptions, mergeExerciseHistory } from './db/exercise-merge';
+export {
+	addExerciseToWorkout,
+	createWorkout,
+	listWorkoutExercises,
+	listWorkoutSchedulingOptions,
+	listWorkouts,
+	moveWorkoutExercise,
+	removeWorkoutExercise,
+	reorderWorkoutExercises
+} from './db/workouts';
 export * from './db/sessions';
-export * from './db/backfill';
+export {
+	createBackfillWorkoutSession,
+	seedExampleBackfill,
+	seedImprovedBackfill
+} from './db/backfill';
+export { normalizeName, toDayKey } from './db/shared';

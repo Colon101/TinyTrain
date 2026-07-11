@@ -8,7 +8,7 @@ import type {
 	Workout,
 	WorkoutExercise,
 	WorkoutSession
-} from './db';
+} from './db/models';
 
 type QueryResult<T> = {
 	toArray(): Promise<T[]>;

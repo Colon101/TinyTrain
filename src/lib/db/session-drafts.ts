@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { SESSION_INPUT_DRAFT_CHANGE_EVENT } from '../features/sessions/session-input-draft';
 import type { SessionInputField } from './models';
 
 type SessionInputDraftFieldKey = `${SessionInputField}Input`;
@@ -13,8 +14,6 @@ export type SessionInputDraft = {
 	sets?: Record<string, SessionInputDraftSet>;
 	updatedAt?: number;
 };
-
-const SESSION_INPUT_DRAFT_CHANGE_EVENT = 'tinytrain:session-input-draft-change';
 
 function getSessionInputDraftKey(sessionId: string) {
 	return `tinytrain:session-input-draft:${sessionId}`;
