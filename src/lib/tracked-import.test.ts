@@ -2,6 +2,7 @@ import { strToU8, zipSync } from 'fflate';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const dbMock = vi.hoisted(() => ({
+	currentUser: { isLoggedIn: true },
 	ensureDbOpen: vi.fn(),
 	syncNow: vi.fn(),
 	exercisesToArray: vi.fn(),
@@ -21,7 +22,7 @@ vi.mock('./db', async () => {
 
 	return {
 		db: {
-			cloud: { currentUser: { value: { isLoggedIn: true } } },
+			cloud: { currentUser: { value: dbMock.currentUser } },
 			exercises: {
 				toArray: dbMock.exercisesToArray,
 				bulkAdd: dbMock.exercisesBulkAdd
@@ -92,9 +93,24 @@ function richTrackedZip() {
 	});
 }
 
+function expectNoDatabaseWrites() {
+	for (const write of [
+		dbMock.exercisesBulkAdd,
+		dbMock.workoutsBulkAdd,
+		dbMock.workoutExercisesBulkPut,
+		dbMock.workoutSessionsBulkAdd,
+		dbMock.sessionExercisesBulkAdd,
+		dbMock.sessionSetsBulkAdd,
+		dbMock.transaction
+	]) {
+		expect(write).not.toHaveBeenCalled();
+	}
+}
+
 describe('Tracked archive', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		dbMock.currentUser.isLoggedIn = true;
 		dbMock.exercisesToArray.mockResolvedValue([]);
 		dbMock.exercisesBulkAdd.mockResolvedValue([]);
 		dbMock.workoutsToArray.mockResolvedValue([]);
@@ -186,14 +202,34 @@ describe('Tracked archive', () => {
 					}
 				],
 				warnings: [
-					'1 set rows reference missing sessions or exercises.',
-					'1 unsupported CSV files will be ignored.'
+					'1 set row references missing sessions or exercises.',
+					'1 unsupported CSV file will be ignored.'
 				],
 				syncStatus: 'not-run'
 			})
 		);
 		expect(summary.unsupportedCategories).toContain('nutrition');
 		expect(dbMock.ensureDbOpen).toHaveBeenCalledOnce();
+	});
+
+	it('keeps warning wording plural for counts greater than one', async () => {
+		const summary = await previewTrackedArchive(
+			trackedZip({
+				...validCsv,
+				'sets.csv': [
+					'id,sessionId,exerciseId,exerciseName,repetitions,weight,rir',
+					'set1,missing,bench,Barbell Bench Press,8,80,2',
+					'set2,also-missing,bench,Barbell Bench Press,6,85,1'
+				].join('\n'),
+				'nutrition.csv': 'date,calories',
+				'cardio.csv': 'date,duration'
+			})
+		);
+
+		expect(summary.warnings).toEqual([
+			'2 set rows reference missing sessions or exercises.',
+			'2 unsupported CSV files will be ignored.'
+		]);
 	});
 
 	it('imports a signed-in archive with deterministic rows and the selected limb priority', async () => {
@@ -308,6 +344,42 @@ describe('Tracked archive', () => {
 				rir: 2
 			})
 		]);
+		expect(dbMock.transaction).toHaveBeenCalledOnce();
+		expect(dbMock.syncNow).toHaveBeenCalledOnce();
+	});
+
+	it('rejects an archive with no importable data before writing', async () => {
+		const file = trackedZip({
+			...validCsv,
+			'sets.csv':
+				'id,sessionId,exerciseId,exerciseName,repetitions,weight,rir\nset1,missing,bench,Barbell Bench Press,8,80,2'
+		});
+
+		await expect(importTrackedArchive(file)).rejects.toThrow(
+			'No importable Tracked strength workouts were found.'
+		);
+		expectNoDatabaseWrites();
+		expect(dbMock.syncNow).not.toHaveBeenCalled();
+	});
+
+	it('rejects a signed-out user before writing', async () => {
+		dbMock.currentUser.isLoggedIn = false;
+
+		await expect(importTrackedArchive(richTrackedZip())).rejects.toThrow(
+			'Sign in with Google before importing from Tracked.'
+		);
+		expectNoDatabaseWrites();
+		expect(dbMock.syncNow).not.toHaveBeenCalled();
+	});
+
+	it('reports a failed synchronization after a successful import', async () => {
+		dbMock.syncNow.mockRejectedValueOnce(new Error('Network unavailable'));
+
+		const summary = await importTrackedArchive(richTrackedZip());
+
+		expect(summary).toEqual(
+			expect.objectContaining({ syncStatus: 'failed', syncError: 'Network unavailable' })
+		);
 		expect(dbMock.transaction).toHaveBeenCalledOnce();
 		expect(dbMock.syncNow).toHaveBeenCalledOnce();
 	});

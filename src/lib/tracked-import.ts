@@ -352,11 +352,15 @@ async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
 	const skippedSetRows = archive.rows.sets.length - setRows.length;
 
 	if (skippedSetRows > 0) {
-		summary.warnings.push(`${skippedSetRows} set rows reference missing sessions or exercises.`);
+		summary.warnings.push(
+			`${skippedSetRows} set row${skippedSetRows === 1 ? ' references' : 's reference'} missing sessions or exercises.`
+		);
 	}
 
 	if (archive.ignoredFiles.length > 0) {
-		summary.warnings.push(`${archive.ignoredFiles.length} unsupported CSV files will be ignored.`);
+		summary.warnings.push(
+			`${archive.ignoredFiles.length} unsupported CSV file${archive.ignoredFiles.length === 1 ? '' : 's'} will be ignored.`
+		);
 	}
 
 	return {

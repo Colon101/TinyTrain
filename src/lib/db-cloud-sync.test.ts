@@ -4,10 +4,31 @@ import type { DataTable } from './db/runtime';
 import type { SessionSet } from './db/models';
 import { hasInputValue, withExerciseDefaults, withSessionSetDefaults } from './db/shared';
 
+type SupabaseMockRow = SyncableRow & {
+	user_id: string;
+	_deleted?: boolean;
+	_modified?: string;
+};
+
+const supabaseMock = vi.hoisted(() => ({
+	remoteRows: new Map<string, SupabaseMockRow[]>(),
+	uploadedRows: new Map<string, SyncableRow[]>()
+}));
+
 vi.mock('./supabase', () => ({
 	supabase: {
-		from() {
-			throw new Error('Cloud reconciliation tests must not access Supabase.');
+		from(tableName: string) {
+			return {
+				select: () => ({
+					eq: () => ({
+						range: async () => ({ data: supabaseMock.remoteRows.get(tableName) ?? [], error: null })
+					})
+				}),
+				upsert: async (rows: SyncableRow[]) => {
+					supabaseMock.uploadedRows.set(tableName, rows);
+					return { error: null };
+				}
+			};
 		}
 	}
 }));
@@ -41,6 +62,49 @@ function createLocalTable<T extends SyncableRow>(initialRow?: T) {
 		rows,
 		table: mergeOperations as unknown as DataTable<T>,
 		put
+	};
+}
+
+function createReconcileTable<T extends SyncableRow>(initialRows: T[] = []) {
+	const rows = new Map(initialRows.map((row) => [row.id, row]));
+
+	return {
+		rows,
+		table: {
+			toArray: async () => [...rows.values()],
+			get: async (id: string) => rows.get(id),
+			put: async (row: T) => {
+				rows.set(row.id, row);
+				return row.id;
+			},
+			delete: async (id: string) => rows.delete(id)
+		} as unknown as DataTable<T>
+	};
+}
+
+function createReconcileDependencies(workout: SyncableRow) {
+	const exercises = createReconcileTable();
+	const workouts = createReconcileTable([workout]);
+	const workoutExercises = createReconcileTable();
+	const workoutSessions = createReconcileTable();
+	const sessionExercises = createReconcileTable();
+	const sessionSets = createReconcileTable();
+	const exerciseResetEvents = createReconcileTable();
+
+	return {
+		workouts,
+		dependencies: {
+			...dependencies,
+			db: {
+				exercises: exercises.table,
+				workouts: workouts.table,
+				workoutExercises: workoutExercises.table,
+				workoutSessions: workoutSessions.table,
+				sessionExercises: sessionExercises.table,
+				sessionSets: sessionSets.table,
+				exerciseResetEvents: exerciseResetEvents.table
+			} as DatabaseCloudSyncDependencies['db']
+		}
 	};
 }
 
@@ -194,5 +258,57 @@ describe('remote deletion conflicts', () => {
 		expect(dbCloudSync.shouldApplyRemoteDeletion(localRow, tombstone(newer))).toBe(true);
 		expect(dbCloudSync.shouldApplyRemoteDeletion(localRow, tombstone(older))).toBe(false);
 		expect(dbCloudSync.shouldApplyRemoteDeletion(undefined, tombstone(older))).toBe(true);
+	});
+
+	it.each([newer, newest])(
+		'applies a %s tombstone throughout reconciliation',
+		async (modifiedAt) => {
+			supabaseMock.remoteRows.clear();
+			supabaseMock.uploadedRows.clear();
+			const localRow = { id: 'workout-1', name: 'Push', createdAt: older, updatedAt: newer };
+			const { dependencies: reconcileDependencies, workouts } =
+				createReconcileDependencies(localRow);
+			supabaseMock.remoteRows.set('workouts', [
+				{ ...localRow, user_id: 'user-1', _deleted: true, _modified: modifiedAt }
+			]);
+
+			const summary = await dbCloudSync.reconcileSupabaseDatabase(
+				reconcileDependencies,
+				'user-1',
+				'richest'
+			);
+			const workoutSummary = summary.tables.find((table) => table.table === 'workouts');
+
+			expect(workouts.rows.has(localRow.id)).toBe(false);
+			expect(workoutSummary).toEqual(
+				expect.objectContaining({ mergedRows: 0, uploadedRows: 0, remoteWins: 1 })
+			);
+			expect(supabaseMock.uploadedRows.get('workouts')).toBeUndefined();
+		}
+	);
+
+	it('preserves and uploads a local row when the tombstone is stale', async () => {
+		supabaseMock.remoteRows.clear();
+		supabaseMock.uploadedRows.clear();
+		const localRow = { id: 'workout-1', name: 'Push', createdAt: older, updatedAt: newer };
+		const { dependencies: reconcileDependencies, workouts } = createReconcileDependencies(localRow);
+		supabaseMock.remoteRows.set('workouts', [
+			{ ...localRow, user_id: 'user-1', _deleted: true, _modified: older }
+		]);
+
+		const summary = await dbCloudSync.reconcileSupabaseDatabase(
+			reconcileDependencies,
+			'user-1',
+			'richest'
+		);
+		const workoutSummary = summary.tables.find((table) => table.table === 'workouts');
+
+		expect(workouts.rows.get(localRow.id)).toEqual(localRow);
+		expect(workoutSummary).toEqual(
+			expect.objectContaining({ mergedRows: 1, uploadedRows: 1, localWins: 1, remoteWins: 0 })
+		);
+		expect(supabaseMock.uploadedRows.get('workouts')).toEqual([
+			expect.objectContaining({ id: localRow.id, user_id: 'user-1' })
+		]);
 	});
 });
