@@ -12,7 +12,7 @@ TinyTrain is an offline-first workout tracker built with SvelteKit, Supabase, Rx
 - App-wide inactivity recovery with a warning before stale sessions are safely abandoned.
 - Progressive hydration for visible sessions, weeks, and workout lists.
 - PWA app shell and service worker caching.
-- Tracked export import with preview and conflict-safe sync.
+- Tracked export/import with preview and conflict-safe sync.
 
 ## Stack
 

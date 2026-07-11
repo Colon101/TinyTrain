@@ -36,9 +36,13 @@
 
 		window.addEventListener('pointerdown', handlePointerDown);
 
-		void import('$lib/db').then((dbApi) => {
-			api = dbApi;
-		});
+		void import('$lib/db')
+			.then((dbApi) => {
+				api = dbApi;
+			})
+			.catch(() => {
+				actionError = 'Account tools failed to load. Reload and try again.';
+			});
 
 		return () => {
 			window.removeEventListener('pointerdown', handlePointerDown);
