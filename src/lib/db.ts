@@ -8,7 +8,6 @@ export * from './db/models';
 export {
 	db,
 	ensureDbOpen,
-	getActiveStorageBackend,
 	getLocalDatabaseStats,
 	getPersistentStorageStatus,
 	getSessionTimerSummary,
@@ -28,7 +27,6 @@ export {
 export {
 	createCustomExercise,
 	createExercise,
-	ensureBaselineExercises,
 	getExercise,
 	getExerciseDetail,
 	listCustomExerciseItems,
@@ -53,9 +51,4 @@ export {
 	reorderWorkoutExercises
 } from './db/workouts';
 export * from './db/sessions';
-export {
-	createBackfillWorkoutSession,
-	seedExampleBackfill,
-	seedImprovedBackfill
-} from './db/backfill';
 export { normalizeName, toDayKey } from './db/shared';

@@ -1,5 +1,4 @@
 import { browser } from '$app/environment';
-import type { StorageBackend } from '../runtime-mode';
 import {
 	getSupabaseAuthSnapshot,
 	getSupabaseUser,
@@ -143,7 +142,6 @@ const supabaseHydratedPrefix = 'tinytrain:supabase-rxdb-hydrated:';
 const progressiveBackfillPrefix = 'tinytrain:supabase-rxdb-backfilled:';
 const recentBackfillDays = 90;
 
-let activeBackend: StorageBackend = 'supabase-rxdb';
 let rxDataDb: RxDexieLikeDatabase | null = null;
 let activeSupabaseUserId: string | null = null;
 let dbOpenPromise: Promise<typeof db> | null = null;
@@ -166,7 +164,7 @@ const databaseChangeSubscribers = new Set<{
 }>();
 
 function isActiveSupabaseUser(userId: string) {
-	return activeBackend === 'supabase-rxdb' && activeSupabaseUserId === userId;
+	return activeSupabaseUserId === userId;
 }
 
 function setSyncStateForUser(userId: string, state: SyncStateLike) {
@@ -188,14 +186,10 @@ export function markStaleSessionCleanupCompleted(cleanupKey: string) {
 }
 
 export function canAttemptSessionCleanup() {
-	return activeBackend !== 'supabase-rxdb' || (browser && navigator.onLine);
+	return browser && navigator.onLine;
 }
 
 export async function confirmSessionCleanupIsFresh() {
-	if (activeBackend !== 'supabase-rxdb') {
-		return true;
-	}
-
 	const userId = activeSupabaseUserId;
 
 	if (!userId || !browser || !navigator.onLine) {
@@ -255,10 +249,6 @@ export function markSupabaseCacheHydrated(userId: string) {
 	}
 
 	localStorage.setItem(`${supabaseHydratedPrefix}${userId}`, 'true');
-}
-
-export function getActiveStorageBackend(): StorageBackend {
-	return activeBackend;
 }
 
 export function getProgressiveBackfillKey(userId: string) {
@@ -338,7 +328,7 @@ export function startAuthBridge() {
 
 		activeUser.set(toSupabaseCloudUser());
 
-		if (activeBackend !== 'supabase-rxdb' || activeSupabaseUserId !== snapshot.user.id) {
+		if (activeSupabaseUserId !== snapshot.user.id) {
 			activeUser.set({ isLoading: true });
 			dbOpenPromise = null;
 			supabaseBackendActivationPromise ??= selectBackend()
@@ -362,7 +352,6 @@ export function clearSupabaseRuntimeState() {
 
 	lastStaleSessionCleanupKey = null;
 	backgroundSyncUserId = null;
-	activeBackend = 'supabase-rxdb';
 	activeSupabaseUserId = null;
 	rxDataDb = null;
 	dbOpenPromise = null;
@@ -389,7 +378,6 @@ export async function getRxRuntime() {
 export async function openSupabaseRuntime(userId: string) {
 	const { adapter, rxdb } = await getRxRuntime();
 
-	activeBackend = 'supabase-rxdb';
 	activeSupabaseUserId = userId;
 	activeSyncState.set({ phase: 'pulling', status: 'syncing' });
 	rxDataDb = await adapter.getRxDexieLikeDatabase(userId);
@@ -404,13 +392,13 @@ export async function openSupabaseRuntime(userId: string) {
 			.awaitSupabaseInSync(userId, { timeoutMs: 15000 })
 			.then(() => {
 				markSupabaseCacheHydrated(userId);
-				if (activeBackend === 'supabase-rxdb' && activeSupabaseUserId === userId) {
+				if (activeSupabaseUserId === userId) {
 					activeSyncState.set({ phase: 'in-sync', status: 'synced' });
 				}
 			})
 			.catch((error) => {
 				console.warn('Background Supabase sync failed.', error);
-				if (activeBackend === 'supabase-rxdb' && activeSupabaseUserId === userId) {
+				if (activeSupabaseUserId === userId) {
 					activeSyncState.set({
 						phase: 'error',
 						status: 'error',
@@ -589,16 +577,11 @@ export const db = new Proxy(
 				return cloudCompat;
 			}
 
-			if (prop === 'transaction' && activeBackend === 'supabase-rxdb' && rxDataDb) {
+			if (prop === 'transaction' && rxDataDb) {
 				return rxDataDb.transaction.bind(rxDataDb);
 			}
 
-			if (
-				activeBackend === 'supabase-rxdb' &&
-				rxDataDb &&
-				typeof prop === 'string' &&
-				prop in rxDataDb
-			) {
+			if (rxDataDb && typeof prop === 'string' && prop in rxDataDb) {
 				return createRecoveringDataTable(
 					prop as RxDataTableKey,
 					rxDataDb[prop as RxDataTableKey] as unknown as DataTable<{ id: string }>
@@ -670,7 +653,7 @@ export function isClosedDatabaseError(error: unknown) {
 }
 
 export async function recoverClosedDatabase() {
-	if (activeBackend !== 'supabase-rxdb' || !activeSupabaseUserId) {
+	if (!activeSupabaseUserId) {
 		return false;
 	}
 
@@ -682,7 +665,7 @@ export async function recoverClosedDatabase() {
 		activeSyncState.set({ phase: 'pulling', status: 'syncing' });
 		rxDataDb = await adapter.reopenRxDexieLikeDatabase(userId);
 
-		if (activeSupabaseUserId !== userId || activeBackend !== 'supabase-rxdb') {
+		if (activeSupabaseUserId !== userId) {
 			return false;
 		}
 
@@ -821,7 +804,7 @@ export async function fetchSupabaseRows<T extends SyncableRow>(
 }
 
 export async function backfillRecentRows(userId: string, days = recentBackfillDays) {
-	if (activeBackend !== 'supabase-rxdb' || activeSupabaseUserId !== userId) {
+	if (activeSupabaseUserId !== userId) {
 		return;
 	}
 
@@ -943,7 +926,7 @@ export async function getLocalDatabaseStats(): Promise<LocalDatabaseStats> {
 }
 
 export async function hydrateSessionFromSupabase(sessionId: string) {
-	if (activeBackend !== 'supabase-rxdb' || !activeSupabaseUserId) {
+	if (!activeSupabaseUserId) {
 		return;
 	}
 
@@ -1040,7 +1023,7 @@ export async function hydrateSessionFromSupabase(sessionId: string) {
 export async function hydrateVisibleScope(scope: HydrateVisibleScopeInput) {
 	await ensureDbOpen();
 
-	if (activeBackend !== 'supabase-rxdb' || !activeSupabaseUserId) {
+	if (!activeSupabaseUserId) {
 		return;
 	}
 
@@ -1109,15 +1092,7 @@ export async function getSessionTimerSummary(sessionId: string) {
 }
 
 export function requireLoggedInUser() {
-	if (activeBackend === 'supabase-rxdb') {
-		if (!activeSupabaseUserId) {
-			throw new Error('Sign in with Google to save workouts.');
-		}
-
-		return;
-	}
-
-	if (!activeUser.value?.isLoggedIn) {
+	if (!activeSupabaseUserId) {
 		throw new Error('Sign in with Google to save workouts.');
 	}
 }

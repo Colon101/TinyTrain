@@ -1,8 +1,7 @@
 import {
 	BASELINE_EXERCISE_BY_ID,
 	BASELINE_EXERCISE_BY_NORMALIZED_NAME,
-	BASELINE_EXERCISE_ROWS,
-	createBaselineExerciseId as createSharedBaselineExerciseId
+	BASELINE_EXERCISE_ROWS
 } from '../exercises';
 import type {
 	Exercise,
@@ -16,7 +15,7 @@ import type {
 	SessionSet,
 	WorkoutSession
 } from './models';
-import { db, getActiveStorageBackend, requireLoggedInUser } from './runtime';
+import { db, requireLoggedInUser } from './runtime';
 import {
 	compareOptionalRecency,
 	compareSessionSetRows,
@@ -214,52 +213,6 @@ export function createExerciseRow(
 		createdAt: now,
 		updatedAt: now
 	};
-}
-
-export function createBaselineExerciseId(normalizedName: string) {
-	return createSharedBaselineExerciseId(normalizedName);
-}
-
-export async function ensureBaselineExercises() {
-	requireLoggedInUser();
-
-	if (getActiveStorageBackend() === 'supabase-rxdb') {
-		return;
-	}
-
-	const normalizedNames = [...BASELINE_EXERCISE_BY_NORMALIZED_NAME.keys()];
-	const existingExercises = await db.exercises
-		.where('normalizedName')
-		.anyOf(normalizedNames)
-		.toArray();
-	const existingNames = new Set(existingExercises.map((exercise) => exercise.normalizedName));
-	const now = timestamp();
-	const missingExercisesByName = new Map<string, Exercise>();
-
-	for (const exercise of BASELINE_EXERCISE_ROWS) {
-		const normalizedName = exercise.normalizedName;
-
-		if (existingNames.has(normalizedName) || missingExercisesByName.has(normalizedName)) {
-			continue;
-		}
-
-		missingExercisesByName.set(
-			normalizedName,
-			createExerciseRow(
-				exercise.name,
-				exercise.unilateral,
-				'baseline',
-				now,
-				createBaselineExerciseId(normalizedName)
-			)
-		);
-	}
-
-	const missingExercises = [...missingExercisesByName.values()];
-
-	if (missingExercises.length > 0) {
-		await db.exercises.bulkAdd(missingExercises);
-	}
 }
 
 export async function listExercises() {
