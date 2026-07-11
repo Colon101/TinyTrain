@@ -46,7 +46,6 @@
 		"@supabase/supabase-js": "^2.106.2",
 		"@vercel/analytics": "^2.0.1",
 		"@vercel/speed-insights": "^2.0.0",
-		"dexie": "^4.4.2",
 		"fflate": "^0.8.3",
 		"rxdb": "^17.3.0"
 	}

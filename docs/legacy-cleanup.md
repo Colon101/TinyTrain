@@ -10,7 +10,7 @@ TinyTrain originally supported a Dexie Cloud runtime and later introduced a stag
 
 The redundant backend state, `runtime-mode.ts`, backend-status UI, and Supabase-only conditional branches have been removed. Authentication, storage recovery, hydration, and sync now express the only supported runtime directly.
 
-The original Supabase bootstrap also created `public.migration_status`, which belonged to the removed Dexie Cloud migration flow. Migration `20260711170000_drop_legacy_migration_status.sql` removes that unused table from existing databases. The original migration is intentionally left unchanged because applied migrations are immutable history.
+The original Supabase bootstrap also created `public.migration_status`, which belonged to the removed Dexie Cloud migration flow. The application no longer reads or writes that table.
 
 ### Development-only data tools
 
@@ -22,11 +22,11 @@ The following unlinked routes were available only in development builds:
 
 The routes, their three feature components, and their private database/import APIs have been removed. The supported Tracked import flow remains in Settings, and normal session creation and editing are unchanged.
 
-### Supabase bootstrap scratch files
+### Supabase bootstrap scaffolding
 
-The `scripts/` directory contained a duplicate of the first migration, a destructive reset-and-seed script, two one-off policy/migration scripts, and a generator that rewrote the duplicate bootstrap file. These were useful while the first Supabase project was being assembled, but the canonical schema is now the ordered migration set in `supabase/migrations/`.
+The repository contained a duplicate bootstrap, a destructive reset-and-seed script, one-off policy/migration scripts, a generator that rewrote the duplicate bootstrap, and the original Supabase CLI configuration and migration files. These were useful while the hosted Supabase project was being assembled, but none participate in the application runtime after provisioning.
 
-Those scratch files were removed to prevent an old bootstrap from being mistaken for the deployment path. New schema changes must be added as new migrations; existing migration files must not be regenerated or edited.
+Those files were removed to prevent destructive or already-applied setup SQL from being mistaken for a runtime or deployment path. The live local schema remains inline in `src/lib/rxdb.ts`, where RxDB requires it when opening the browser database.
 
 ### No-op baseline seeding
 

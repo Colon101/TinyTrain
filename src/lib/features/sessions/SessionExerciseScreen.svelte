@@ -33,8 +33,6 @@
 		writeSessionInputDraft,
 		type SessionInputDraft
 	} from './session-input-draft';
-	// import { formatSessionStatus, formatSessionTime } from './session-format';
-
 	type DatabaseApi = typeof import('$lib/db');
 	type PickerMode = 'add' | 'swap';
 

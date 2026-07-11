@@ -10,26 +10,6 @@ export type CloudUser = {
 	};
 };
 
-const IMAGE_CLAIM_KEYS = ['picture', 'avatar_url', 'photo', 'image'];
-
-export function getUserAvatarUrl(user: CloudUser | null | undefined) {
-	const claims = user?.claims;
-
-	if (!claims) {
-		return null;
-	}
-
-	for (const key of IMAGE_CLAIM_KEYS) {
-		const value = claims[key];
-
-		if (typeof value === 'string' && value.trim()) {
-			return value;
-		}
-	}
-
-	return null;
-}
-
 export function getUserDisplayName(user: CloudUser | null | undefined) {
 	return user?.name || user?.email || 'Your account';
 }

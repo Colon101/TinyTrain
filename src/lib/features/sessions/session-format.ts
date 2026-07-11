@@ -8,20 +8,6 @@ function isValidDate(date: Date) {
 	return !Number.isNaN(date.getTime());
 }
 
-export function formatTimestamp(value?: string | null) {
-	if (!value) {
-		return 'Unknown time';
-	}
-
-	const date = new Date(value);
-
-	if (!isValidDate(date)) {
-		return 'Unknown time';
-	}
-
-	return date.toLocaleString();
-}
-
 export function formatDuration(
 	startedAt?: string | null,
 	completedAt?: string,
@@ -95,23 +81,6 @@ export function formatSessionTime(startedAt?: string | null) {
 	return new Intl.DateTimeFormat('en-US', {
 		hour: 'numeric',
 		minute: '2-digit'
-	}).format(date);
-}
-
-export function formatSessionDate(startedAt?: string | null) {
-	if (!startedAt) {
-		return 'Unknown date';
-	}
-
-	const date = new Date(startedAt);
-
-	if (!isValidDate(date)) {
-		return 'Unknown date';
-	}
-
-	return new Intl.DateTimeFormat('en-US', {
-		month: 'short',
-		day: 'numeric'
 	}).format(date);
 }
 

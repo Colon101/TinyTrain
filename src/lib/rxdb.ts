@@ -6,7 +6,6 @@ import {
 	type RxDocumentData,
 	type RxJsonSchema
 } from 'rxdb';
-import Dexie from 'dexie';
 import { RxDBMigrationSchemaPlugin } from 'rxdb/plugins/migration-schema';
 import {
 	replicateSupabase,
@@ -347,25 +346,6 @@ function normalizePushedDoc<T extends Record<string, unknown>>(
 	return nextDoc as T;
 }
 
-export function toSupabaseRowId(userId: string, localId: string) {
-	return localId.startsWith(`${userId}:`) ? localId : `${userId}:${localId}`;
-}
-
-export function fromSupabaseRowId(userId: string, remoteId: string) {
-	return remoteId.startsWith(`${userId}:`) ? remoteId.slice(userId.length + 1) : remoteId;
-}
-
-export function addUserId<T extends { id: string }>(
-	userId: string,
-	doc: T
-): T & { user_id: string } {
-	return {
-		...doc,
-		id: toSupabaseRowId(userId, doc.id),
-		user_id: userId
-	};
-}
-
 export async function getTinyTrainRxDatabase(userId: string): Promise<TinyTrainRxDatabase> {
 	const existing = databaseByUserId.get(userId);
 
@@ -442,50 +422,6 @@ export function stopSupabaseReplication(userId: string) {
 	}
 
 	replicationByUserId.delete(userId);
-}
-
-export async function resetTinyTrainRxDatabase(userId: string) {
-	const existing = databaseByUserId.get(userId);
-	const replications = replicationByUserId.get(userId);
-
-	for (const replication of replications ?? []) {
-		replication.cancel();
-	}
-
-	replicationByUserId.delete(userId);
-	databaseByUserId.delete(userId);
-
-	if (existing) {
-		const database = await existing.catch(() => null);
-		await database?.close();
-	}
-
-	const databaseName = toDatabaseName(userId);
-	const knownCollections = [
-		'_rxdb_internal',
-		'exercises',
-		'workouts',
-		'workoutExercises',
-		'workoutSessions',
-		'sessionExercises',
-		'sessionSets',
-		'exerciseResetEvents'
-	];
-	const knownVersions = [0, 1];
-	const knownDatabaseNames = knownCollections.flatMap((collectionName) =>
-		knownVersions.map((version) => `rxdb-dexie-${databaseName}--${version}--${collectionName}`)
-	);
-	const availableDatabaseNames =
-		typeof indexedDB !== 'undefined' && 'databases' in indexedDB
-			? (await indexedDB.databases())
-					.map((database) => database.name)
-					.filter((name): name is string =>
-						Boolean(name?.startsWith(`rxdb-dexie-${databaseName}--`))
-					)
-			: [];
-	const namesToDelete = [...new Set([...knownDatabaseNames, ...availableDatabaseNames])];
-
-	await Promise.all(namesToDelete.map((name) => Dexie.delete(name).catch(() => undefined)));
 }
 
 export async function startSupabaseReplication(userId: string) {
