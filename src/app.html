@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta
+			name="description"
+			content="TinyTrain is a tiny training log for tracking workouts, sessions, exercises, and progress, with offline support after the first load."
+		/>
+		<meta name="text-scale" content="scale" />
+		<meta name="theme-color" content="#172033" />
+		<meta name="mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-title" content="TinyTrain" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+		<link rel="manifest" href="/manifest.webmanifest" />
+		<link rel="icon" href="/app-icon.svg" type="image/svg+xml" />
+		<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+		<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+		<script>
+			window.__tinytrainInstallPrompt = null;
+			window.addEventListener('beforeinstallprompt', (event) => {
+				event.preventDefault();
+				window.__tinytrainInstallPrompt = event;
+				window.dispatchEvent(new Event('tinytraininstallprompt'));
+			});
+
+			if ('serviceWorker' in navigator) {
+				const rootScope = new URL('/', window.location.origin).href;
+				const updateLogPrefix = '[TinyTrain update check]';
+				const authCacheParamNames = new Set([
+					'code',
+					'state',
+					'error',
+					'error_description',
+					'access_token',
+					'refresh_token',
+					'provider_token',
+					'provider_refresh_token'
+				]);
+
+				function logServiceWorkerUpdateCheck(data) {
+					if (!data || data.type !== 'TINYTRAIN_CACHE_UPDATE_CHECK') {
+						return;
+					}
+
+					const labels = {
+						checking: 'checking cache update',
+						current: 'cache is current',
+						newer: 'newer deployment found',
+						failed: 'check failed; trusting cache',
+						'precache-skipped': 'skipped unavailable precache assets'
+					};
+
+					console.info(`${updateLogPrefix} ${labels[data.status] || data.status}`, data);
+				}
+
+				navigator.serviceWorker.addEventListener('message', (event) => {
+					logServiceWorkerUpdateCheck(event.data);
+				});
+
+				function hasAuthCacheParams(url) {
+					for (const paramName of authCacheParamNames) {
+						if (url.searchParams.has(paramName)) {
+							return true;
+						}
+					}
+
+					const hashParams = new URLSearchParams(url.hash.startsWith('#') ? url.hash.slice(1) : '');
+
+					for (const paramName of authCacheParamNames) {
+						if (hashParams.has(paramName)) {
+							return true;
+						}
+					}
+
+					return false;
+				}
+
+				function getCacheableUrl(urlValue) {
+					try {
+						const url = new URL(urlValue, window.location.origin);
+
+						if (url.origin !== window.location.origin || hasAuthCacheParams(url)) {
+							return null;
+						}
+
+						return url.href;
+					} catch {
+						return null;
+					}
+				}
+
+				function getCurrentPageCacheUrls() {
+					const urls = [rootScope];
+					const currentPageUrl = getCacheableUrl(window.location.href);
+
+					if (currentPageUrl) {
+						urls.push(currentPageUrl);
+					}
+
+					for (const entry of performance.getEntriesByType('resource')) {
+						const resourceUrl = getCacheableUrl(entry.name);
+
+						if (resourceUrl) {
+							urls.push(resourceUrl);
+						}
+					}
+
+					return [...new Set(urls)];
+				}
+
+				function warmServiceWorkerCache(registration) {
+					const worker = registration.active || navigator.serviceWorker.controller;
+
+					if (!worker) {
+						return;
+					}
+
+					worker.postMessage({
+						type: 'CACHE_URLS',
+						urls: getCurrentPageCacheUrls()
+					});
+				}
+
+				function requestLastUpdateCheckStatus(registration) {
+					const worker = registration.active || navigator.serviceWorker.controller;
+
+					if (!worker) {
+						return;
+					}
+
+					worker.postMessage({ type: 'GET_CACHE_UPDATE_STATUS' });
+				}
+
+				function showVisibleUpdateCheckRequest() {
+					fetch(`/deployment.json?tinytrain-visible-update-check=${Date.now()}`, {
+						cache: 'no-store'
+					})
+						.then(async (response) => {
+							const manifest = response.ok ? await response.json() : null;
+							console.info(`${updateLogPrefix} visible network request finished`, {
+								status: response.status,
+								deploymentId: manifest && manifest.id
+							});
+						})
+						.catch((error) => {
+							console.info(`${updateLogPrefix} visible network request failed`, error);
+						});
+				}
+
+				window.addEventListener('load', () => {
+					navigator.serviceWorker
+						.getRegistrations()
+						.then(async (registrations) => {
+							await Promise.all(
+								registrations
+									.filter((registration) => registration.scope !== rootScope)
+									.map((registration) => registration.unregister())
+							);
+
+							return navigator.serviceWorker.register('/service-worker.js', {
+								scope: '/',
+								type: 'module'
+							});
+						})
+						.then((registration) => {
+							registration.update();
+							requestLastUpdateCheckStatus(registration);
+							warmServiceWorkerCache(registration);
+							return navigator.serviceWorker.ready;
+						})
+						.then((registration) => {
+							requestLastUpdateCheckStatus(registration);
+							warmServiceWorkerCache(registration);
+							showVisibleUpdateCheckRequest();
+						})
+						.catch(() => undefined);
+				});
+			}
+		</script>
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>

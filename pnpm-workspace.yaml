@@ -1,0 +1,8 @@
+overrides:
+  brace-expansion: 5.0.6
+  cookie: 0.7.2
+  dexie: 4.4.2
+  ws: 8.21.0
+
+onlyBuiltDependencies:
+  - esbuild
