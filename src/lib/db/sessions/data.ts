@@ -62,9 +62,10 @@ export async function getLatestExerciseHistoryEntries(
 	beforeSessionAt: number
 ) {
 	const uniqueExerciseIds = [...new Set(exerciseIds)];
+	const sessionExercises = await db.sessionExercises.toArray();
 	const previousEntries = await Promise.all(
 		uniqueExerciseIds.map(async (exerciseId) => {
-			const history = (await listExerciseHistory(exerciseId)).filter(
+			const history = (await listExerciseHistory(exerciseId, { sessionExercises })).filter(
 				(entry) =>
 					entry.sessionId !== currentSessionId &&
 					getExerciseHistorySortTime(entry) < beforeSessionAt
@@ -197,8 +198,9 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 	}
 
 	const currentSessionAt = getSessionSortTime(session);
+	const sessionExercisesPromise = listSessionExerciseDetails(sessionId);
 	const [sessionExercises, previousSession, exercises] = await Promise.all([
-		listSessionExerciseDetails(sessionId),
+		sessionExercisesPromise,
 		db.workoutSessions
 			.where('workoutId')
 			.equals(session.workoutId)
@@ -215,10 +217,8 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 						.sort(compareSessionRows)
 						.at(-1) ?? null
 			),
-		db.exercises.bulkGet(
-			(await db.sessionExercises.where('sessionId').equals(sessionId).toArray()).map(
-				(sessionExercise) => sessionExercise.exerciseId
-			)
+		sessionExercisesPromise.then((rows) =>
+			db.exercises.bulkGet(rows.map((sessionExercise) => sessionExercise.exerciseId))
 		)
 	]);
 	const sessionSets = sessionExercises.flatMap((sessionExercise) => sessionExercise.sets);

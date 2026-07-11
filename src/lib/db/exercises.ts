@@ -86,7 +86,8 @@ export async function listEquivalentExerciseIds(exerciseId: string) {
 }
 
 export async function listHistoricalSessionExerciseMatches(
-	exerciseId: string
+	exerciseId: string,
+	options: { sessionExercises?: SessionExercise[] } = {}
 ): Promise<HistoricalSessionExerciseMatch[]> {
 	const exercise = await getExercise(exerciseId);
 	const equivalentExerciseIds = await listEquivalentExerciseIds(exerciseId);
@@ -98,14 +99,15 @@ export async function listHistoricalSessionExerciseMatches(
 				? db.sessionExercises.where('exerciseId').equals(equivalentExerciseIds[0]).toArray()
 				: db.sessionExercises.where('exerciseId').anyOf(equivalentExerciseIds).toArray(),
 		normalizedName
-			? db.sessionExercises
-					.toArray()
-					.then((rows) =>
-						rows.filter(
-							(sessionExercise) =>
-								normalizeName(sessionExercise.exerciseNameSnapshot) === normalizedName
-						)
+			? (options.sessionExercises
+					? Promise.resolve(options.sessionExercises)
+					: db.sessionExercises.toArray()
+				).then((rows) =>
+					rows.filter(
+						(sessionExercise) =>
+							normalizeName(sessionExercise.exerciseNameSnapshot) === normalizedName
 					)
+				)
 			: Promise.resolve([])
 	]);
 	const sessionExercises = [
@@ -408,7 +410,8 @@ export async function listCustomExerciseItems(): Promise<ExerciseListItem[]> {
 		historyByExerciseId.set(sessionExercise.exerciseId, historySessions);
 
 		const currentValue = lastPerformedAtByExerciseId.get(sessionExercise.exerciseId);
-		const performedAt = session.startedAt ?? sessionExercise.performedAt;
+		const performedAt =
+			session.completedAt ?? session.startedAt ?? sessionExercise.performedAt ?? session.createdAt;
 
 		if (!currentValue || currentValue < performedAt) {
 			lastPerformedAtByExerciseId.set(sessionExercise.exerciseId, performedAt);
@@ -683,8 +686,11 @@ export async function listExerciseResetEvents(exerciseId: string) {
 	return resetEvents.sort((first, second) => second.resetAt.localeCompare(first.resetAt));
 }
 
-export async function listExerciseHistory(exerciseId: string): Promise<ExerciseHistoryEntry[]> {
-	return (await listHistoricalSessionExerciseMatches(exerciseId)).map(
+export async function listExerciseHistory(
+	exerciseId: string,
+	options: { sessionExercises?: SessionExercise[] } = {}
+): Promise<ExerciseHistoryEntry[]> {
+	return (await listHistoricalSessionExerciseMatches(exerciseId, options)).map(
 		({ session, sessionExercise, sets }) => ({
 			sessionId: session.id,
 			workoutId: session.workoutId,

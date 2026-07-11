@@ -143,7 +143,7 @@ export async function createBackfillWorkoutSession(input: BackfillWorkoutSession
 			await db.workoutSessions.add(session);
 			await db.sessionExercises.bulkAdd(sessionExercises);
 			await db.sessionSets.bulkAdd(sessionSets);
-			await db.workouts.update(workout.id, { updatedAt: completedAt });
+			await db.workouts.update(workout.id, { updatedAt: timestamp() });
 		}
 	);
 
@@ -224,22 +224,26 @@ export async function listExampleBaselineExercises() {
 }
 
 export async function normalizeExampleSessionExerciseIds(sessionId: string) {
-	const sessionExercises = await db.sessionExercises.where('sessionId').equals(sessionId).toArray();
-	const preferredExerciseByNormalizedName = await getPreferredExerciseByNormalizedNames(
-		sessionExercises.map((sessionExercise) => normalizeName(sessionExercise.exerciseNameSnapshot))
-	);
-	const exerciseIdsBySessionExerciseId = new Map(
-		sessionExercises.flatMap((sessionExercise) => {
-			const preferredExercise = preferredExerciseByNormalizedName.get(
-				normalizeName(sessionExercise.exerciseNameSnapshot)
-			);
-
-			return preferredExercise ? ([[sessionExercise.id, preferredExercise.id]] as const) : [];
-		})
-	);
 	const now = timestamp();
 
-	await db.transaction('rw', db.sessionExercises, db.sessionSets, async () => {
+	await db.transaction('rw', db.exercises, db.sessionExercises, db.sessionSets, async () => {
+		const sessionExercises = await db.sessionExercises
+			.where('sessionId')
+			.equals(sessionId)
+			.toArray();
+		const preferredExerciseByNormalizedName = await getPreferredExerciseByNormalizedNames(
+			sessionExercises.map((sessionExercise) => normalizeName(sessionExercise.exerciseNameSnapshot))
+		);
+		const exerciseIdsBySessionExerciseId = new Map(
+			sessionExercises.flatMap((sessionExercise) => {
+				const preferredExercise = preferredExerciseByNormalizedName.get(
+					normalizeName(sessionExercise.exerciseNameSnapshot)
+				);
+
+				return preferredExercise ? ([[sessionExercise.id, preferredExercise.id]] as const) : [];
+			})
+		);
+
 		for (const sessionExercise of sessionExercises) {
 			const nextExerciseId = exerciseIdsBySessionExerciseId.get(sessionExercise.id);
 
@@ -310,8 +314,7 @@ export async function seedExampleSession(seed: ExampleSessionSeed): Promise<Back
 	);
 	const dayKey = toDayKey(startedAtDate);
 	const existingSession = (await db.workoutSessions.where('dayKey').equals(dayKey).toArray()).find(
-		(session) =>
-			session.workoutId === workout.id && session.workoutNameSnapshot === EXAMPLE_WORKOUT_NAME
+		(session) => session.workoutId === workout.id && session.workoutNameSnapshot === workout.name
 	);
 
 	if (existingSession) {
@@ -339,8 +342,6 @@ export async function seedExampleSession(seed: ExampleSessionSeed): Promise<Back
 		updatedAt: completedAt
 	};
 
-	await db.workoutSessions.add(session);
-
 	const sessionExercises: SessionExercise[] = exercises.map((exercise, index) => ({
 		id: createId(),
 		sessionId,
@@ -353,29 +354,31 @@ export async function seedExampleSession(seed: ExampleSessionSeed): Promise<Back
 		updatedAt: completedAt
 	}));
 
-	await db.sessionExercises.bulkAdd(sessionExercises);
-
-	await db.sessionSets.bulkAdd(
-		sessionExercises.flatMap((sessionExercise, exerciseIndex) =>
-			(seed.setsByExercise[exerciseIndex] ?? []).map((set, setIndex) => ({
-				id: createId(),
-				sessionExerciseId: sessionExercise.id,
-				exerciseId: sessionExercise.exerciseId,
-				order: setIndex + 1,
-				side: 'bilateral' as const,
-				weightInput: toStoredInputValue(undefined, set.weight),
-				repsInput: toStoredInputValue(undefined, set.reps),
-				rirInput: toStoredInputValue(undefined, set.rir),
-				weight: set.weight,
-				reps: set.reps,
-				rir: set.rir,
-				createdAt: timestamp(
-					new Date(startedAtDate.getTime() + (exerciseIndex * 12 + setIndex * 3) * 60 * 1000)
-				),
-				updatedAt: completedAt
-			}))
-		)
+	const sessionSets: SessionSet[] = sessionExercises.flatMap((sessionExercise, exerciseIndex) =>
+		(seed.setsByExercise[exerciseIndex] ?? []).map((set, setIndex) => ({
+			id: createId(),
+			sessionExerciseId: sessionExercise.id,
+			exerciseId: sessionExercise.exerciseId,
+			order: setIndex + 1,
+			side: 'bilateral' as const,
+			weightInput: toStoredInputValue(undefined, set.weight),
+			repsInput: toStoredInputValue(undefined, set.reps),
+			rirInput: toStoredInputValue(undefined, set.rir),
+			weight: set.weight,
+			reps: set.reps,
+			rir: set.rir,
+			createdAt: timestamp(
+				new Date(startedAtDate.getTime() + (exerciseIndex * 12 + setIndex * 3) * 60 * 1000)
+			),
+			updatedAt: completedAt
+		}))
 	);
+
+	await db.transaction('rw', db.workoutSessions, db.sessionExercises, db.sessionSets, async () => {
+		await db.workoutSessions.add(session);
+		await db.sessionExercises.bulkAdd(sessionExercises);
+		await db.sessionSets.bulkAdd(sessionSets);
+	});
 
 	return {
 		workoutId: workout.id,
