@@ -290,6 +290,13 @@ function getRemoteReconcileTimestamp(row: RemoteReconcileRow<SyncableRow>) {
 		: getRowTimestamp(row.row);
 }
 
+function shouldApplyRemoteDeletion(
+	localRow: SyncableRow | undefined,
+	remoteRow: RemoteReconcileRow<SyncableRow>
+) {
+	return !localRow || getRemoteReconcileTimestamp(remoteRow) >= getRowTimestamp(localRow);
+}
+
 function getRowCreatedTimestamp(row: SyncableRow) {
 	const time = row.createdAt ? new Date(row.createdAt).getTime() : 0;
 
@@ -479,19 +486,18 @@ async function reconcileTable<T extends SyncableRow>(
 		const remoteRow = remoteRowsById.get(id);
 
 		if (remoteRow?.deleted) {
-			if (!localRow) {
+			if (shouldApplyRemoteDeletion(localRow, remoteRow)) {
+				if (localRow) {
+					await options.localTable.delete(id);
+				}
 				remoteWins += 1;
 				continue;
 			}
 
-			if (getRemoteReconcileTimestamp(remoteRow) >= getRowTimestamp(localRow)) {
-				await options.localTable.delete(id);
-				remoteWins += 1;
-				continue;
+			if (localRow) {
+				mergedRows.push(localRow);
+				localWins += 1;
 			}
-
-			mergedRows.push(localRow);
-			localWins += 1;
 			continue;
 		}
 
@@ -770,6 +776,7 @@ export const dbCloudSync = {
 	putMergedRemoteRow,
 	putMergedRemoteRows,
 	reconcileSupabaseDatabase,
+	shouldApplyRemoteDeletion,
 	shouldSyncExercise,
 	stripSupabaseSyncFields
 };

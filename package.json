@@ -2,6 +2,7 @@
 	"name": "tinytrain",
 	"private": true,
 	"version": "0.0.1",
+	"packageManager": "pnpm@11.7.0",
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
@@ -9,6 +10,8 @@
 		"build": "vite build",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
+		"test": "vitest run",
+		"test:watch": "vitest",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"lint": "prettier --check . && eslint .",
@@ -36,7 +39,8 @@
 		"tailwindcss": "^4.2.2",
 		"typescript": "^6.0.2",
 		"typescript-eslint": "^8.58.1",
-		"vite": "^8.1.0"
+		"vite": "^8.1.0",
+		"vitest": "^4.1.10"
 	},
 	"dependencies": {
 		"@supabase/supabase-js": "^2.106.2",

@@ -40,6 +40,7 @@ pnpm dev
 Run the main checks:
 
 ```sh
+pnpm test
 pnpm check
 pnpm lint
 pnpm build
