@@ -36,6 +36,7 @@
 
 	type DatabaseApi = typeof import('$lib/db');
 	type PickerMode = 'add' | 'swap';
+	type TimeEditorEndMode = 'custom' | 'recorded_end' | 'last_activity';
 	type DragPreview = {
 		pointerId: number;
 		x: number;
@@ -88,6 +89,7 @@
 	let timeEditorDurationHours = $state('0');
 	let timeEditorDurationMinutes = $state('0');
 	let timeEditorDurationSeconds = $state('0');
+	let timeEditorEndMode = $state<TimeEditorEndMode>('recorded_end');
 	let isExercisePickerOpen = $state(false);
 	let pickerMode = $state<PickerMode>('add');
 	let targetSessionExerciseId = $state('');
@@ -440,7 +442,50 @@
 		timeEditorDurationHours = `${Math.floor(durationSeconds / 3600)}`;
 		timeEditorDurationMinutes = `${Math.floor((durationSeconds % 3600) / 60)}`;
 		timeEditorDurationSeconds = `${durationSeconds % 60}`;
+		timeEditorEndMode = 'recorded_end';
 		isTimeEditorOpen = true;
+	}
+
+	function getTimeEditorStartedAt() {
+		if (!timerSummary?.startedAt || !timeEditorStartTime) {
+			return null;
+		}
+
+		const [hours = '0', minutes = '0'] = timeEditorStartTime.split(':');
+		const currentStartedAt = new Date(timerSummary.startedAt);
+
+		if (Number.isNaN(currentStartedAt.getTime())) {
+			return null;
+		}
+
+		return new Date(
+			currentStartedAt.getFullYear(),
+			currentStartedAt.getMonth(),
+			currentStartedAt.getDate(),
+			Number(hours),
+			Number(minutes),
+			0,
+			0
+		);
+	}
+
+	function useTimeEditorEnd(mode: Exclude<TimeEditorEndMode, 'custom'>) {
+		const endAtValue =
+			mode === 'last_activity'
+				? overview?.summary.lastSetActivityAt
+				: overview?.summary.completedAt;
+		const startedAt = getTimeEditorStartedAt();
+		const endAt = endAtValue ? new Date(endAtValue) : null;
+
+		if (!startedAt || !endAt || Number.isNaN(endAt.getTime()) || endAt < startedAt) {
+			return;
+		}
+
+		const durationSeconds = Math.max(Math.round((endAt.getTime() - startedAt.getTime()) / 1000), 0);
+		timeEditorDurationHours = `${Math.floor(durationSeconds / 3600)}`;
+		timeEditorDurationMinutes = `${Math.floor((durationSeconds % 3600) / 60)}`;
+		timeEditorDurationSeconds = `${durationSeconds % 60}`;
+		timeEditorEndMode = mode;
 	}
 
 	function closeTimeEditor() {
@@ -1254,7 +1299,7 @@
 				onclick={closeTimeEditor}
 			></button>
 			<form
-				class="relative w-full overflow-hidden rounded-lg border border-white/10 bg-[#0b1013] shadow-[0_24px_80px_rgba(0,0,0,0.58)]"
+				class="relative max-h-[calc(100svh-env(safe-area-inset-bottom)-1.5rem)] w-full overflow-y-auto overscroll-contain rounded-lg border border-white/10 bg-[#0b1013] shadow-[0_24px_80px_rgba(0,0,0,0.58)]"
 				onsubmit={applyTimeEditor}
 			>
 				<div class="flex justify-center pt-2">
@@ -1292,9 +1337,50 @@
 							name="tinytrain-session-start-time"
 							autocomplete="off"
 							bind:value={timeEditorStartTime}
+							oninput={() => (timeEditorEndMode = 'custom')}
 							required
 						/>
 					</label>
+				</div>
+
+				<div class="px-4 pt-4">
+					<p class="mb-2 text-xs font-semibold tracking-[0.16em] text-zinc-500 uppercase">
+						Clock stops at
+					</p>
+					<div class="grid gap-2">
+						<button
+							class={`rounded-lg border px-3 py-3 text-left transition ${
+								timeEditorEndMode === 'recorded_end'
+									? 'border-emerald-300/60 bg-emerald-300/10'
+									: 'border-white/10 bg-white/[0.03]'
+							}`}
+							type="button"
+							aria-pressed={timeEditorEndMode === 'recorded_end'}
+							disabled={!overview?.summary.completedAt}
+							onclick={() => useTimeEditorEnd('recorded_end')}
+						>
+							<span class="block text-sm font-semibold text-white">Session end</span>
+							<span class="mt-1 block text-xs leading-5 text-zinc-400">
+								Use the time saved when the session ended.
+							</span>
+						</button>
+						<button
+							class={`rounded-lg border px-3 py-3 text-left transition disabled:opacity-40 ${
+								timeEditorEndMode === 'last_activity'
+									? 'border-emerald-300/60 bg-emerald-300/10'
+									: 'border-white/10 bg-white/[0.03]'
+							}`}
+							type="button"
+							aria-pressed={timeEditorEndMode === 'last_activity'}
+							disabled={!overview?.summary.lastSetActivityAt}
+							onclick={() => useTimeEditorEnd('last_activity')}
+						>
+							<span class="block text-sm font-semibold text-white">Last set activity</span>
+							<span class="mt-1 block text-xs leading-5 text-zinc-400">
+								Use the latest saved set activity before the session ended.
+							</span>
+						</button>
+					</div>
 				</div>
 
 				<div class="px-4 pt-4">
@@ -1316,6 +1402,7 @@
 								min="0"
 								inputmode="numeric"
 								bind:value={timeEditorDurationHours}
+								oninput={() => (timeEditorEndMode = 'custom')}
 							/>
 						</label>
 						<label class="grid gap-1.5">
@@ -1332,6 +1419,7 @@
 								min="0"
 								inputmode="numeric"
 								bind:value={timeEditorDurationMinutes}
+								oninput={() => (timeEditorEndMode = 'custom')}
 							/>
 						</label>
 						<label class="grid gap-1.5">
@@ -1348,12 +1436,15 @@
 								min="0"
 								inputmode="numeric"
 								bind:value={timeEditorDurationSeconds}
+								oninput={() => (timeEditorEndMode = 'custom')}
 							/>
 						</label>
 					</div>
 				</div>
 
-				<div class="grid grid-cols-[1fr_1.35fr] gap-2 px-4 pt-5 pb-4">
+				<div
+					class="sticky bottom-0 grid grid-cols-[1fr_1.35fr] gap-2 border-t border-white/10 bg-[#0b1013]/95 px-4 pt-4 pb-4 backdrop-blur-xl"
+				>
 					<button
 						class="flex min-h-11 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] px-4 text-sm font-semibold text-zinc-200"
 						type="button"

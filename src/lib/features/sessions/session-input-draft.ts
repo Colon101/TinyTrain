@@ -7,7 +7,10 @@ import type {
 } from '$lib/db';
 
 export type SessionInputFieldKey = `${SessionInputField}Input`;
-export type SessionInputDraftSet = Partial<Record<SessionInputFieldKey, string>> & {
+export type SessionInputFieldBaseKey = `${SessionInputFieldKey}Base`;
+export type SessionInputDraftSet = Partial<
+	Record<SessionInputFieldKey | SessionInputFieldBaseKey, string>
+> & {
 	updatedAt?: number;
 };
 export type SessionInputDraft = {
@@ -15,9 +18,16 @@ export type SessionInputDraft = {
 	sets: Record<string, SessionInputDraftSet>;
 	updatedAt: number;
 };
+export const SESSION_INPUT_DRAFT_CHANGE_EVENT = 'tinytrain:session-input-draft-change';
 type ApplySessionInputDraftOptions = {
 	includeCompleted?: boolean;
 };
+
+function notifySessionInputDraftChange(sessionId: string) {
+	window.dispatchEvent(
+		new CustomEvent(SESSION_INPUT_DRAFT_CHANGE_EVENT, { detail: { sessionId } })
+	);
+}
 
 export function getSessionInputDraftKey(sessionId: string) {
 	return `tinytrain:session-input-draft:${sessionId}`;
@@ -75,6 +85,7 @@ export function writeSessionInputDraft(draft: SessionInputDraft) {
 	}
 
 	localStorage.setItem(getSessionInputDraftKey(draft.sessionId), JSON.stringify(draft));
+	notifySessionInputDraftChange(draft.sessionId);
 }
 
 export function clearSessionInputDraft(sessionId: string) {
@@ -83,10 +94,15 @@ export function clearSessionInputDraft(sessionId: string) {
 	}
 
 	localStorage.removeItem(getSessionInputDraftKey(sessionId));
+	notifySessionInputDraftChange(sessionId);
 }
 
 export function getSessionInputFieldKey(field: SessionInputField): SessionInputFieldKey {
 	return `${field}Input`;
+}
+
+export function getSessionInputFieldBaseKey(field: SessionInputField): SessionInputFieldBaseKey {
+	return `${getSessionInputFieldKey(field)}Base`;
 }
 
 export function parseSessionInputValue(rawValue: string) {

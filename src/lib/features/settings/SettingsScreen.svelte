@@ -12,6 +12,14 @@
 		TrackedImportSummary,
 		TrackedLimbPriority
 	} from '$lib/tracked-import';
+	import {
+		DEFAULT_PROGRESS_INDICATOR_POSITION,
+		PROGRESS_INDICATOR_POSITIONS,
+		initializeProgressIndicatorPreference,
+		progressIndicatorPosition,
+		saveProgressIndicatorPosition,
+		type ProgressIndicatorPosition
+	} from '$lib/progress-indicator-preference';
 	import ExercisePickerSheet from '$lib/features/workouts/ExercisePickerSheet.svelte';
 	import Icon from '$lib/ui/Icon.svelte';
 
@@ -42,6 +50,10 @@
 	let errorMessage = $state('');
 	let statusMessage = $state('');
 	let mergeStatusMessage = $state('');
+	let preferenceErrorMessage = $state('');
+	let selectedProgressIndicatorPosition = $derived(
+		$progressIndicatorPosition ?? DEFAULT_PROGRESS_INDICATOR_POSITION
+	);
 
 	let selectedMainMergeOption = $derived(
 		mergeOptions.find((option) => option.exercise.id === mainMergeExerciseId) ?? null
@@ -92,6 +104,7 @@
 
 	onMount(() => {
 		let disposed = false;
+		initializeProgressIndicatorPreference();
 
 		void (async () => {
 			try {
@@ -129,6 +142,30 @@
 			disposed = true;
 		};
 	});
+
+	function selectProgressIndicatorPosition(position: ProgressIndicatorPosition) {
+		preferenceErrorMessage = saveProgressIndicatorPosition(position)
+			? ''
+			: 'The preview changed, but this browser could not save the preference.';
+	}
+
+	function getPreviewDeltaPositionClass(position: ProgressIndicatorPosition) {
+		switch (position) {
+			case 'top-left':
+				return 'top-1 left-1.5 text-left';
+			case 'top-center':
+				return 'top-1 left-1/2 -translate-x-1/2 text-center';
+			case 'top-right':
+				return 'top-1 right-1.5 text-right';
+			case 'bottom-center':
+				return 'bottom-1 left-1/2 -translate-x-1/2 text-center';
+			case 'bottom-right':
+				return 'right-1.5 bottom-1 text-right';
+			case 'bottom-left':
+			default:
+				return 'bottom-1 left-1.5 text-left';
+		}
+	}
 
 	async function uploadLocalDatabase() {
 		if (!api || isUploading) {
@@ -461,11 +498,11 @@
 		<div
 			class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-emerald-300/25 bg-emerald-300/10 text-emerald-100"
 		>
-			<Icon name="database" class="h-5 w-5" />
+			<Icon name="settings" class="h-5 w-5" />
 		</div>
 		<div class="min-w-0">
-			<p class="text-sm font-medium tracking-[0.18em] text-zinc-500 uppercase">Settings</p>
-			<h1 class="mt-1 text-3xl font-semibold text-white">Database</h1>
+			<p class="text-sm font-medium tracking-[0.18em] text-zinc-500 uppercase">TinyTrain</p>
+			<h1 class="mt-1 text-3xl font-semibold text-white">Settings</h1>
 		</div>
 	</div>
 
@@ -477,6 +514,101 @@
 			{errorMessage}
 		</p>
 	{/if}
+
+	<section class="grid gap-4 rounded-lg border border-white/10 bg-white/[0.04] p-4">
+		<div class="flex items-start gap-3">
+			<div
+				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-300/25 bg-emerald-300/10 text-emerald-100"
+			>
+				<Icon name="sparkles" class="h-5 w-5" />
+			</div>
+			<div class="min-w-0">
+				<p class="text-xs font-semibold tracking-[0.18em] text-zinc-500 uppercase">Appearance</p>
+				<h2 class="mt-1 text-lg font-semibold text-white">Workout inputs</h2>
+				<p class="mt-1 text-sm leading-5 text-zinc-400">
+					Choose where changes from your previous session appear inside Weight, Reps, and RIR.
+				</p>
+			</div>
+		</div>
+
+		<fieldset class="grid gap-3">
+			<legend class="text-sm font-semibold text-white">Comparison indicator position</legend>
+			<p class="text-xs font-medium text-emerald-200">
+				Current: {PROGRESS_INDICATOR_POSITIONS.find(
+					(position) => position.value === selectedProgressIndicatorPosition
+				)?.label ?? 'Bottom left'}
+			</p>
+
+			<div class="grid grid-cols-3 gap-2">
+				{#each PROGRESS_INDICATOR_POSITIONS as position (position.value)}
+					<label class="relative min-w-0 cursor-pointer">
+						<input
+							class="peer sr-only"
+							type="radio"
+							name="progress-indicator-position"
+							value={position.value}
+							checked={selectedProgressIndicatorPosition === position.value}
+							onchange={() => selectProgressIndicatorPosition(position.value)}
+						/>
+						<span
+							class={`grid min-h-24 gap-2 rounded-lg border p-2 transition peer-focus-visible:ring-2 peer-focus-visible:ring-emerald-200 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-[#080b0d] ${
+								selectedProgressIndicatorPosition === position.value
+									? 'border-emerald-300/60 bg-emerald-300/10'
+									: 'border-white/10 bg-black/20 hover:border-white/20'
+							}`}
+						>
+							<span class="flex min-h-8 min-w-0 items-start justify-between gap-1">
+								<span class="text-[10px] leading-4 font-semibold text-zinc-200">
+									{position.label}
+								</span>
+								{#if selectedProgressIndicatorPosition === position.value}
+									<span
+										class="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-emerald-300 text-zinc-950"
+									>
+										<Icon name="check" class="h-2.5 w-2.5" />
+									</span>
+								{/if}
+							</span>
+							<span
+								class="relative block h-11 min-w-0 overflow-hidden rounded-md border-2 border-emerald-500 bg-white text-black"
+								aria-hidden="true"
+							>
+								<strong
+									class="absolute inset-0 grid place-items-center text-base font-bold tabular-nums"
+								>
+									10
+								</strong>
+								<span
+									class={`absolute z-10 max-w-[calc(100%-0.75rem)] overflow-hidden text-[9px] leading-none font-bold text-ellipsis whitespace-nowrap text-emerald-700 tabular-nums ${getPreviewDeltaPositionClass(position.value)}`}
+								>
+									+2
+								</span>
+							</span>
+						</span>
+					</label>
+				{/each}
+			</div>
+		</fieldset>
+
+		<p class="text-xs leading-5 text-zinc-500">
+			Saved automatically on this device. Default: Bottom left.
+		</p>
+		{#if preferenceErrorMessage}
+			<p class="text-xs leading-5 text-red-200" role="alert">{preferenceErrorMessage}</p>
+		{/if}
+	</section>
+
+	<div class="flex items-center gap-3 pt-1">
+		<div
+			class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-zinc-300"
+		>
+			<Icon name="database" class="h-4 w-4" />
+		</div>
+		<div>
+			<p class="text-xs font-semibold tracking-[0.18em] text-zinc-500 uppercase">Data and sync</p>
+			<h2 class="mt-0.5 text-xl font-semibold text-white">Database</h2>
+		</div>
+	</div>
 
 	{#if isLoading}
 		<section class="flex flex-1 flex-col justify-center">
@@ -511,7 +643,7 @@
 						<dd class="font-semibold text-white">{formatNumber(stats?.workouts ?? 0)}</dd>
 					</div>
 					<div class="flex items-center justify-between gap-4">
-						<dt class="text-zinc-400">Workouts</dt>
+						<dt class="text-zinc-400">Completed workouts</dt>
 						<dd class="font-semibold text-white">
 							{formatNumber(stats?.previousWorkouts ?? 0)}
 						</dd>

@@ -1,15 +1,24 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import type {
 		SessionFieldDelta,
 		SessionInputField,
 		SessionSetOverview,
 		SessionSetSide
 	} from '$lib/db';
+	import {
+		DEFAULT_PROGRESS_INDICATOR_POSITION,
+		initializeProgressIndicatorPreference,
+		progressIndicatorPosition,
+		type ProgressIndicatorPosition
+	} from '$lib/progress-indicator-preference';
 	import Icon from '$lib/ui/Icon.svelte';
 
 	const setEditorGridClass = 'grid grid-cols-[3.2rem_repeat(3,minmax(0,1fr))_2rem] gap-2';
 	const setInputBaseClass =
-		'h-10 w-full rounded-md border px-2 py-0 text-center text-[1.0625rem] leading-none font-semibold outline-none placeholder:text-zinc-500';
+		'h-11 w-full rounded-md border px-2 py-0 text-center text-[1.0625rem] leading-none font-semibold outline-none placeholder:text-zinc-500 focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#080b0d]';
+	const deltaIndicatorBaseClass =
+		'pointer-events-none absolute z-10 max-w-[calc(100%-1rem)] overflow-hidden text-[9px] leading-none font-semibold whitespace-nowrap text-ellipsis tabular-nums';
 
 	let {
 		sets,
@@ -30,6 +39,10 @@
 		onAddSet: () => void;
 		onRemoveSet: (sessionSetId: string) => void;
 	} = $props();
+
+	onMount(() => {
+		initializeProgressIndicatorPreference();
+	});
 
 	function formatPlaceholder(value?: number) {
 		return typeof value === 'number' && Number.isFinite(value) ? `${Number(value.toFixed(2))}` : '';
@@ -67,10 +80,45 @@
 		}
 
 		if (state === 'regressed') {
-			return 'border-red-500 bg-white text-black';
+			return 'border-2 border-red-500 bg-white text-black';
 		}
 
 		return 'border-zinc-300 bg-white text-black';
+	}
+
+	function getDeltaPositionClass(position: ProgressIndicatorPosition) {
+		switch (position) {
+			case 'top-left':
+				return 'top-1 left-2 text-left';
+			case 'top-center':
+				return 'top-1 left-1/2 -translate-x-1/2 text-center';
+			case 'top-right':
+				return 'top-1 right-2 text-right';
+			case 'bottom-center':
+				return 'bottom-1 left-1/2 -translate-x-1/2 text-center';
+			case 'bottom-right':
+				return 'right-2 bottom-1 text-right';
+			case 'bottom-left':
+			default:
+				return 'bottom-1 left-2 text-left';
+		}
+	}
+
+	function getDeltaDescription(delta: SessionFieldDelta) {
+		if (!delta.label || delta.state === 'empty' || delta.state === 'matched') {
+			return '';
+		}
+
+		const value = delta.label.replace(/^[+-]/, '');
+		return `${value} ${delta.state === 'improved' ? 'higher' : 'lower'} than the previous session`;
+	}
+
+	function getDeltaDescriptionId(setId: string, field: SessionInputField) {
+		return `set-${setId}-${field}-comparison`;
+	}
+
+	function getSetInputLabel(set: SessionSetOverview, field: string) {
+		return `Set ${formatSetBadgeValue(set.side, set.order)} ${field}`;
 	}
 </script>
 
@@ -88,6 +136,8 @@
 
 		<div class="grid gap-1.5">
 			{#each sets as set (set.id)}
+				{@const indicatorPosition =
+					$progressIndicatorPosition ?? DEFAULT_PROGRESS_INDICATOR_POSITION}
 				<div
 					class={`${setEditorGridClass} items-center rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2`}
 				>
@@ -96,6 +146,7 @@
 							class="flex w-full flex-col items-center justify-center rounded-md leading-none transition hover:bg-white/[0.06] disabled:opacity-50"
 							type="button"
 							title="Fill from previous session"
+							aria-label={`Fill ${getSetInputLabel(set, 'inputs')} from the previous session`}
 							disabled={!set.previousReference || isSaving}
 							onclick={() => onAutofillPreviousSet(set)}
 						>
@@ -106,7 +157,10 @@
 						</button>
 					</div>
 
-					<div class="relative w-full max-w-[7.25rem] justify-self-center">
+					<div
+						class="relative w-full max-w-[7.25rem] min-w-0 justify-self-center"
+						data-delta-position={indicatorPosition}
+					>
 						<input
 							class={`${setInputBaseClass} ${getFieldInputClass(set.weightDelta.state)}`}
 							type="text"
@@ -115,6 +169,10 @@
 							inputmode="decimal"
 							enterkeyhint="next"
 							data-session-set-input="true"
+							aria-label={getSetInputLabel(set, 'weight')}
+							aria-describedby={set.weightDelta.label
+								? getDeltaDescriptionId(set.id, 'weight')
+								: undefined}
 							value={set.weightInput ?? ''}
 							placeholder={formatPlaceholder(set.previousReference?.weight)}
 							oninput={(event) => onSetInput(set.id, 'weight', event)}
@@ -122,14 +180,21 @@
 						/>
 						{#if set.weightDelta.label}
 							<span
-								class={`pointer-events-none absolute bottom-1 left-2 text-[9px] leading-none font-semibold ${getDeltaToneClass(set.weightDelta.state)}`}
+								class={`${deltaIndicatorBaseClass} ${getDeltaPositionClass(indicatorPosition)} ${getDeltaToneClass(set.weightDelta.state)}`}
+								aria-hidden="true"
 							>
 								{set.weightDelta.label}
+							</span>
+							<span id={getDeltaDescriptionId(set.id, 'weight')} class="sr-only">
+								{getDeltaDescription(set.weightDelta)}
 							</span>
 						{/if}
 					</div>
 
-					<div class="relative w-full max-w-[7.25rem] justify-self-center">
+					<div
+						class="relative w-full max-w-[7.25rem] min-w-0 justify-self-center"
+						data-delta-position={indicatorPosition}
+					>
 						<input
 							class={`${setInputBaseClass} ${getFieldInputClass(set.repsDelta.state)}`}
 							type="text"
@@ -139,6 +204,10 @@
 							pattern="[0-9]*"
 							enterkeyhint="next"
 							data-session-set-input="true"
+							aria-label={getSetInputLabel(set, 'reps')}
+							aria-describedby={set.repsDelta.label
+								? getDeltaDescriptionId(set.id, 'reps')
+								: undefined}
 							value={set.repsInput ?? ''}
 							placeholder={formatPlaceholder(set.previousReference?.reps)}
 							oninput={(event) => onSetInput(set.id, 'reps', event)}
@@ -146,14 +215,21 @@
 						/>
 						{#if set.repsDelta.label}
 							<span
-								class={`pointer-events-none absolute bottom-1 left-2 text-[9px] leading-none font-semibold ${getDeltaToneClass(set.repsDelta.state)}`}
+								class={`${deltaIndicatorBaseClass} ${getDeltaPositionClass(indicatorPosition)} ${getDeltaToneClass(set.repsDelta.state)}`}
+								aria-hidden="true"
 							>
 								{set.repsDelta.label}
+							</span>
+							<span id={getDeltaDescriptionId(set.id, 'reps')} class="sr-only">
+								{getDeltaDescription(set.repsDelta)}
 							</span>
 						{/if}
 					</div>
 
-					<div class="relative w-full max-w-[7.25rem] justify-self-center">
+					<div
+						class="relative w-full max-w-[7.25rem] min-w-0 justify-self-center"
+						data-delta-position={indicatorPosition}
+					>
 						<input
 							class={`${setInputBaseClass} ${getFieldInputClass(set.rirDelta.state)}`}
 							type="text"
@@ -163,6 +239,10 @@
 							pattern="[0-9]*"
 							enterkeyhint="next"
 							data-session-set-input="true"
+							aria-label={getSetInputLabel(set, 'RIR')}
+							aria-describedby={set.rirDelta.label
+								? getDeltaDescriptionId(set.id, 'rir')
+								: undefined}
 							value={set.rirInput ?? ''}
 							placeholder={formatPlaceholder(set.previousReference?.rir)}
 							oninput={(event) => onSetInput(set.id, 'rir', event)}
@@ -170,18 +250,23 @@
 						/>
 						{#if set.rirDelta.label}
 							<span
-								class={`pointer-events-none absolute bottom-1 left-2 text-[9px] leading-none font-semibold ${getDeltaToneClass(set.rirDelta.state)}`}
+								class={`${deltaIndicatorBaseClass} ${getDeltaPositionClass(indicatorPosition)} ${getDeltaToneClass(set.rirDelta.state)}`}
+								aria-hidden="true"
 							>
 								{set.rirDelta.label}
+							</span>
+							<span id={getDeltaDescriptionId(set.id, 'rir')} class="sr-only">
+								{getDeltaDescription(set.rirDelta)}
 							</span>
 						{/if}
 					</div>
 
 					<div class="flex items-center justify-center">
 						<button
-							class="flex h-10 w-8 items-center justify-center rounded-md text-zinc-400 transition hover:bg-red-400/10 hover:text-red-100 disabled:opacity-50"
+							class="flex h-11 w-8 items-center justify-center rounded-md text-zinc-400 transition hover:bg-red-400/10 hover:text-red-100 disabled:opacity-50"
 							type="button"
 							title={isUnilateral ? 'Remove set pair' : 'Remove set'}
+							aria-label={`${isUnilateral ? 'Remove set pair' : 'Remove set'} ${formatSetBadgeValue(set.side, set.order)}`}
 							disabled={isSaving}
 							onclick={() => onRemoveSet(set.id)}
 						>

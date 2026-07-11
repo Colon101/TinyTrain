@@ -26,6 +26,7 @@ import {
 	type SyncableRow,
 	type SyncProgress
 } from './db-cloud-sync';
+import { SESSION_INACTIVITY_ABANDON_MS } from './session-inactivity';
 
 export type {
 	DatabaseTableUploadSummary,
@@ -39,6 +40,12 @@ export type SessionStatus = 'planned' | 'in_progress' | 'completed' | 'abandoned
 export type ExerciseSource = 'baseline' | 'custom';
 export type SessionSetSide = 'bilateral' | 'left' | 'right';
 export type SessionInputField = 'weight' | 'reps' | 'rir';
+
+export {
+	SESSION_INACTIVITY_ABANDON_MS,
+	SESSION_INACTIVITY_CHECK_INTERVAL_MS,
+	SESSION_INACTIVITY_WARNING_MS
+} from './session-inactivity';
 
 export interface Exercise {
 	id: string;
@@ -121,6 +128,8 @@ export type WorkoutExerciseWithExercise = WorkoutExercise & {
 };
 
 export type SessionSummary = WorkoutSession & {
+	lastActivityAt?: string;
+	lastSetActivityAt?: string;
 	totalExercises: number;
 	totalSets: number;
 	totalReps: number;
@@ -275,11 +284,17 @@ type HistoricalSessionExerciseMatch = {
 	sessionExercise: SessionExercise;
 	sets: SessionSet[];
 };
-type SessionInputDraftSet = Partial<Record<`${SessionInputField}Input`, string>>;
+type SessionInputDraftFieldKey = `${SessionInputField}Input`;
+type SessionInputDraftBaseKey = `${SessionInputDraftFieldKey}Base`;
+type SessionInputDraftSet = Partial<
+	Record<SessionInputDraftFieldKey | SessionInputDraftBaseKey, string>
+> & { updatedAt?: number };
 type SessionInputDraft = {
 	sessionId: string;
 	sets?: Record<string, SessionInputDraftSet>;
+	updatedAt?: number;
 };
+const SESSION_INPUT_DRAFT_CHANGE_EVENT = 'tinytrain:session-input-draft-change';
 
 const EXAMPLE_WORKOUT_NAME = 'Upper Builder Demo';
 const EXAMPLE_EXERCISE_NAMES = ['Barbell Bench Press', 'Wide Grip Pull-up', 'Cable Lateral Raise'];
@@ -1965,6 +1980,58 @@ function createBaselineExerciseId(normalizedName: string) {
 	return createSharedBaselineExerciseId(normalizedName);
 }
 
+type SessionActivityTimestamp = { value: string; time: number };
+
+function toSessionActivityTimestamp(value?: string): SessionActivityTimestamp | null {
+	const time = value ? new Date(value).getTime() : NaN;
+	return value && Number.isFinite(time) ? { value, time } : null;
+}
+
+function getLastSessionSetActivityAt(
+	sessionSets: SessionSet[],
+	notAfterMs = Number.POSITIVE_INFINITY,
+	notBeforeMs = Number.NEGATIVE_INFINITY
+) {
+	let latestActivity: SessionActivityTimestamp | null = null;
+
+	for (const sessionSet of sessionSets) {
+		const createdAtMs = new Date(sessionSet.createdAt).getTime();
+		const updatedAtMs = new Date(sessionSet.updatedAt).getTime();
+
+		if (
+			!Number.isFinite(createdAtMs) ||
+			!Number.isFinite(updatedAtMs) ||
+			updatedAtMs <= createdAtMs ||
+			updatedAtMs > notAfterMs ||
+			updatedAtMs < notBeforeMs ||
+			(latestActivity && updatedAtMs <= latestActivity.time)
+		) {
+			continue;
+		}
+
+		latestActivity = {
+			value: sessionSet.updatedAt,
+			time: updatedAtMs
+		};
+	}
+
+	return latestActivity;
+}
+
+function getSessionActivityAt(session: WorkoutSession, sessionSets: SessionSet[]) {
+	const completedAtMs = session.completedAt ? new Date(session.completedAt).getTime() : NaN;
+	const startedAtMs = session.startedAt ? new Date(session.startedAt).getTime() : NaN;
+	const notAfterMs = Number.isFinite(completedAtMs) ? completedAtMs : Number.POSITIVE_INFINITY;
+	const notBeforeMs = Number.isFinite(startedAtMs) ? startedAtMs : Number.NEGATIVE_INFINITY;
+	const candidates = [
+		toSessionActivityTimestamp(session.startedAt),
+		getLastSessionSetActivityAt(sessionSets, notAfterMs, notBeforeMs),
+		session.status === 'in_progress' ? toSessionActivityTimestamp(session.updatedAt) : null
+	].filter((candidate): candidate is SessionActivityTimestamp => candidate !== null);
+
+	return candidates.sort((first, second) => second.time - first.time)[0] ?? null;
+}
+
 function summarizeSession(
 	session: WorkoutSession,
 	sessionExercises: SessionExercise[],
@@ -1987,10 +2054,22 @@ function summarizeSession(
 
 		return total + sessionSet.weight * sessionSet.reps;
 	}, 0);
+	const completedAtMs = session.completedAt ? new Date(session.completedAt).getTime() : NaN;
+	const startedAtMs = session.startedAt ? new Date(session.startedAt).getTime() : NaN;
+	const setActivityCutoffMs = Number.isFinite(completedAtMs)
+		? completedAtMs
+		: Number.POSITIVE_INFINITY;
+	const setActivityStartMs = Number.isFinite(startedAtMs) ? startedAtMs : Number.NEGATIVE_INFINITY;
 
 	return {
 		...session,
 		dayKey: session.dayKey || toDayKey(session.startedAt ?? session.createdAt),
+		lastActivityAt: getSessionActivityAt(session, sessionSets)?.value,
+		lastSetActivityAt: getLastSessionSetActivityAt(
+			sessionSets,
+			setActivityCutoffMs,
+			setActivityStartMs
+		)?.value,
 		totalExercises: sessionExercises.length,
 		totalSets: sessionSets.length,
 		totalReps,
@@ -3291,43 +3370,131 @@ async function deleteWorkoutSessionRows(sessionId: string) {
 	return session;
 }
 
-async function updateSessionSetInputs(
+async function updateSessionSetInputValues(
 	sessionSetId: string,
-	field: SessionInputField,
-	rawValue: string
+	rawValues: Partial<Record<SessionInputField, string>>,
+	requestedActivityMs?: number,
+	baseValues: Partial<Record<SessionInputField, string>> = {}
 ) {
-	const sessionSet = await db.sessionSets.get(sessionSetId);
+	let nextSet: SessionSet | null = null;
+	const skippedFields: SessionInputField[] = [];
 
-	if (!sessionSet) {
-		throw new Error('Set not found.');
-	}
+	await db.transaction('rw', db.sessionSets, db.sessionExercises, db.workoutSessions, async () => {
+		const sessionSet = await db.sessionSets.get(sessionSetId);
 
-	const cleanInputValue = toCleanSessionInputValue(rawValue, field);
-	const parsedValue = toParsedInputValue(cleanInputValue, field);
-	const updatedAt = timestamp();
-	const patch: Partial<SessionSet> = { updatedAt };
+		if (!sessionSet) {
+			throw new Error('Set not found.');
+		}
 
-	if (field === 'weight') {
-		patch.weightInput = cleanInputValue;
-		patch.weight = parsedValue;
-	} else if (field === 'reps') {
-		patch.repsInput = cleanInputValue;
-		patch.reps = parsedValue;
-	} else {
-		patch.rirInput = cleanInputValue;
-		patch.rir = parsedValue;
-	}
+		const normalizedSet = withSessionSetDefaults(sessionSet);
+		const patch: Partial<SessionSet> = {};
+		const nowMs = Date.now();
+		const hasValidRequestedActivity =
+			typeof requestedActivityMs === 'number' && Number.isFinite(requestedActivityMs);
+		const requestedMs = hasValidRequestedActivity ? requestedActivityMs : nowMs;
+		const boundedActivityMs = Math.min(requestedMs, nowMs);
+		const currentUpdatedAtMs = new Date(sessionSet.updatedAt).getTime();
+		const storedRowIsNewer =
+			requestedActivityMs !== undefined &&
+			(!hasValidRequestedActivity ||
+				(Number.isFinite(currentUpdatedAtMs) && currentUpdatedAtMs > boundedActivityMs));
 
-	await db.sessionSets.update(sessionSetId, patch);
-	const nextSet = await db.sessionSets.get(sessionSetId);
+		for (const field of ['weight', 'reps', 'rir'] as const) {
+			if (!Object.hasOwn(rawValues, field)) {
+				continue;
+			}
+
+			const inputKey = `${field}Input` as const;
+			const cleanInputValue = toCleanSessionInputValue(rawValues[field] ?? '', field);
+			const parsedValue = toParsedInputValue(cleanInputValue, field);
+
+			if (normalizedSet[inputKey] === cleanInputValue && normalizedSet[field] === parsedValue) {
+				continue;
+			}
+
+			if (storedRowIsNewer) {
+				const baseValue = baseValues[field];
+
+				if (baseValue === undefined) {
+					skippedFields.push(field);
+					continue;
+				}
+
+				const cleanBaseValue = toCleanSessionInputValue(baseValue, field);
+				const parsedBaseValue = toParsedInputValue(cleanBaseValue, field);
+
+				if (
+					normalizedSet[inputKey] !== cleanBaseValue ||
+					normalizedSet[field] !== parsedBaseValue
+				) {
+					skippedFields.push(field);
+					continue;
+				}
+			}
+
+			Object.assign(patch, {
+				[inputKey]: cleanInputValue,
+				[field]: parsedValue
+			});
+		}
+
+		if (Object.keys(patch).length === 0) {
+			nextSet = normalizedSet;
+			return;
+		}
+
+		const createdAtMs = new Date(sessionSet.createdAt).getTime();
+		const activityMs = Number.isFinite(createdAtMs)
+			? Math.max(boundedActivityMs, createdAtMs)
+			: boundedActivityMs;
+		const storedActivityMs =
+			Number.isFinite(currentUpdatedAtMs) && currentUpdatedAtMs > activityMs
+				? currentUpdatedAtMs
+				: activityMs;
+		const updatedAt = timestamp(new Date(storedActivityMs));
+		patch.updatedAt = updatedAt;
+
+		await db.sessionSets.update(sessionSetId, patch);
+
+		const sessionExercise = await db.sessionExercises.get(sessionSet.sessionExerciseId);
+		const session = sessionExercise
+			? await db.workoutSessions.get(sessionExercise.sessionId)
+			: undefined;
+
+		if (session?.status === 'in_progress') {
+			const sessionUpdatedAtMs = new Date(session.updatedAt).getTime();
+			await db.workoutSessions.update(session.id, {
+				updatedAt:
+					Number.isFinite(sessionUpdatedAtMs) && sessionUpdatedAtMs > storedActivityMs
+						? session.updatedAt
+						: updatedAt
+			});
+		} else if (session?.status === 'abandoned' && requestedActivityMs === undefined) {
+			// A live edit that was already queued when the timeout fired wins the race.
+			await db.workoutSessions.update(session.id, {
+				status: 'in_progress',
+				completedAt: undefined,
+				updatedAt
+			});
+		}
+
+		nextSet = withSessionSetDefaults({ ...sessionSet, ...patch });
+	});
 
 	if (!nextSet) {
 		throw new Error('Set not found.');
 	}
 
-	return withSessionSetDefaults(nextSet);
+	return { sessionSet: nextSet, skippedFields };
 }
 
+async function updateSessionSetInputs(
+	sessionSetId: string,
+	field: SessionInputField,
+	rawValue: string
+) {
+	return (await updateSessionSetInputValues(sessionSetId, { [field]: rawValue })).sessionSet;
+}
 function getSessionInputDraftKey(sessionId: string) {
 	return `tinytrain:session-input-draft:${sessionId}`;
 }
@@ -3362,6 +3529,9 @@ function clearSessionInputDraft(sessionId: string) {
 
 	try {
 		localStorage.removeItem(getSessionInputDraftKey(sessionId));
+		window.dispatchEvent(
+			new CustomEvent(SESSION_INPUT_DRAFT_CHANGE_EVENT, { detail: { sessionId } })
+		);
 	} catch {
 		// Draft cleanup should not block the underlying workout mutation.
 	}
@@ -3374,6 +3544,9 @@ function writeSessionInputDraft(sessionId: string, draft: SessionInputDraft) {
 
 	try {
 		localStorage.setItem(getSessionInputDraftKey(sessionId), JSON.stringify(draft));
+		window.dispatchEvent(
+			new CustomEvent(SESSION_INPUT_DRAFT_CHANGE_EVENT, { detail: { sessionId } })
+		);
 	} catch {
 		// Draft cleanup should not block the underlying workout mutation.
 	}
@@ -3410,7 +3583,10 @@ function removeSessionInputDraftSets(sessionId: string, sessionSetIds: string[])
 	});
 }
 
-export async function flushSessionInputDraft(sessionId: string) {
+export async function flushSessionInputDraft(
+	sessionId: string,
+	options: { clearDraft?: boolean } = {}
+) {
 	requireLoggedInUser();
 
 	const draft = readSessionInputDraft(sessionId);
@@ -3428,9 +3604,13 @@ export async function flushSessionInputDraft(sessionId: string) {
 			.filter(([, draftSet]) => !isSessionInputDraftSet(draftSet))
 			.map(([sessionSetId]) => sessionSetId)
 	);
+	const unresolvedDraftSets: Record<string, SessionInputDraftSet> = {};
+	let discardedMissingSetDraft = false;
 
 	if (draftEntries.length === 0) {
-		clearSessionInputDraft(sessionId);
+		if (options.clearDraft !== false) {
+			clearSessionInputDraft(sessionId);
+		}
 		return;
 	}
 
@@ -3449,30 +3629,193 @@ export async function flushSessionInputDraft(sessionId: string) {
 
 	for (const [sessionSetId, draftSet] of draftEntries) {
 		if (staleSetIds.has(sessionSetId)) {
+			discardedMissingSetDraft = true;
 			continue;
 		}
 
+		const rawValues: Partial<Record<SessionInputField, string>> = {};
+		const baseValues: Partial<Record<SessionInputField, string>> = {};
+
 		for (const field of ['weight', 'reps', 'rir'] as const) {
 			const fieldKey = `${field}Input` as const;
+			const baseKey = `${fieldKey}Base` as const;
 
-			if (!Object.hasOwn(draftSet, fieldKey)) {
+			if (Object.hasOwn(draftSet, fieldKey)) {
+				rawValues[field] = draftSet[fieldKey] ?? '';
+
+				if (Object.hasOwn(draftSet, baseKey)) {
+					baseValues[field] = draftSet[baseKey] ?? '';
+				}
+			}
+		}
+
+		try {
+			const { skippedFields } = await updateSessionSetInputValues(
+				sessionSetId,
+				rawValues,
+				draftSet.updatedAt ?? draft.updatedAt,
+				baseValues
+			);
+
+			if (skippedFields.length > 0) {
+				const unresolvedDraftSet: SessionInputDraftSet = {
+					updatedAt: draftSet.updatedAt ?? draft.updatedAt
+				};
+
+				for (const field of skippedFields) {
+					const fieldKey = `${field}Input` as const;
+					const baseKey = `${fieldKey}Base` as const;
+					unresolvedDraftSet[fieldKey] = draftSet[fieldKey] ?? '';
+
+					if (Object.hasOwn(draftSet, baseKey)) {
+						unresolvedDraftSet[baseKey] = draftSet[baseKey] ?? '';
+					}
+				}
+
+				unresolvedDraftSets[sessionSetId] = unresolvedDraftSet;
+			}
+		} catch (error) {
+			if (error instanceof Error && error.message === 'Set not found.') {
+				discardedMissingSetDraft = true;
 				continue;
 			}
 
-			try {
-				await updateSessionSetInputs(sessionSetId, field, draftSet[fieldKey] ?? '');
-			} catch (error) {
-				if (error instanceof Error && error.message === 'Set not found.') {
-					staleSetIds.add(sessionSetId);
-					break;
-				}
-
-				throw error;
-			}
+			throw error;
 		}
 	}
 
-	clearSessionInputDraft(sessionId);
+	if (options.clearDraft !== false) {
+		if (Object.keys(unresolvedDraftSets).length > 0) {
+			writeSessionInputDraft(sessionId, {
+				...draft,
+				sets: unresolvedDraftSets
+			});
+			throw new Error(
+				discardedMissingSetDraft
+					? 'Some workout inputs changed on another device, and a removed set could not be restored. Your remaining unsaved values were kept; review and edit them again.'
+					: 'Some workout inputs changed on another device. Your unsaved values were kept; review and edit them again.'
+			);
+		}
+
+		clearSessionInputDraft(sessionId);
+
+		if (discardedMissingSetDraft) {
+			throw new Error(
+				'A set was removed on another device, so its unsaved inputs could not be applied. The rest of your session is safe.'
+			);
+		}
+	}
+}
+
+async function getStoredSessionActivityAt(session: WorkoutSession) {
+	const sessionSets = (await listSessionExerciseDetails(session.id)).flatMap(
+		(sessionExercise) => sessionExercise.sets
+	);
+
+	return getSessionActivityAt(session, sessionSets);
+}
+
+function isSessionInactive(
+	session: WorkoutSession,
+	activityAt: SessionActivityTimestamp | null,
+	nowMs = Date.now()
+) {
+	return (
+		session.status === 'in_progress' &&
+		Boolean(activityAt && nowMs - activityAt.time >= SESSION_INACTIVITY_ABANDON_MS)
+	);
+}
+
+function canAttemptSessionCleanup() {
+	return activeBackend !== 'supabase-rxdb' || (browser && navigator.onLine);
+}
+
+async function confirmSessionCleanupIsFresh() {
+	if (activeBackend !== 'supabase-rxdb') {
+		return true;
+	}
+
+	const userId = activeSupabaseUserId;
+
+	if (!userId || !browser || !navigator.onLine) {
+		return false;
+	}
+
+	try {
+		const { rxdb } = await getRxRuntime();
+		await rxdb.awaitSupabaseInSync(userId, { timeoutMs: 5000 });
+
+		if (activeSupabaseUserId !== userId || activeBackend !== 'supabase-rxdb') {
+			return false;
+		}
+
+		markSupabaseCacheHydrated(userId);
+		activeSyncState.set({ phase: 'in-sync', status: 'synced' });
+		return true;
+	} catch (error) {
+		console.warn('Skipping stale-session cleanup until cloud sync is current.', error);
+		return false;
+	}
+}
+
+async function abandonStoredInactiveSession(sessionId: string, nowMs: number) {
+	return db.transaction('rw', db.workoutSessions, db.sessionExercises, db.sessionSets, async () => {
+		const session = await db.workoutSessions.get(sessionId);
+
+		if (!session || session.status !== 'in_progress') {
+			return false;
+		}
+
+		const activityAt = await getStoredSessionActivityAt(session);
+
+		if (!activityAt || !isSessionInactive(session, activityAt, nowMs)) {
+			return false;
+		}
+
+		await db.workoutSessions.update(session.id, {
+			status: 'abandoned',
+			completedAt: activityAt.value,
+			updatedAt: timestamp()
+		});
+		clearSessionInputDraft(session.id);
+		return true;
+	});
+}
+
+export async function abandonInactiveWorkoutSession(sessionId: string, nowMs = Date.now()) {
+	await ensureDbOpen();
+	requireLoggedInUser();
+
+	if (!canAttemptSessionCleanup()) {
+		return false;
+	}
+
+	await flushSessionInputDraft(sessionId, { clearDraft: false });
+	const currentSession = await db.workoutSessions.get(sessionId);
+	const currentActivityAt = currentSession
+		? await getStoredSessionActivityAt(currentSession)
+		: null;
+
+	if (!currentSession || !isSessionInactive(currentSession, currentActivityAt, nowMs)) {
+		return false;
+	}
+
+	if (!(await confirmSessionCleanupIsFresh())) {
+		return false;
+	}
+
+	await flushSessionInputDraft(sessionId);
+	const abandoned = await abandonStoredInactiveSession(sessionId, nowMs);
+
+	if (!abandoned) {
+		return false;
+	}
+
+	void syncNow().catch((error) => {
+		console.warn('Background Supabase sync failed.', error);
+	});
+
+	return true;
 }
 
 export async function cleanupStaleSessions(todayDayKey = toDayKey(new Date())) {
@@ -3484,43 +3827,74 @@ export async function cleanupStaleSessions(todayDayKey = toDayKey(new Date())) {
 		return;
 	}
 
-	const cleanupKey = `${userId}:${todayDayKey}`;
+	if (!canAttemptSessionCleanup()) {
+		return;
+	}
+
+	const nowMs = Date.now();
+	const cleanupKey = `${userId}:${todayDayKey}:${Math.floor(nowMs / 60_000)}`;
 
 	if (lastStaleSessionCleanupKey === cleanupKey) {
 		return;
 	}
 
-	const [plannedSessions, runningSessions] = await Promise.all([
+	let [plannedSessions, runningSessions] = await Promise.all([
 		db.workoutSessions.where('status').equals('planned').toArray(),
 		db.workoutSessions.where('status').equals('in_progress').toArray()
 	]);
-	const stalePlannedSessions = plannedSessions.filter((session) => session.dayKey < todayDayKey);
-	const staleRunningSessions = runningSessions.filter((session) => session.dayKey < todayDayKey);
 
-	if (stalePlannedSessions.length === 0 && staleRunningSessions.length === 0) {
+	for (const runningSession of runningSessions) {
+		await flushSessionInputDraft(runningSession.id, { clearDraft: false });
+	}
+
+	let stalePlannedSessions = plannedSessions.filter((session) => session.dayKey < todayDayKey);
+	const hasStaleRunningSession = (
+		await Promise.all(
+			runningSessions.map(async (session) => {
+				const activityAt = await getStoredSessionActivityAt(session);
+				return isSessionInactive(session, activityAt, nowMs);
+			})
+		)
+	).some(Boolean);
+
+	if (stalePlannedSessions.length === 0 && !hasStaleRunningSession) {
 		lastStaleSessionCleanupKey = cleanupKey;
 		return;
 	}
 
-	const now = timestamp();
+	if (!(await confirmSessionCleanupIsFresh())) {
+		return;
+	}
+
+	[plannedSessions, runningSessions] = await Promise.all([
+		db.workoutSessions.where('status').equals('planned').toArray(),
+		db.workoutSessions.where('status').equals('in_progress').toArray()
+	]);
+
+	for (const runningSession of runningSessions) {
+		await flushSessionInputDraft(runningSession.id);
+	}
+
+	stalePlannedSessions = plannedSessions.filter((session) => session.dayKey < todayDayKey);
 
 	await db.transaction('rw', db.workoutSessions, db.sessionExercises, db.sessionSets, async () => {
 		for (const stalePlannedSession of stalePlannedSessions) {
-			await deleteWorkoutSessionRows(stalePlannedSession.id);
-		}
+			const currentSession = await db.workoutSessions.get(stalePlannedSession.id);
 
-		for (const staleRunningSession of staleRunningSessions) {
-			await db.workoutSessions.update(staleRunningSession.id, {
-				status: 'abandoned',
-				completedAt: now,
-				updatedAt: now
-			});
+			if (currentSession?.status !== 'planned' || currentSession.dayKey >= todayDayKey) {
+				continue;
+			}
+
+			await deleteWorkoutSessionRows(currentSession.id);
 		}
 	});
 
+	for (const runningSession of runningSessions) {
+		await abandonStoredInactiveSession(runningSession.id, nowMs);
+	}
+
 	lastStaleSessionCleanupKey = cleanupKey;
 }
-
 export async function getCurrentInProgressSession() {
 	const sessions = await db.workoutSessions.where('status').equals('in_progress').toArray();
 	const latestSession = sessions.sort((first, second) => compareSessionRows(second, first)).at(0);
@@ -3664,40 +4038,51 @@ export async function scheduleWorkoutSession(workoutId: string, dayKey: string) 
 export async function startWorkoutSession(sessionId: string) {
 	requireLoggedInUser();
 
-	const session = await db.workoutSessions.get(sessionId);
-
-	if (!session) {
-		throw new Error('Session not found.');
-	}
-
-	if (session.status === 'completed' || session.status === 'abandoned') {
-		return summarizeSession(
-			session,
-			await db.sessionExercises.where('sessionId').equals(sessionId).toArray(),
-			(await listSessionExerciseDetails(sessionId)).flatMap(
-				(sessionExercise) => sessionExercise.sets
-			)
-		);
-	}
-
-	if (session.status === 'in_progress' && session.startedAt) {
-		return summarizeSession(
-			session,
-			await db.sessionExercises.where('sessionId').equals(sessionId).toArray(),
-			(await listSessionExerciseDetails(sessionId)).flatMap(
-				(sessionExercise) => sessionExercise.sets
-			)
-		);
-	}
-
 	const now = timestamp();
+	let didStart = false;
 
 	await db.transaction('rw', db.workoutSessions, db.sessionExercises, async () => {
+		const currentSession = await db.workoutSessions.get(sessionId);
+
+		if (!currentSession) {
+			throw new Error('Session not found.');
+		}
+
+		if (currentSession.status !== 'planned' && currentSession.status !== 'abandoned') {
+			return;
+		}
+
+		const isResuming = currentSession.status === 'abandoned';
+
+		if (isResuming && currentSession.dayKey !== toDayKey(new Date())) {
+			throw new Error("Only today's abandoned session can be resumed.");
+		}
+
+		const previousStartedAtMs = currentSession.startedAt
+			? new Date(currentSession.startedAt).getTime()
+			: NaN;
+		const previousCompletedAtMs = currentSession.completedAt
+			? new Date(currentSession.completedAt).getTime()
+			: NaN;
+		const previousActiveDurationMs =
+			Number.isFinite(previousStartedAtMs) &&
+			Number.isFinite(previousCompletedAtMs) &&
+			previousCompletedAtMs >= previousStartedAtMs
+				? previousCompletedAtMs - previousStartedAtMs
+				: 0;
+		const resumedStartedAt = timestamp(new Date(Date.now() - previousActiveDurationMs));
+		const resumedStartedAtMs = new Date(resumedStartedAt).getTime();
+		const resumedStartDeltaMs =
+			isResuming && Number.isFinite(previousStartedAtMs) && Number.isFinite(resumedStartedAtMs)
+				? resumedStartedAtMs - previousStartedAtMs
+				: 0;
 		await db.workoutSessions.update(sessionId, {
 			status: 'in_progress',
-			startedAt: now,
+			startedAt: isResuming ? resumedStartedAt : now,
+			completedAt: undefined,
 			updatedAt: now
 		});
+		didStart = true;
 
 		const sessionExercises = await db.sessionExercises
 			.where('sessionId')
@@ -3706,12 +4091,18 @@ export async function startWorkoutSession(sessionId: string) {
 
 		if (sessionExercises.length > 0) {
 			await Promise.all(
-				sessionExercises.map((sessionExercise) =>
-					db.sessionExercises.update(sessionExercise.id, {
-						performedAt: now,
+				sessionExercises.map((sessionExercise) => {
+					const performedAtMs = new Date(sessionExercise.performedAt).getTime();
+					const nextPerformedAt =
+						isResuming && Number.isFinite(performedAtMs)
+							? timestamp(new Date(performedAtMs + resumedStartDeltaMs))
+							: now;
+
+					return db.sessionExercises.update(sessionExercise.id, {
+						performedAt: nextPerformedAt,
 						updatedAt: now
-					})
-				)
+					});
+				})
 			);
 		}
 	});
@@ -3729,9 +4120,11 @@ export async function startWorkoutSession(sessionId: string) {
 		throw new Error('Session not found.');
 	}
 
-	void syncNow().catch((error) => {
-		console.warn('Background Supabase sync failed.', error);
-	});
+	if (didStart) {
+		void syncNow().catch((error) => {
+			console.warn('Background Supabase sync failed.', error);
+		});
+	}
 
 	return summarizeSession(nextSession, nextSessionExercises, nextSessionSets);
 }

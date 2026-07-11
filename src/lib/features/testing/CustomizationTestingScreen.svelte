@@ -1,35 +1,26 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import {
+		DEFAULT_PROGRESS_INDICATOR_POSITION,
+		PROGRESS_INDICATOR_POSITIONS,
+		isProgressIndicatorPosition,
+		type ProgressIndicatorPosition
+	} from '$lib/progress-indicator-preference';
 	import Icon from '$lib/ui/Icon.svelte';
 
-	type DeltaPosition =
-		| 'top-left'
-		| 'top-center'
-		| 'top-right'
-		| 'bottom-left'
-		| 'bottom-center'
-		| 'bottom-right';
-	type SetField = 'weight' | 'reps' | 'rar';
+	type SetField = 'weight' | 'reps' | 'rir';
 	type PreviewSet = Record<SetField, number> & { id: number };
 
-	const POSITION_STORAGE_KEY = 'tinytrain-testing-delta-position';
-	const DEFAULT_POSITION: DeltaPosition = 'bottom-left';
-	const baseline: Record<SetField, number> = { weight: 100, reps: 5, rar: 2 };
-	const positions: Array<{ value: DeltaPosition; label: string }> = [
-		{ value: 'top-left', label: 'Top left' },
-		{ value: 'top-center', label: 'Top center' },
-		{ value: 'top-right', label: 'Top right' },
-		{ value: 'bottom-left', label: 'Bottom left' },
-		{ value: 'bottom-center', label: 'Bottom center' },
-		{ value: 'bottom-right', label: 'Bottom right' }
-	];
+	const POSITION_STORAGE_KEY = 'tinytrain-testing-delta-position-v2';
+	const baseline: Record<SetField, number> = { weight: 100, reps: 5, rir: 2 };
+	const positions = PROGRESS_INDICATOR_POSITIONS;
 	const fields: Array<{ key: SetField; label: string; step: number }> = [
 		{ key: 'weight', label: 'Weight', step: 2.5 },
 		{ key: 'reps', label: 'Reps', step: 1 },
-		{ key: 'rar', label: 'RAR', step: 1 }
+		{ key: 'rir', label: 'RIR', step: 1 }
 	];
 
-	let selectedPosition = $state<DeltaPosition>(DEFAULT_POSITION);
+	let selectedPosition = $state<ProgressIndicatorPosition>(DEFAULT_PROGRESS_INDICATOR_POSITION);
 	let previewWidth = $state(420);
 	let sets = $state<PreviewSet[]>(createSplitExample());
 
@@ -40,14 +31,10 @@
 	onMount(() => {
 		const savedPosition = window.localStorage.getItem(POSITION_STORAGE_KEY);
 
-		if (isDeltaPosition(savedPosition)) {
+		if (isProgressIndicatorPosition(savedPosition)) {
 			selectedPosition = savedPosition;
 		}
 	});
-
-	function isDeltaPosition(value: string | null): value is DeltaPosition {
-		return positions.some((position) => position.value === value);
-	}
 
 	function createBaselineSets(): PreviewSet[] {
 		return [1, 2, 3].map((id) => ({ id, ...baseline }));
@@ -56,12 +43,12 @@
 	function createSplitExample(): PreviewSet[] {
 		return [
 			{ id: 1, ...baseline },
-			{ id: 2, weight: 105, reps: 6, rar: 3 },
-			{ id: 3, weight: 95, reps: 4, rar: 1 }
+			{ id: 2, weight: 105, reps: 6, rir: 3 },
+			{ id: 3, weight: 95, reps: 4, rir: 1 }
 		];
 	}
 
-	function selectPosition(position: DeltaPosition) {
+	function selectPosition(position: ProgressIndicatorPosition) {
 		selectedPosition = position;
 		window.localStorage.setItem(POSITION_STORAGE_KEY, position);
 	}
@@ -125,7 +112,7 @@
 			<p class="eyebrow">TinyTrain testing</p>
 			<h1>Input customization lab</h1>
 			<p class="intro">
-				Choose exactly where progress indicators sit inside Weight, Reps, and RAR inputs. This
+				Choose exactly where progress indicators sit inside Weight, Reps, and RIR inputs. This
 				preview is isolated from live workout data.
 			</p>
 		</div>
@@ -158,7 +145,7 @@
 
 					<div class="baseline-note">
 						<span>Comparison baseline</span>
-						<strong>100 kg · 5 reps · 2 RAR</strong>
+						<strong>100 kg · 5 reps · 2 RIR</strong>
 					</div>
 
 					<div class="set-grid set-labels" aria-hidden="true">
@@ -253,7 +240,7 @@
 				<div class="setting-label">
 					<div>
 						<h3>Progress indicator position</h3>
-						<p>Applied to Weight, Reps, and RAR.</p>
+						<p>Applied to Weight, Reps, and RIR.</p>
 					</div>
 					<span>{positionLabel}</span>
 				</div>

@@ -20,6 +20,10 @@
 	} = $props();
 
 	let metrics = $derived(createSummaryMetrics(overview));
+	let canResume = $derived(
+		overview.summary.status === 'abandoned' &&
+			overview.summary.dayKey === new Date().toLocaleDateString('sv-SE')
+	);
 
 	function createSummaryMetrics(overview: SessionOverview): SummaryMetric[] {
 		const { summary, previousSummary } = overview;
@@ -114,14 +118,14 @@
 		</div>
 	{/if}
 
-	{#if overview.summary.status === 'planned'}
+	{#if overview.summary.status === 'planned' || canResume}
 		<button
 			class="mt-4 flex min-h-12 w-full items-center justify-center rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
 			type="button"
 			disabled={isSaving}
 			onclick={onStartSession}
 		>
-			Start session
+			{overview.summary.status === 'abandoned' ? 'Resume session' : 'Start session'}
 		</button>
 	{/if}
 </section>

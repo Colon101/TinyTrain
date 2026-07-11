@@ -7,6 +7,9 @@ TinyTrain is an offline-first workout tracker built with SvelteKit, Supabase, Rx
 - Google sign-in through Supabase Auth.
 - Local-first workout, exercise, session, and set storage.
 - Supabase-backed sync with conflict reconciliation.
+- Configurable previous-session comparison indicators for workout inputs, with an automatic
+  device-preference migration and Bottom left as the default.
+- App-wide inactivity recovery with a warning before stale sessions are safely abandoned.
 - Progressive hydration for visible sessions, weeks, and workout lists.
 - PWA app shell and service worker caching.
 - Tracked export import and timestamp recovery tools.
@@ -65,6 +68,8 @@ VITE_SUPABASE_ANON_KEY=
 
 - `src/lib/db.ts`: app-facing database API for workouts, sessions, exercises, set editing, backfill, and hydration.
 - `src/lib/db-cloud-sync.ts`: Supabase reconciliation, upload, remote merge, and recent-row backfill helpers used by `db.ts`.
+- `src/lib/progress-indicator-preference.ts`: versioned device preference and migration for workout comparison-indicator placement.
+- `src/lib/session-inactivity.ts`: shared inactivity thresholds and time helpers for active-session recovery.
 - `src/lib/rxdb.ts`: RxDB schema setup and Supabase replication wiring.
 - `src/lib/rxdb-dexie-adapter.ts`: Dexie-like adapter around RxDB collections.
 - `src/lib/tracked-import.ts`: import and recovery logic for Tracked exports.

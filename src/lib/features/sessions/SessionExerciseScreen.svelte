@@ -24,10 +24,12 @@
 		applySessionInputDraft,
 		clearSessionInputDraft as clearStoredSessionInputDraft,
 		createEmptySessionInputDraft,
+		getSessionInputFieldBaseKey,
 		getSessionInputFieldKey,
 		parseSessionInputValue,
 		readSessionInputDraft,
 		rebuildSessionSetOverview,
+		SESSION_INPUT_DRAFT_CHANGE_EVENT,
 		writeSessionInputDraft,
 		type SessionInputDraft
 	} from './session-input-draft';
@@ -151,6 +153,22 @@
 		let disposed = false;
 		let databaseSubscription: { unsubscribe(): void } | null = null;
 
+		function refreshStoredSessionInputDraft(event: Event) {
+			const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
+
+			if (detail?.sessionId !== sessionId) {
+				return;
+			}
+
+			const nextDraft = readSessionInputDraft(sessionId) ?? createEmptySessionInputDraft(sessionId);
+			sessionInputDraft = nextDraft;
+			overview = applySessionInputDraft(overview, nextDraft, {
+				includeCompleted: isCompletedEditRoute()
+			});
+		}
+
+		window.addEventListener(SESSION_INPUT_DRAFT_CHANGE_EVENT, refreshStoredSessionInputDraft);
+
 		void (async () => {
 			try {
 				const dbApi = await import('$lib/db');
@@ -178,6 +196,7 @@
 
 		return () => {
 			disposed = true;
+			window.removeEventListener(SESSION_INPUT_DRAFT_CHANGE_EVENT, refreshStoredSessionInputDraft);
 			databaseSubscription?.unsubscribe();
 		};
 	});
@@ -226,6 +245,12 @@
 		);
 
 		if (generation !== loadDataGeneration) {
+			return;
+		}
+
+		if (nextOverview?.summary.status === 'abandoned') {
+			clearLocalSessionInputDraft(sessionId);
+			await goto(resolve('/(app)/sessions/[sessionId]', { sessionId }), { replaceState: true });
 			return;
 		}
 
@@ -328,12 +353,18 @@
 	function writeDraftInput(sessionSetId: string, field: SessionInputField, rawValue: string) {
 		const now = Date.now();
 		const fieldKey = getSessionInputFieldKey(field);
+		const baseKey = getSessionInputFieldBaseKey(field);
+		const currentSet = overview?.exercises
+			.flatMap((sessionExercise) => sessionExercise.sets)
+			.find((sessionSet) => sessionSet.id === sessionSetId);
+		const currentDraftSet = sessionInputDraft.sets[sessionSetId];
 		const nextDraft = {
 			...sessionInputDraft,
 			sets: {
 				...sessionInputDraft.sets,
 				[sessionSetId]: {
-					...(sessionInputDraft.sets[sessionSetId] ?? { updatedAt: now }),
+					...(currentDraftSet ?? { updatedAt: now }),
+					[baseKey]: currentDraftSet?.[baseKey] ?? currentSet?.[fieldKey] ?? '',
 					[fieldKey]: rawValue,
 					updatedAt: now
 				}
@@ -347,6 +378,7 @@
 	function clearDraftInput(sessionSetId: string, field: SessionInputField) {
 		const draftSet = sessionInputDraft.sets[sessionSetId];
 		const fieldKey = getSessionInputFieldKey(field);
+		const baseKey = getSessionInputFieldBaseKey(field);
 
 		if (!draftSet || !Object.hasOwn(draftSet, fieldKey)) {
 			return;
@@ -354,6 +386,7 @@
 
 		const nextDraftSet = { ...draftSet };
 		delete nextDraftSet[fieldKey];
+		delete nextDraftSet[baseKey];
 
 		const hasRemainingInput = (['weightInput', 'repsInput', 'rirInput'] as const).some(
 			(nextFieldKey) => Object.hasOwn(nextDraftSet, nextFieldKey)
@@ -505,8 +538,12 @@
 
 		const dbApi = requireApi();
 
-		await dbApi.runWithClosedDatabaseRetry(() => dbApi.flushSessionInputDraft(sessionId));
-		sessionInputDraft = readSessionInputDraft(sessionId) ?? createEmptySessionInputDraft(sessionId);
+		try {
+			await dbApi.runWithClosedDatabaseRetry(() => dbApi.flushSessionInputDraft(sessionId));
+		} finally {
+			sessionInputDraft =
+				readSessionInputDraft(sessionId) ?? createEmptySessionInputDraft(sessionId);
+		}
 	}
 
 	async function navigateAfterSavingSetInputs(

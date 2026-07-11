@@ -14,6 +14,7 @@
 	import type { SessionEditDraft } from '$lib/features/sessions/session-overview-actions';
 	import { formatDuration, formatSessionStatus } from '$lib/features/sessions/session-format';
 	import type { CloudUser } from '$lib/features/app/user';
+	import GlobalSessionInactivityMonitor from '$lib/features/sessions/GlobalSessionInactivityMonitor.svelte';
 	import Icon from '$lib/ui/Icon.svelte';
 
 	type DatabaseApi = typeof import('$lib/db');
@@ -409,6 +410,8 @@
 			{/if}
 		</section>
 	{:else}
+		<GlobalSessionInactivityMonitor />
+
 		{#if !isHomePage}
 			<header
 				class="absolute inset-x-0 top-0 z-20 flex min-w-0 items-center gap-2 border-b border-white/[0.07] bg-[#080b0d]/35 px-4 pt-3.5 pb-3 shadow-[0_18px_36px_rgba(0,0,0,0.22)] backdrop-blur-3xl [backdrop-filter:blur(28px)_saturate(1.35)]"

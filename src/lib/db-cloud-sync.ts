@@ -323,7 +323,7 @@ function chooseReconciledRow<T extends SyncableRow>(
 		return { row: localRow, winner: 'local' };
 	}
 
-	if (tableName === 'session_sets') {
+	if (tableName === 'session_sets' || tableName === 'workout_sessions') {
 		const localTimestamp = getRowTimestamp(localRow);
 		const remoteTimestamp = getRowTimestamp(remoteRow);
 		const localIsNewer = localTimestamp > remoteTimestamp;
