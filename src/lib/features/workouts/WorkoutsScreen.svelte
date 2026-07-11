@@ -119,7 +119,6 @@
 
 				dbApi = api;
 				await api.ensureDbOpen();
-				await api.ensureBaselineExercises();
 				databaseSubscription = api.subscribeToDatabaseChanges(
 					['workouts', 'workoutExercises', 'exercises', 'sessionExercises', 'workoutSessions'],
 					() => {

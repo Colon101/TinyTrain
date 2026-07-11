@@ -26,9 +26,6 @@
 				Exercises
 			</p>
 		{:else}
-			<!-- <h1 class="text-3xl font-semibold text-white">
-				{overview.summary.workoutNameSnapshot}
-			</h1> -->
 			<p class="mt-2 pt-3 text-sm leading-6 text-zinc-400">
 				{formatDayHeading(overview.summary.dayKey)}
 				{#if isPlanned}

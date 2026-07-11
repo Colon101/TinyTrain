@@ -18,7 +18,6 @@
 	let actionMessage = $state('');
 	let actionError = $state('');
 	let container = $state<HTMLElement | null>(null);
-	let isCloudSynced = $state(false);
 
 	let displayName = $derived(getUserDisplayName(user));
 	let initials = $derived(getUserInitials(user));
@@ -37,10 +36,13 @@
 
 		window.addEventListener('pointerdown', handlePointerDown);
 
-		void (async () => {
-			api = await import('$lib/db');
-			isCloudSynced = api.getActiveStorageBackend() === 'supabase-rxdb';
-		})();
+		void import('$lib/db')
+			.then((dbApi) => {
+				api = dbApi;
+			})
+			.catch(() => {
+				actionError = 'Account tools failed to load. Reload and try again.';
+			});
 
 		return () => {
 			window.removeEventListener('pointerdown', handlePointerDown);
@@ -191,10 +193,6 @@
 					<span>Log out</span>
 				</button>
 			</div>
-
-			{#if isCloudSynced}
-				<p class="px-3 pt-2 text-xs text-zinc-400">Synced successfully.</p>
-			{/if}
 
 			{#if actionError || actionMessage}
 				<p

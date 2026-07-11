@@ -222,30 +222,3 @@ export type ExerciseDetail = {
 	history: ExerciseHistoryEntry[];
 	resetEvents: ExerciseResetEvent[];
 };
-
-export type BackfillSeedResult = {
-	workoutId: string;
-	sessionId: string;
-	created: boolean;
-};
-
-export type BackfillSessionSetInput = {
-	order?: number;
-	side?: SessionSetSide;
-	weightInput?: string;
-	repsInput?: string;
-	rirInput?: string;
-};
-
-export type BackfillSessionExerciseInput = {
-	exerciseId: string;
-	sets: BackfillSessionSetInput[];
-};
-
-export type BackfillWorkoutSessionInput = {
-	workoutId: string;
-	dayKey: string;
-	startTime: string;
-	durationMinutes: number;
-	exercises: BackfillSessionExerciseInput[];
-};
