@@ -867,7 +867,7 @@
 		<section class="grid gap-3 rounded-lg border border-white/10 bg-white/[0.04] p-4">
 			<div class="flex items-start gap-3">
 				<div
-					class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-sky-300/25 bg-sky-300/10 text-sky-100"
+					class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-300/25 bg-emerald-300/10 text-emerald-100"
 				>
 					<Icon name="download" class="h-5 w-5" />
 				</div>
