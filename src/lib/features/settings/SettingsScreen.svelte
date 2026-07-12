@@ -324,7 +324,7 @@
 	}
 
 	async function onTrackedFileChange(event: Event) {
-		if (!trackedImportApi || isPreviewingTracked || isImportingTracked) {
+		if (!trackedImportApi || isPreviewingTracked || isDataOperationRunning) {
 			return;
 		}
 
@@ -888,7 +888,7 @@
 					class="rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-sm font-medium text-zinc-200 file:mr-3 file:rounded-md file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-sm file:font-bold file:text-white"
 					type="file"
 					accept=".zip,application/zip"
-					disabled={!trackedImportApi || isPreviewingTracked || isImportingTracked}
+					disabled={!trackedImportApi || isPreviewingTracked || isDataOperationRunning}
 					onchange={onTrackedFileChange}
 				/>
 			</label>

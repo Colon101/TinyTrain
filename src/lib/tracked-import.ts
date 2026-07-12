@@ -94,6 +94,7 @@ type ImportPlan = {
 	exercisesByTrackedId: Map<string, PlannedExercise>;
 	exercisesByNormalizedName: Map<string, PlannedExercise>;
 	workoutNameByTrackedId: Map<string, string>;
+	sessionStartedAtById: Map<string, string>;
 	sessionRows: CsvRow[];
 	setRows: CsvRow[];
 };
@@ -245,11 +246,20 @@ async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
 			.filter((exercise) => exercise.id)
 			.map((exercise) => [exercise.id, exercise])
 	);
-	const validTimestampSessionIds = new Set(
-		archive.rows.sessions
-			.filter((session) => session.id && resolveSessionStartedAt(session))
-			.map((session) => session.id)
-	);
+	const sessionStartedAtById = new Map<string, string>();
+	const invalidTimestampSessionRows: CsvRow[] = [];
+
+	for (const session of archive.rows.sessions) {
+		const startedAt = resolveSessionStartedAt(session);
+
+		if (!startedAt) {
+			invalidTimestampSessionRows.push(session);
+		} else if (session.id) {
+			sessionStartedAtById.set(session.id, startedAt);
+		}
+	}
+
+	const validTimestampSessionIds = new Set(sessionStartedAtById.keys());
 	const setRows = archive.rows.sets.filter((set) => {
 		return Boolean(
 			set.sessionId &&
@@ -259,8 +269,8 @@ async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
 		);
 	});
 	const importableSessionIds = new Set(setRows.map((set) => set.sessionId));
-	const sessionRows = archive.rows.sessions.filter(
-		(session) => importableSessionIds.has(session.id) && Boolean(resolveSessionStartedAt(session))
+	const sessionRows = archive.rows.sessions.filter((session) =>
+		importableSessionIds.has(session.id)
 	);
 	const exercisesByTrackedId = new Map<string, PlannedExercise>();
 	const exercisesByNormalizedName = new Map<string, PlannedExercise>();
@@ -357,17 +367,9 @@ async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
 	).length;
 	summary.workoutsCreated = workoutNames.length - summary.workoutsMatched;
 
-	const invalidTimestampSessionRows = archive.rows.sessions.filter(
-		(session) => !resolveSessionStartedAt(session)
-	);
 	const invalidTimestampOnlySessionIds = new Set(
-		archive.rows.sessions
-			.filter(
-				(session) =>
-					session.id &&
-					!validTimestampSessionIds.has(session.id) &&
-					!resolveSessionStartedAt(session)
-			)
+		invalidTimestampSessionRows
+			.filter((session) => session.id && !validTimestampSessionIds.has(session.id))
 			.map((session) => session.id)
 	);
 	const timestampSkippedSetRows = archive.rows.sets.filter((set) =>
@@ -410,6 +412,7 @@ async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
 		exercisesByTrackedId,
 		exercisesByNormalizedName,
 		workoutNameByTrackedId,
+		sessionStartedAtById,
 		sessionRows,
 		setRows
 	};
@@ -469,13 +472,7 @@ async function writeImportPlan(
 			continue;
 		}
 
-		const startedAt = resolveSessionStartedAt(sessionRow);
-
-		if (!startedAt) {
-			summary.sessionsSkipped += 1;
-			summary.sessionSetsSkipped += countImportedSetRows(sessionSetRows);
-			continue;
-		}
+		const startedAt = plan.sessionStartedAtById.get(sessionRow.id)!;
 
 		const completedAt = toIsoTimestamp(sessionRow.endedAt) ?? startedAt;
 		const session: WorkoutSession = {

@@ -332,7 +332,9 @@
 				return true;
 			}
 
-			selectedWorkoutId = preferredWorkoutId;
+			selectedWorkoutId = '';
+			pageMode = 'workouts';
+			closeExercisePicker();
 			clearWorkoutExercises();
 			void loadExercisePickerData(generation, routeWorkoutIdAtStart).catch((error) => {
 				if (isCurrentPageDataLoad(generation, routeWorkoutIdAtStart)) {

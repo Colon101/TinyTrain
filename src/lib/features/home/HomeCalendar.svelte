@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
 	import { fly } from 'svelte/transition';
 	import type { SessionSummary } from '$lib/db';
 	import { buildCalendarWeek } from './calendar';
@@ -25,7 +24,6 @@
 	let pointerStartX = $state<number | null>(null);
 	let pointerId = $state<number | null>(null);
 	let suppressNextPointerClick = false;
-	let clickSuppressionTimer: ReturnType<typeof setTimeout> | null = null;
 	const SWIPE_THRESHOLD = 36;
 
 	function getStatusTone(dayKey: string) {
@@ -67,13 +65,6 @@
 		}
 
 		suppressNextPointerClick = true;
-		if (clickSuppressionTimer !== null) {
-			clearTimeout(clickSuppressionTimer);
-		}
-		clickSuppressionTimer = setTimeout(() => {
-			suppressNextPointerClick = false;
-			clickSuppressionTimer = null;
-		}, 0);
 		event.preventDefault();
 		onShiftWeek(deltaX < 0 ? 1 : -1);
 	}
@@ -93,12 +84,6 @@
 
 		onSelectDay(dayKey);
 	}
-
-	onDestroy(() => {
-		if (clickSuppressionTimer !== null) {
-			clearTimeout(clickSuppressionTimer);
-		}
-	});
 </script>
 
 <div

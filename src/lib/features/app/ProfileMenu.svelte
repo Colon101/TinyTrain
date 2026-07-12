@@ -22,7 +22,7 @@
 	let actionError = $state('');
 	let container = $state<HTMLElement | null>(null);
 	let manualSyncDismissTimeout: ReturnType<typeof setTimeout> | null = null;
-	let manualSyncWasDismissed = false;
+	let manualSyncWasDismissed = $state(false);
 
 	let displayName = $derived(getUserDisplayName(user));
 	let initials = $derived(getUserInitials(user));
@@ -123,7 +123,7 @@
 				window.location.reload();
 			} else if (didSync) {
 				actionMessage = 'Sync finished.';
-			} else {
+			} else if (!manualSyncWasDismissed) {
 				isOpen = true;
 			}
 		})();
@@ -193,6 +193,15 @@
 	>
 		<Icon name="loader-circle" class="h-4 w-4 animate-spin text-emerald-200" />
 		<span>Sync is continuing in the background.</span>
+	</div>
+{/if}
+
+{#if !isManualSyncing && manualSyncWasDismissed && actionError}
+	<div
+		class="fixed right-4 bottom-4 z-40 max-w-sm rounded-lg border border-red-300/25 bg-zinc-950 px-4 py-3 text-sm font-medium text-red-100 shadow-xl"
+		role="alert"
+	>
+		{actionError}
 	</div>
 {/if}
 

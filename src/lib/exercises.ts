@@ -822,7 +822,7 @@ export const JOINT_ACTION_EXERCISES = [...new Set(JOINT_ACTION_EXERCISE_NAMES)].
 
 const BASELINE_EXERCISE_MAP = new Map(
 	[...BILATERAL_EXERCISES, ...UNILATERAL_EXERCISES, ...JOINT_ACTION_EXERCISES].map((exercise) => [
-		exercise.name.trim().replace(/\s+/g, ' ').toLowerCase(),
+		normalizeExerciseName(exercise.name),
 		exercise
 	])
 );
