@@ -3,7 +3,7 @@
 	import type { ProgressIndicatorPosition } from '$lib/progress-indicator-preference';
 
 	const setInputBaseClass =
-		'h-11 w-full rounded-md border px-2 py-0 text-center text-[1.0625rem] leading-none font-semibold outline-none placeholder:text-zinc-500 focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#080b0d]';
+		'h-11 w-full rounded-md border px-2 py-0 text-center text-[1.0625rem] leading-none font-semibold outline-none placeholder:text-zinc-500';
 	const deltaIndicatorBaseClass =
 		'pointer-events-none absolute z-10 max-w-[calc(100%-1rem)] overflow-hidden text-[9px] leading-none font-semibold whitespace-nowrap text-ellipsis tabular-nums';
 
