@@ -28,6 +28,8 @@
 			if ('serviceWorker' in navigator) {
 				const rootScope = new URL('/', window.location.origin).href;
 				const updateLogPrefix = '[TinyTrain update check]';
+				// Keep this list synchronized with `AUTH_CACHE_PARAM_NAMES` in src/service-worker.ts.
+				// This inline script is not bundled with that module, so the compiler cannot enforce it.
 				const authCacheParamNames = new Set([
 					'code',
 					'state',
@@ -49,7 +51,7 @@
 						current: 'cache is current',
 						newer: 'newer deployment found',
 						failed: 'check failed; trusting cache',
-						'precache-skipped': 'skipped unavailable precache assets'
+						'precache-skipped': 'precache incomplete; keeping the current app version'
 					};
 
 					console.info(`${updateLogPrefix} ${labels[data.status] || data.status}`, data);

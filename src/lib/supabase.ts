@@ -4,23 +4,62 @@ import { resolve } from '$app/paths';
 import { env } from '$env/dynamic/public';
 import { createClient, type Session, type User } from '@supabase/supabase-js';
 
-const supabaseUrl =
-	env.PUBLIC_SUPABASE_URL ||
-	import.meta.env.VITE_SUPABASE_URL ||
-	'https://rcognfamskwirstxmdrh.supabase.co';
-const supabaseAnonKey =
-	env.PUBLIC_SUPABASE_ANON_KEY ||
-	import.meta.env.VITE_SUPABASE_ANON_KEY ||
-	'sb_publishable_xuOkk0llHzFGPxyrki0adQ_61SG53d6';
+const DISABLED_SUPABASE_URL = 'https://tinytrain-disabled.invalid';
+const DISABLED_SUPABASE_KEY = 'tinytrain-supabase-disabled';
+const SUPABASE_CONFIGURATION_ERROR =
+	'Supabase is not configured. Set PUBLIC_SUPABASE_URL and PUBLIC_SUPABASE_ANON_KEY before using cloud sign-in or sync.';
+
+function firstNonBlank(...values: Array<string | undefined>) {
+	return values.find((value) => value?.trim())?.trim();
+}
+
+function isHttpUrl(value: string | undefined) {
+	if (!value) return false;
+
+	try {
+		const url = new URL(value);
+		return url.protocol === 'http:' || url.protocol === 'https:';
+	} catch {
+		return false;
+	}
+}
+
+const configuredSupabaseUrl = firstNonBlank(
+	env.PUBLIC_SUPABASE_URL,
+	import.meta.env.VITE_SUPABASE_URL
+);
+const configuredSupabaseAnonKey = firstNonBlank(
+	env.PUBLIC_SUPABASE_ANON_KEY,
+	import.meta.env.VITE_SUPABASE_ANON_KEY
+);
+
+export const isSupabaseConfigured = Boolean(
+	isHttpUrl(configuredSupabaseUrl) && configuredSupabaseAnonKey
+);
+
+function requireSupabaseConfiguration() {
+	if (!isSupabaseConfigured) {
+		throw new Error(SUPABASE_CONFIGURATION_ERROR);
+	}
+}
+
+const disabledSupabaseFetch = () => Promise.reject(new Error(SUPABASE_CONFIGURATION_ERROR));
 const postLoginReloadKey = 'tinytrain:supabase-post-login-reload';
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-	auth: {
-		persistSession: true,
-		autoRefreshToken: true,
-		detectSessionInUrl: true
+export const supabase = createClient(
+	isSupabaseConfigured ? configuredSupabaseUrl! : DISABLED_SUPABASE_URL,
+	isSupabaseConfigured ? configuredSupabaseAnonKey! : DISABLED_SUPABASE_KEY,
+	{
+		auth: {
+			persistSession: true,
+			autoRefreshToken: isSupabaseConfigured,
+			detectSessionInUrl: isSupabaseConfigured
+		},
+		global: {
+			fetch: isSupabaseConfigured ? undefined : disabledSupabaseFetch
+		}
 	}
-});
+);
 
 type PostgrestFilterPatchTarget = {
 	__tinytrainReservedColumnPatch?: boolean;
@@ -83,6 +122,17 @@ export async function initializeSupabaseAuth() {
 	}
 
 	initialized = true;
+
+	if (!isSupabaseConfigured) {
+		authSnapshot = {
+			session: null,
+			user: null,
+			isLoading: false
+		};
+		emitAuthSnapshot();
+		return authSnapshot;
+	}
+
 	const { data } = await supabase.auth.getSession();
 	authSnapshot = {
 		session: data.session,
@@ -124,6 +174,11 @@ export function subscribeToSupabaseAuth(subscriber: (snapshot: SupabaseAuthSnaps
 
 export async function getSupabaseSession() {
 	await initializeSupabaseAuth();
+
+	if (!isSupabaseConfigured) {
+		return null;
+	}
+
 	const { data, error } = await supabase.auth.getSession();
 
 	if (error) {
@@ -146,6 +201,8 @@ export async function getSupabaseUser() {
 }
 
 export async function loginWithSupabaseGoogle(redirectPath = '/') {
+	requireSupabaseConfiguration();
+
 	const redirectTo = browser
 		? new URL(resolve(redirectPath as '/'), window.location.origin).toString()
 		: undefined;
@@ -184,6 +241,8 @@ export async function reloadOnceAfterSupabaseOAuthCallback(redirectPath = '/') {
 }
 
 export async function logoutFromSupabase() {
+	requireSupabaseConfiguration();
+
 	const { error } = await supabase.auth.signOut();
 
 	if (error) {

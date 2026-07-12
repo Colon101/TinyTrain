@@ -166,9 +166,9 @@ export async function listSessionCalendarRowsForWeek(weekDate: Date): Promise<Se
 		.between(toDayKey(start), toDayKey(end), true, true)
 		.toArray();
 
-	return sessions
-		.map((session) => summarizeSession(session, [], []))
-		.sort((first, second) => compareSessionRows(first, second));
+	return [...(await getSessionSummariesByIds(sessions.map((session) => session.id))).values()].sort(
+		(first, second) => compareSessionRows(first, second)
+	);
 }
 
 export async function getDayOverview(dayKey: string): Promise<DayOverview> {

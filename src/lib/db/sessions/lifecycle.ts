@@ -436,6 +436,10 @@ export async function updateWorkoutSessionTiming(
 		throw new Error('Start the session before editing its time.');
 	}
 
+	if (session.status === 'completed' && !completedAtDate) {
+		throw new Error('End time is required for a completed session.');
+	}
+
 	const currentStartedAtMs = session.startedAt ? new Date(session.startedAt).getTime() : NaN;
 	const startedAtDeltaMs = Number.isNaN(currentStartedAtMs)
 		? 0

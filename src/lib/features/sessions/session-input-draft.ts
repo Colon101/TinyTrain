@@ -19,6 +19,14 @@ export type SessionInputDraft = {
 	updatedAt: number;
 };
 export const SESSION_INPUT_DRAFT_CHANGE_EVENT = 'tinytrain:session-input-draft-change';
+const SESSION_INPUT_DRAFT_SET_STRING_KEYS = [
+	'weightInput',
+	'weightInputBase',
+	'repsInput',
+	'repsInputBase',
+	'rirInput',
+	'rirInputBase'
+] as const satisfies readonly (SessionInputFieldKey | SessionInputFieldBaseKey)[];
 type ApplySessionInputDraftOptions = {
 	includeCompleted?: boolean;
 };
@@ -84,8 +92,12 @@ export function writeSessionInputDraft(draft: SessionInputDraft) {
 		return;
 	}
 
-	localStorage.setItem(getSessionInputDraftKey(draft.sessionId), JSON.stringify(draft));
-	notifySessionInputDraftChange(draft.sessionId);
+	try {
+		localStorage.setItem(getSessionInputDraftKey(draft.sessionId), JSON.stringify(draft));
+		notifySessionInputDraftChange(draft.sessionId);
+	} catch {
+		// Optional draft persistence must never interrupt rapid workout input.
+	}
 }
 
 export function clearSessionInputDraft(sessionId: string) {
@@ -93,8 +105,12 @@ export function clearSessionInputDraft(sessionId: string) {
 		return;
 	}
 
-	localStorage.removeItem(getSessionInputDraftKey(sessionId));
-	notifySessionInputDraftChange(sessionId);
+	try {
+		localStorage.removeItem(getSessionInputDraftKey(sessionId));
+		notifySessionInputDraftChange(sessionId);
+	} catch {
+		// Optional draft cleanup must never block the underlying workout mutation.
+	}
 }
 
 export function getSessionInputFieldKey(field: SessionInputField): SessionInputFieldKey {
@@ -157,7 +173,19 @@ export function applySessionInputDraft(
 }
 
 function isSessionInputDraftSet(value: unknown): value is SessionInputDraftSet {
-	return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+	if (!value || typeof value !== 'object' || Array.isArray(value)) {
+		return false;
+	}
+
+	const candidate = value as Record<string, unknown>;
+	const hasValidStringFields = SESSION_INPUT_DRAFT_SET_STRING_KEYS.every(
+		(key) => !Object.hasOwn(candidate, key) || typeof candidate[key] === 'string'
+	);
+	const hasValidUpdatedAt =
+		!Object.hasOwn(candidate, 'updatedAt') ||
+		(typeof candidate.updatedAt === 'number' && Number.isFinite(candidate.updatedAt));
+
+	return hasValidStringFields && hasValidUpdatedAt;
 }
 
 function hasDraftInputValue(
@@ -170,6 +198,10 @@ function hasDraftInputValue(
 function applyDraftToSessionSet(sessionSet: SessionSetOverview, draft: SessionInputDraft) {
 	const draftSet = draft.sets[sessionSet.id];
 	const overrides: Partial<SessionSetOverview> = {};
+
+	if (!isSessionInputDraftSet(draftSet)) {
+		return sessionSet;
+	}
 
 	for (const field of ['weight', 'reps', 'rir'] as const) {
 		const fieldKey = getSessionInputFieldKey(field);

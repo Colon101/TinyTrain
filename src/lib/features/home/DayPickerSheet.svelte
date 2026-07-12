@@ -26,6 +26,8 @@
 	const weekdayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 	let weeks = $derived(buildCalendarMonth(monthDate));
+	let isSelecting = $state(false);
+	let selectionError = $state('');
 
 	onMount(() => {
 		function handleKeydown(event: KeyboardEvent) {
@@ -51,10 +53,25 @@
 		return session.status === 'completed' ? 'bg-emerald-300' : 'bg-amber-300';
 	}
 
-	function chooseDay(dayKey: string) {
-		void Promise.resolve(onSelectDay(dayKey)).finally(() => {
+	async function chooseDay(dayKey: string) {
+		if (isSelecting) {
+			return;
+		}
+
+		isSelecting = true;
+		selectionError = '';
+
+		try {
+			await onSelectDay(dayKey);
 			onClose();
-		});
+		} catch (error) {
+			selectionError =
+				error instanceof Error && error.message
+					? error.message
+					: 'Could not select that day. Please try again.';
+		} finally {
+			isSelecting = false;
+		}
 	}
 </script>
 
@@ -71,6 +88,7 @@
 		role="dialog"
 		aria-modal="true"
 		aria-label="Choose a day"
+		aria-busy={isSelecting}
 		tabindex="-1"
 	>
 		<header class="flex items-center justify-between border-b border-white/10 px-4 py-4">
@@ -90,6 +108,15 @@
 		</header>
 
 		<div class="overflow-y-auto px-4 py-4">
+			{#if selectionError}
+				<p
+					class="mb-4 rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-3 text-sm leading-5 text-red-100"
+					role="alert"
+				>
+					{selectionError}
+				</p>
+			{/if}
+
 			<div class="flex items-center justify-between">
 				<button
 					class="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-200 transition hover:border-emerald-300/50 hover:bg-white/[0.08]"
@@ -131,7 +158,8 @@
 											: 'border-transparent bg-transparent text-zinc-700'
 								}`}
 								type="button"
-								onclick={() => chooseDay(cell.dayKey)}
+								disabled={isSelecting}
+								onclick={() => void chooseDay(cell.dayKey)}
 							>
 								<span
 									class={`absolute top-2 left-2 text-sm font-medium ${

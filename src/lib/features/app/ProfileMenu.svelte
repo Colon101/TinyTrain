@@ -7,6 +7,7 @@
 	import { getUserDisplayName, getUserInitials } from './user';
 
 	type DatabaseApi = typeof import('$lib/db');
+	const MANUAL_SYNC_DISMISS_DELAY_MS = 15_000;
 
 	let { user }: { user: CloudUser } = $props();
 
@@ -14,10 +15,14 @@
 	let isOpen = $state(false);
 	let isBusy = $state(false);
 	let isManualSyncing = $state(false);
+	let isManualSyncOverlayOpen = $state(false);
+	let canDismissManualSync = $state(false);
 	let syncProgress = $state<SyncProgress>({ completedTables: 0, totalTables: 7 });
 	let actionMessage = $state('');
 	let actionError = $state('');
 	let container = $state<HTMLElement | null>(null);
+	let manualSyncDismissTimeout: ReturnType<typeof setTimeout> | null = null;
+	let manualSyncWasDismissed = false;
 
 	let displayName = $derived(getUserDisplayName(user));
 	let initials = $derived(getUserInitials(user));
@@ -45,9 +50,27 @@
 			});
 
 		return () => {
+			if (manualSyncDismissTimeout) {
+				clearTimeout(manualSyncDismissTimeout);
+			}
 			window.removeEventListener('pointerdown', handlePointerDown);
 		};
 	});
+
+	function clearManualSyncDismissTimeout() {
+		if (manualSyncDismissTimeout) {
+			clearTimeout(manualSyncDismissTimeout);
+			manualSyncDismissTimeout = null;
+		}
+	}
+
+	function dismissManualSyncOverlay() {
+		if (!canDismissManualSync) return;
+
+		manualSyncWasDismissed = true;
+		isManualSyncOverlayOpen = false;
+		actionMessage = 'Sync is still running in the background.';
+	}
 
 	async function runAction(action: (dbApi: DatabaseApi) => Promise<void>) {
 		if (!api) {
@@ -74,8 +97,15 @@
 	function syncNow() {
 		void (async () => {
 			isManualSyncing = true;
+			isManualSyncOverlayOpen = true;
+			canDismissManualSync = false;
+			manualSyncWasDismissed = false;
 			syncProgress = { completedTables: 0, totalTables: 7 };
 			isOpen = false;
+			clearManualSyncDismissTimeout();
+			manualSyncDismissTimeout = setTimeout(() => {
+				canDismissManualSync = true;
+			}, MANUAL_SYNC_DISMISS_DELAY_MS);
 
 			const didSync = await runAction(async (dbApi) => {
 				await dbApi.syncNow({
@@ -85,10 +115,14 @@
 				});
 			});
 
+			clearManualSyncDismissTimeout();
 			isManualSyncing = false;
+			isManualSyncOverlayOpen = false;
 
-			if (didSync) {
+			if (didSync && !manualSyncWasDismissed) {
 				window.location.reload();
+			} else if (didSync) {
+				actionMessage = 'Sync finished.';
 			} else {
 				isOpen = true;
 			}
@@ -103,12 +137,13 @@
 	}
 </script>
 
-{#if isManualSyncing}
+{#if isManualSyncing && isManualSyncOverlayOpen}
 	<div
 		class="fixed inset-0 z-50 grid place-items-center bg-zinc-950/85 px-5 backdrop-blur-md"
 		role="dialog"
 		aria-modal="true"
 		aria-labelledby="manual-sync-title"
+		aria-describedby="manual-sync-description"
 	>
 		<div
 			class="grid w-full max-w-sm gap-5 rounded-2xl border border-emerald-200/20 bg-zinc-950 p-6 text-center shadow-2xl shadow-emerald-950/30"
@@ -123,6 +158,11 @@
 				<p class="text-sm font-semibold text-zinc-300">
 					{syncProgress.completedTables} / {syncProgress.totalTables} synced
 				</p>
+				<p id="manual-sync-description" class="text-sm leading-6 text-zinc-400">
+					{canDismissManualSync
+						? 'Sync is taking longer than expected. You can hide this window and keep using TinyTrain while it continues in the background.'
+						: 'Keep TinyTrain open while your local workouts are reconciled with the cloud.'}
+				</p>
 			</div>
 			<div
 				class="h-2.5 overflow-hidden rounded-full bg-white/10"
@@ -133,7 +173,26 @@
 					style={`width: ${syncProgressPercent}%`}
 				></div>
 			</div>
+			{#if canDismissManualSync}
+				<button
+					class="min-h-11 rounded-lg border border-white/15 px-4 text-sm font-semibold text-zinc-100 transition hover:bg-white/8"
+					type="button"
+					onclick={dismissManualSyncOverlay}
+				>
+					Keep using app
+				</button>
+			{/if}
 		</div>
+	</div>
+{/if}
+
+{#if isManualSyncing && !isManualSyncOverlayOpen}
+	<div
+		class="fixed right-4 bottom-4 z-40 flex items-center gap-2 rounded-lg border border-emerald-200/20 bg-zinc-950 px-4 py-3 text-sm font-medium text-zinc-200 shadow-xl"
+		role="status"
+	>
+		<Icon name="loader-circle" class="h-4 w-4 animate-spin text-emerald-200" />
+		<span>Sync is continuing in the background.</span>
 	</div>
 {/if}
 

@@ -55,32 +55,37 @@ export async function createWorkout(name: string) {
 		throw new Error('Workout name is required.');
 	}
 
-	const existingWorkout = await db.workouts.where('normalizedName').equals(normalizedName).first();
+	return db.transaction<Workout>('rw', db.workouts, async () => {
+		const existingWorkout = await db.workouts
+			.where('normalizedName')
+			.equals(normalizedName)
+			.first();
 
-	if (existingWorkout) {
-		if (existingWorkout.archived) {
-			const updatedAt = timestamp();
-			await db.workouts.update(existingWorkout.id, { archived: false, updatedAt });
+		if (existingWorkout) {
+			if (existingWorkout.archived) {
+				const updatedAt = timestamp();
+				await db.workouts.update(existingWorkout.id, { archived: false, updatedAt });
 
-			return { ...existingWorkout, archived: false, updatedAt };
+				return { ...existingWorkout, archived: false, updatedAt };
+			}
+
+			return existingWorkout;
 		}
 
-		return existingWorkout;
-	}
+		const now = timestamp();
+		const workout: Workout = {
+			id: createId(),
+			name: cleanName,
+			normalizedName,
+			archived: false,
+			createdAt: now,
+			updatedAt: now
+		};
 
-	const now = timestamp();
-	const workout: Workout = {
-		id: createId(),
-		name: cleanName,
-		normalizedName,
-		archived: false,
-		createdAt: now,
-		updatedAt: now
-	};
+		await db.workouts.add(workout);
 
-	await db.workouts.add(workout);
-
-	return workout;
+		return workout;
+	});
 }
 
 export async function listWorkoutExercises(workoutId: string) {

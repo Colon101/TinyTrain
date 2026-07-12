@@ -61,6 +61,29 @@ export function compareHistoricalSessionExerciseMatches(
 	);
 }
 
+export function getSessionExercisePerformedAt(
+	session: Pick<WorkoutSession, 'completedAt' | 'startedAt' | 'createdAt'>,
+	sessionExercise: { performedAt?: string }
+) {
+	return (
+		session.completedAt ?? session.startedAt ?? sessionExercise.performedAt ?? session.createdAt
+	);
+}
+
+export function buildLatestResetAtByExerciseId(resetEvents: ExerciseResetEvent[]) {
+	const latestResetAtByExerciseId = new Map<string, string>();
+
+	for (const resetEvent of resetEvents) {
+		const currentValue = latestResetAtByExerciseId.get(resetEvent.exerciseId);
+
+		if (!currentValue || currentValue < resetEvent.resetAt) {
+			latestResetAtByExerciseId.set(resetEvent.exerciseId, resetEvent.resetAt);
+		}
+	}
+
+	return latestResetAtByExerciseId;
+}
+
 export async function listEquivalentExerciseIds(exerciseId: string) {
 	const exercise = await getExercise(exerciseId);
 
@@ -282,8 +305,7 @@ export async function listExerciseUsagePreferences(): Promise<ExerciseUsagePrefe
 			continue;
 		}
 
-		const performedAt =
-			session.completedAt ?? session.startedAt ?? sessionExercise.performedAt ?? session.createdAt;
+		const performedAt = getSessionExercisePerformedAt(session, sessionExercise);
 		const currentUsage = usageByNormalizedName.get(normalizedName) ?? {
 			exerciseIds: new Set<string>(),
 			lastPerformedAt: performedAt,
@@ -344,7 +366,7 @@ export async function listCustomExerciseItems(): Promise<ExerciseListItem[]> {
 
 	const historyByExerciseId = new Map<string, Set<string>>();
 	const lastPerformedAtByExerciseId = new Map<string, string>();
-	const latestResetAtByExerciseId = new Map<string, string>();
+	const latestResetAtByExerciseId = buildLatestResetAtByExerciseId(resetEvents);
 
 	for (const sessionExercise of sessionExercises) {
 		const session = sessionById.get(sessionExercise.sessionId);
@@ -363,19 +385,10 @@ export async function listCustomExerciseItems(): Promise<ExerciseListItem[]> {
 		historyByExerciseId.set(sessionExercise.exerciseId, historySessions);
 
 		const currentValue = lastPerformedAtByExerciseId.get(sessionExercise.exerciseId);
-		const performedAt =
-			session.completedAt ?? session.startedAt ?? sessionExercise.performedAt ?? session.createdAt;
+		const performedAt = getSessionExercisePerformedAt(session, sessionExercise);
 
 		if (!currentValue || currentValue < performedAt) {
 			lastPerformedAtByExerciseId.set(sessionExercise.exerciseId, performedAt);
-		}
-	}
-
-	for (const resetEvent of resetEvents) {
-		const currentValue = latestResetAtByExerciseId.get(resetEvent.exerciseId);
-
-		if (!currentValue || currentValue < resetEvent.resetAt) {
-			latestResetAtByExerciseId.set(resetEvent.exerciseId, resetEvent.resetAt);
 		}
 	}
 
@@ -423,8 +436,7 @@ export async function listExerciseItems(): Promise<ExerciseListItem[]> {
 			continue;
 		}
 
-		const performedAt =
-			session.completedAt ?? session.startedAt ?? sessionExercise.performedAt ?? session.createdAt;
+		const performedAt = getSessionExercisePerformedAt(session, sessionExercise);
 		const usage = usageByNormalizedName.get(normalizedName) ?? {
 			historySessionIds: new Set<string>(),
 			lastPerformedAt: undefined
@@ -482,15 +494,7 @@ export async function listExerciseItems(): Promise<ExerciseListItem[]> {
 		exerciseIds.length === 0
 			? []
 			: await db.exerciseResetEvents.where('exerciseId').anyOf(exerciseIds).toArray();
-	const latestResetAtByExerciseId = new Map<string, string>();
-
-	for (const resetEvent of resetEvents) {
-		const currentValue = latestResetAtByExerciseId.get(resetEvent.exerciseId);
-
-		if (!currentValue || currentValue < resetEvent.resetAt) {
-			latestResetAtByExerciseId.set(resetEvent.exerciseId, resetEvent.resetAt);
-		}
-	}
+	const latestResetAtByExerciseId = buildLatestResetAtByExerciseId(resetEvents);
 
 	return [...itemsByNormalizedName.values()]
 		.map((item) => ({

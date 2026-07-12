@@ -40,7 +40,7 @@
 	let workoutExercises = $state<WorkoutExerciseWithExercise[]>([]);
 	let selectedWorkoutId = $state('');
 	let pageMode = $state<PageMode>('workouts');
-	let activeRouteWorkoutId = $state('');
+	let activeRouteWorkoutId = $state<string | null>(null);
 	let isCreatingWorkout = $state(false);
 	let newWorkoutName = $state('');
 	let isExercisePickerOpen = $state(false);
@@ -56,6 +56,10 @@
 	let isLoading = $state(true);
 	let isSaving = $state(false);
 	let errorMessage = $state('');
+	let pageDataLoadGeneration = 0;
+	let workoutExerciseLoadGeneration = 0;
+	let exercisePickerLoadGeneration = 0;
+	let isDisposed = false;
 
 	let selectedWorkout = $derived(
 		workouts.find((workout) => workout.id === selectedWorkoutId) ?? null
@@ -106,64 +110,96 @@
 	);
 
 	onMount(() => {
-		let disposed = false;
+		isDisposed = false;
 		let databaseSubscription: { unsubscribe(): void } | null = null;
 
 		void (async () => {
 			try {
 				const api = await import('$lib/db');
 
-				if (disposed) {
+				if (isDisposed) {
+					return;
+				}
+
+				await api.ensureDbOpen();
+
+				if (isDisposed) {
 					return;
 				}
 
 				dbApi = api;
-				await api.ensureDbOpen();
 				databaseSubscription = api.subscribeToDatabaseChanges(
 					['workouts', 'workoutExercises', 'exercises', 'sessionExercises', 'workoutSessions'],
 					() => {
-						void loadPageData(selectedWorkoutId || routeWorkoutId);
+						const preferredWorkoutId = selectedWorkoutId || routeWorkoutId;
+
+						void loadPageData(preferredWorkoutId).catch((error) => {
+							if (!isDisposed && preferredWorkoutId === (selectedWorkoutId || routeWorkoutId)) {
+								errorMessage = getErrorMessage(error);
+							}
+						});
 					},
 					{ debounceMs: 250 }
 				);
-				pageMode = routeWorkoutId ? 'detail' : 'workouts';
-				await loadPageData(routeWorkoutId);
+				const initialRouteWorkoutId = routeWorkoutId;
+				pageMode = initialRouteWorkoutId ? 'detail' : 'workouts';
+				const didLoadInitialRoute = await loadPageData(initialRouteWorkoutId);
+
+				if (isDisposed) {
+					return;
+				}
+
+				if (didLoadInitialRoute && initialRouteWorkoutId === routeWorkoutId) {
+					activeRouteWorkoutId = initialRouteWorkoutId;
+				}
+
 				void api.hydrateVisibleScope({ type: 'workouts' }).catch(() => undefined);
 				isLoading = false;
 			} catch (error) {
-				errorMessage = getErrorMessage(error);
-				isLoading = false;
+				if (!isDisposed) {
+					errorMessage = getErrorMessage(error);
+					isLoading = false;
+				}
 			}
 		})();
 
 		return () => {
-			disposed = true;
+			isDisposed = true;
+			invalidatePageDataLoads();
+			exercisePickerLoadGeneration += 1;
 			databaseSubscription?.unsubscribe();
 			stopDragAutoScroll();
 		};
 	});
 
 	$effect(() => {
-		if (routeWorkoutId === activeRouteWorkoutId) {
+		const nextRouteWorkoutId = routeWorkoutId;
+		const isReady = Boolean(dbApi) && !isLoading;
+
+		if (!isReady || nextRouteWorkoutId === activeRouteWorkoutId) {
 			return;
 		}
 
-		activeRouteWorkoutId = routeWorkoutId;
-
-		if (!dbApi || isLoading) {
-			return;
-		}
+		activeRouteWorkoutId = nextRouteWorkoutId;
+		invalidatePageDataLoads();
+		errorMessage = '';
 
 		closeExercisePicker();
-		pageMode = routeWorkoutId ? 'detail' : 'workouts';
+		pageMode = nextRouteWorkoutId ? 'detail' : 'workouts';
 
-		if (!routeWorkoutId) {
+		if (!nextRouteWorkoutId) {
 			selectedWorkoutId = '';
-			workoutExercises = [];
+			clearWorkoutExercises();
 			return;
 		}
 
-		void loadPageData(routeWorkoutId);
+		selectedWorkoutId = nextRouteWorkoutId;
+		clearWorkoutExercises();
+		void loadPageData(nextRouteWorkoutId).catch((error) => {
+			if (routeWorkoutId === nextRouteWorkoutId) {
+				errorMessage = getErrorMessage(error);
+			}
+		});
 	});
 
 	function getErrorMessage(error: unknown) {
@@ -209,55 +245,187 @@
 		return first.name.localeCompare(second.name);
 	}
 
+	function invalidatePageDataLoads() {
+		pageDataLoadGeneration += 1;
+		workoutExerciseLoadGeneration += 1;
+	}
+
+	function clearWorkoutExercises() {
+		workoutExerciseLoadGeneration += 1;
+		workoutExercises = [];
+	}
+
+	function isCurrentPageDataLoad(generation: number, routeWorkoutIdAtStart: string) {
+		return (
+			!isDisposed &&
+			generation === pageDataLoadGeneration &&
+			routeWorkoutId === routeWorkoutIdAtStart
+		);
+	}
+
+	function isCurrentWorkoutExerciseLoad(
+		generation: number,
+		workoutId: string,
+		expectedPageLoad?: { generation: number; routeWorkoutId: string }
+	) {
+		return (
+			!isDisposed &&
+			generation === workoutExerciseLoadGeneration &&
+			workoutId === selectedWorkoutId &&
+			(!expectedPageLoad ||
+				isCurrentPageDataLoad(expectedPageLoad.generation, expectedPageLoad.routeWorkoutId))
+		);
+	}
+
 	async function loadPageData(preferredWorkoutId = selectedWorkoutId) {
+		if (isDisposed) {
+			return false;
+		}
+
+		const generation = ++pageDataLoadGeneration;
+		const routeWorkoutIdAtStart = routeWorkoutId;
 		const api = requireDbApi();
-		const nextWorkouts = await api.listWorkouts();
+		let nextWorkouts: Workout[];
+
+		try {
+			nextWorkouts = await api.listWorkouts();
+		} catch (error) {
+			if (!isCurrentPageDataLoad(generation, routeWorkoutIdAtStart)) {
+				return false;
+			}
+
+			throw error;
+		}
+
+		if (!isCurrentPageDataLoad(generation, routeWorkoutIdAtStart)) {
+			return false;
+		}
+
 		workouts = nextWorkouts;
 
 		if (preferredWorkoutId) {
 			if (nextWorkouts.some((workout) => workout.id === preferredWorkoutId)) {
 				selectedWorkoutId = preferredWorkoutId;
-				await loadSelectedWorkoutExercises();
-				void loadExercisePickerData().catch((error) => {
-					errorMessage = getErrorMessage(error);
+
+				try {
+					await loadSelectedWorkoutExercises(preferredWorkoutId, {
+						generation,
+						routeWorkoutId: routeWorkoutIdAtStart
+					});
+				} catch (error) {
+					if (!isCurrentPageDataLoad(generation, routeWorkoutIdAtStart)) {
+						return false;
+					}
+
+					throw error;
+				}
+
+				if (!isCurrentPageDataLoad(generation, routeWorkoutIdAtStart)) {
+					return false;
+				}
+
+				void loadExercisePickerData(generation, routeWorkoutIdAtStart).catch((error) => {
+					if (isCurrentPageDataLoad(generation, routeWorkoutIdAtStart)) {
+						errorMessage = getErrorMessage(error);
+					}
 				});
-				return;
+				return true;
 			}
 
 			selectedWorkoutId = preferredWorkoutId;
-			workoutExercises = [];
-			void loadExercisePickerData().catch((error) => {
-				errorMessage = getErrorMessage(error);
+			clearWorkoutExercises();
+			void loadExercisePickerData(generation, routeWorkoutIdAtStart).catch((error) => {
+				if (isCurrentPageDataLoad(generation, routeWorkoutIdAtStart)) {
+					errorMessage = getErrorMessage(error);
+				}
 			});
-			return;
+			return true;
 		}
 
 		selectedWorkoutId = '';
-		workoutExercises = [];
-		void loadExercisePickerData().catch((error) => {
-			errorMessage = getErrorMessage(error);
+		clearWorkoutExercises();
+		void loadExercisePickerData(generation, routeWorkoutIdAtStart).catch((error) => {
+			if (isCurrentPageDataLoad(generation, routeWorkoutIdAtStart)) {
+				errorMessage = getErrorMessage(error);
+			}
 		});
+		return true;
 	}
 
-	async function loadExercisePickerData() {
+	async function loadExercisePickerData(
+		pageDataGeneration = pageDataLoadGeneration,
+		routeWorkoutIdAtStart = routeWorkoutId
+	) {
+		if (isDisposed) {
+			return;
+		}
+
+		const generation = ++exercisePickerLoadGeneration;
 		const api = requireDbApi();
-		const [nextExercises, nextExerciseUsagePreferences] = await Promise.all([
-			api.listExercises(),
-			api.listExerciseUsagePreferences()
-		]);
+		let nextExercises: Exercise[];
+		let nextExerciseUsagePreferences: ExerciseUsagePreference[];
+
+		try {
+			[nextExercises, nextExerciseUsagePreferences] = await Promise.all([
+				api.listExercises(),
+				api.listExerciseUsagePreferences()
+			]);
+		} catch (error) {
+			if (
+				generation !== exercisePickerLoadGeneration ||
+				!isCurrentPageDataLoad(pageDataGeneration, routeWorkoutIdAtStart)
+			) {
+				return;
+			}
+
+			throw error;
+		}
+
+		if (
+			generation !== exercisePickerLoadGeneration ||
+			!isCurrentPageDataLoad(pageDataGeneration, routeWorkoutIdAtStart)
+		) {
+			return;
+		}
 
 		exercises = nextExercises;
 		exerciseUsagePreferences = nextExerciseUsagePreferences;
 		writeExercisePickerCache(nextExercises, nextExerciseUsagePreferences);
 	}
 
-	async function loadSelectedWorkoutExercises() {
-		if (!dbApi || !selectedWorkoutId) {
-			workoutExercises = [];
-			return;
+	async function loadSelectedWorkoutExercises(
+		workoutId = selectedWorkoutId,
+		expectedPageLoad?: { generation: number; routeWorkoutId: string }
+	) {
+		const generation = ++workoutExerciseLoadGeneration;
+		const api = dbApi;
+
+		if (isDisposed || !api || !workoutId) {
+			if (!isDisposed && !workoutId && !selectedWorkoutId) {
+				workoutExercises = [];
+			}
+
+			return false;
 		}
 
-		workoutExercises = await dbApi.listWorkoutExercises(selectedWorkoutId);
+		let nextWorkoutExercises: WorkoutExerciseWithExercise[];
+
+		try {
+			nextWorkoutExercises = await api.listWorkoutExercises(workoutId);
+		} catch (error) {
+			if (!isCurrentWorkoutExerciseLoad(generation, workoutId, expectedPageLoad)) {
+				return false;
+			}
+
+			throw error;
+		}
+
+		if (!isCurrentWorkoutExerciseLoad(generation, workoutId, expectedPageLoad)) {
+			return false;
+		}
+
+		workoutExercises = nextWorkoutExercises;
+		return true;
 	}
 
 	async function runMutation(action: () => Promise<void>) {
@@ -267,9 +435,13 @@
 		try {
 			await action();
 		} catch (error) {
-			errorMessage = getErrorMessage(error);
+			if (!isDisposed) {
+				errorMessage = getErrorMessage(error);
+			}
 		} finally {
-			isSaving = false;
+			if (!isDisposed) {
+				isSaving = false;
+			}
 		}
 	}
 
@@ -289,10 +461,17 @@
 	}
 
 	function openWorkout(workoutId: string) {
+		invalidatePageDataLoads();
+		errorMessage = '';
 		selectedWorkoutId = workoutId;
 		pageMode = 'detail';
 		closeExercisePicker();
-		void loadSelectedWorkoutExercises();
+		clearWorkoutExercises();
+		void loadSelectedWorkoutExercises(workoutId).catch((error) => {
+			if (!isDisposed && selectedWorkoutId === workoutId) {
+				errorMessage = getErrorMessage(error);
+			}
+		});
 		void goto(resolve('/(app)/workouts/[workoutId]', { workoutId }), { keepFocus: true });
 	}
 
@@ -606,8 +785,20 @@
 		}
 
 		void runMutation(async () => {
-			await requireDbApi().reorderWorkoutExercises(workoutId, finalWorkoutExerciseIds);
-			await loadSelectedWorkoutExercises();
+			try {
+				await requireDbApi().reorderWorkoutExercises(workoutId, finalWorkoutExerciseIds);
+			} catch (error) {
+				const isStillShowingOptimisticOrder =
+					getWorkoutExerciseIds().join('|') === finalWorkoutExerciseIds.join('|');
+
+				if (!isDisposed && selectedWorkoutId === workoutId && isStillShowingOptimisticOrder) {
+					orderWorkoutExercises(startedWorkoutExerciseIds);
+				}
+
+				throw error;
+			}
+
+			await loadSelectedWorkoutExercises(workoutId);
 		});
 	}
 

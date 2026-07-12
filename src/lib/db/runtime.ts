@@ -154,7 +154,7 @@ let rxRuntimePromise: Promise<{
 	rxdb: typeof import('../rxdb');
 }> | null = null;
 let lastStaleSessionCleanupKey: string | null = null;
-let backgroundSyncUserId: string | null = null;
+let backgroundSyncAttempt: { userId: string } | null = null;
 const databaseChangeSubscribers = new Set<{
 	tables: Set<DatabaseTableKey>;
 	callback: DatabaseChangeSubscriber;
@@ -351,7 +351,7 @@ export function clearSupabaseRuntimeState() {
 	const previousUserId = activeSupabaseUserId;
 
 	lastStaleSessionCleanupKey = null;
-	backgroundSyncUserId = null;
+	backgroundSyncAttempt = null;
 	activeSupabaseUserId = null;
 	rxDataDb = null;
 	dbOpenPromise = null;
@@ -670,7 +670,7 @@ export async function recoverClosedDatabase() {
 		}
 
 		dbOpenPromise = Promise.resolve(db);
-		backgroundSyncUserId = null;
+		backgroundSyncAttempt = null;
 		activeUser.set(toSupabaseCloudUser());
 		startProgressiveSync(userId);
 
@@ -812,18 +812,22 @@ export async function backfillRecentRows(userId: string, days = recentBackfillDa
 }
 
 export function startProgressiveSync(userId: string) {
-	if (backgroundSyncUserId === userId) {
+	if (backgroundSyncAttempt?.userId === userId) {
 		return;
 	}
 
-	backgroundSyncUserId = userId;
+	const attempt = { userId };
+	backgroundSyncAttempt = attempt;
 
 	void (async () => {
+		let shouldReleaseGuard = false;
+
 		try {
 			const { rxdb } = await getRxRuntime();
 			await waitForBackgroundSyncSlot();
 
 			if (!isActiveSupabaseUser(userId)) {
+				shouldReleaseGuard = true;
 				return;
 			}
 
@@ -832,6 +836,7 @@ export function startProgressiveSync(userId: string) {
 			try {
 				await backfillRecentRows(userId);
 			} catch (error) {
+				shouldReleaseGuard = true;
 				console.warn('Recent Supabase backfill failed.', error);
 			}
 
@@ -844,6 +849,7 @@ export function startProgressiveSync(userId: string) {
 				setSyncStateForUser(userId, { phase: 'in-sync', status: 'synced' });
 			}
 		} catch (error) {
+			shouldReleaseGuard = true;
 			console.warn('Background Supabase sync failed.', error);
 
 			if (isActiveSupabaseUser(userId)) {
@@ -852,6 +858,10 @@ export function startProgressiveSync(userId: string) {
 					status: 'error',
 					error: error instanceof Error ? error : new Error('Supabase sync failed.')
 				});
+			}
+		} finally {
+			if (shouldReleaseGuard && backgroundSyncAttempt === attempt) {
+				backgroundSyncAttempt = null;
 			}
 		}
 	})();
@@ -1017,6 +1027,7 @@ export async function hydrateSessionFromSupabase(sessionId: string) {
 		);
 	} catch (error) {
 		console.warn('Direct session hydration from Supabase failed.', error);
+		throw error;
 	}
 }
 

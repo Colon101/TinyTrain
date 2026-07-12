@@ -411,6 +411,7 @@ async function fetchAllSupabaseRows<T extends SyncableRow>(
 			.from(tableName)
 			.select('*')
 			.eq('user_id', userId)
+			.order('id', { ascending: true })
 			.range(from, from + pageSize - 1);
 
 		if (error) {
@@ -716,20 +717,33 @@ async function fetchRecentSupabaseRows<T extends SyncableRow>(
 	normalize: (row: T) => T = (row) => row
 ) {
 	const pageSize = 1000;
-	const rows: T[] = [];
+	const rows: RemoteReconcileRow<T>[] = [];
 	let from = 0;
+	const userId = deps.getActiveSupabaseUserId();
+
+	if (!userId) {
+		throw new Error('Sign in with Google to sync workouts.');
+	}
 
 	while (true) {
-		const pageRows = await fetchSupabaseRows<T>(
-			deps,
-			tableName,
-			(query) =>
-				query
-					.gte('_modified', sinceIso)
-					.order('_modified', { ascending: false })
-					.range(from, from + pageSize - 1),
-			normalize
-		);
+		const { data, error } = await supabase
+			.from(tableName)
+			.select('*')
+			.eq('user_id', userId)
+			.gte('_modified', sinceIso)
+			.order('_modified', { ascending: false })
+			.order('id', { ascending: true })
+			.range(from, from + pageSize - 1);
+
+		if (error) {
+			throw error;
+		}
+
+		const pageRows = ((data ?? []) as SupabaseSyncedRow[]).map((row) => ({
+			row: normalize(stripSupabaseSyncFields<T>(row)),
+			deleted: row._deleted === true,
+			modifiedAt: typeof row._modified === 'string' ? row._modified : undefined
+		}));
 
 		rows.push(...pageRows);
 
@@ -749,19 +763,32 @@ async function backfillRecentRows(
 	const sinceDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
 	for (const tableConfig of getSyncedTableConfigs(deps)) {
-		const rows = await fetchRecentSupabaseRows(
+		const remoteRows = await fetchRecentSupabaseRows(
 			deps,
 			tableConfig.tableName,
 			sinceDate,
 			tableConfig.normalize
 		);
-		await putMergedRemoteRows(
-			deps,
-			tableConfig.tableName,
-			tableConfig.localTable(),
-			rows,
-			tableConfig.normalize
-		);
+		const localTable = tableConfig.localTable();
+
+		for (const remoteRow of remoteRows) {
+			if (remoteRow.deleted) {
+				const localRow = await localTable.get(remoteRow.row.id);
+
+				if (localRow && shouldApplyRemoteDeletion(localRow, remoteRow)) {
+					await localTable.delete(remoteRow.row.id);
+				}
+				continue;
+			}
+
+			await putMergedRemoteRow(
+				deps,
+				tableConfig.tableName,
+				localTable,
+				remoteRow.row,
+				tableConfig.normalize
+			);
+		}
 	}
 
 	deps.markRecentBackfillComplete(userId);
