@@ -42,11 +42,19 @@ export function readSessionEditDraft(sessionId: string): SessionEditDraft | null
 }
 
 export function writeSessionEditDraft(sessionId: string, draft: SessionEditDraft) {
-	globalThis.localStorage?.setItem(getSessionEditDraftKey(sessionId), JSON.stringify(draft));
+	try {
+		globalThis.localStorage?.setItem(getSessionEditDraftKey(sessionId), JSON.stringify(draft));
+	} catch {
+		// Optional edit-draft persistence must not block saving or leaving edit mode.
+	}
 }
 
 export function clearSessionEditDraft(sessionId: string) {
-	globalThis.localStorage?.removeItem(getSessionEditDraftKey(sessionId));
+	try {
+		globalThis.localStorage?.removeItem(getSessionEditDraftKey(sessionId));
+	} catch {
+		// Optional edit-draft cleanup must not block the underlying action.
+	}
 }
 
 export type SessionOverviewActions = {

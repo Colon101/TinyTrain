@@ -29,7 +29,7 @@
 	} from './session-overview-actions';
 	import { writeSessionEditDraft } from './session-overview-actions';
 	import { formatDayHeading, formatDuration } from './session-format';
-	import { hasLoggedValues } from './session-overview';
+	import { confirmSessionExerciseReplacement, hasLoggedValues } from './session-overview';
 	import { applySessionInputDraft } from './session-input-draft';
 	import { shareOrDownloadSessionImage } from './session-share-image';
 	import { readSessionDataCache, writeSessionDataCache } from './session-data-cache';
@@ -689,9 +689,27 @@
 		closeExercisePicker();
 	}
 
+	function canApplyPickedExercises() {
+		if (pickerMode !== 'swap') {
+			return true;
+		}
+
+		const sessionExercise = overview?.exercises.find(
+			(entry) => entry.id === targetSessionExerciseId
+		);
+
+		return Boolean(sessionExercise && confirmSessionExerciseReplacement(sessionExercise));
+	}
+
 	function handleAddSelected() {
+		const pickedIds = [...selectedPickerExerciseIds];
+
+		if (pickedIds.length === 0 || !canApplyPickedExercises()) {
+			return;
+		}
+
 		void runMutation(async () => {
-			await applyPickedExercises(selectedPickerExerciseIds);
+			await applyPickedExercises(pickedIds);
 		});
 	}
 
@@ -701,6 +719,10 @@
 		const exerciseName = (newExerciseName || cleanExerciseSearch).trim();
 
 		if (!exerciseName) {
+			return;
+		}
+
+		if (!canApplyPickedExercises()) {
 			return;
 		}
 

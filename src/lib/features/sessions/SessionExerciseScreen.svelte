@@ -21,6 +21,7 @@
 	import SessionSetEditor from './SessionSetEditor.svelte';
 	import { isSessionExerciseRoute } from './session-navigation';
 	import { readSessionDataCache, writeSessionDataCache } from './session-data-cache';
+	import { confirmSessionExerciseReplacement } from './session-overview';
 	import {
 		applySessionInputDraft,
 		clearSessionInputDraft as clearStoredSessionInputDraft,
@@ -747,8 +748,19 @@
 		closeExercisePicker();
 	}
 
+	function canApplyPickedExercises() {
+		return (
+			pickerMode !== 'swap' ||
+			Boolean(activeExercise && confirmSessionExerciseReplacement(activeExercise))
+		);
+	}
+
 	function handleAddSelected() {
 		const pickedIds = [...selectedPickerExerciseIds];
+
+		if (pickedIds.length === 0 || !canApplyPickedExercises()) {
+			return;
+		}
 
 		void runMutation(
 			async () => {
@@ -776,6 +788,10 @@
 		const exerciseName = (newExerciseName || cleanExerciseSearch).trim();
 
 		if (!exerciseName) {
+			return;
+		}
+
+		if (!canApplyPickedExercises()) {
 			return;
 		}
 

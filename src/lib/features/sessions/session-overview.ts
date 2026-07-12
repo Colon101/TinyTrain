@@ -23,6 +23,13 @@ export function hasLoggedValues(sessionExercise: SessionExerciseOverview) {
 	);
 }
 
+export function confirmSessionExerciseReplacement(sessionExercise: SessionExerciseOverview) {
+	return (
+		!hasLoggedValues(sessionExercise) ||
+		window.confirm(`Replace ${sessionExercise.exerciseNameSnapshot} and discard its logged values?`)
+	);
+}
+
 export function hasPerformedSetValue(sessionSet: SessionSetOverview) {
 	return (
 		Boolean(sessionSet.weightInput?.trim()) ||
