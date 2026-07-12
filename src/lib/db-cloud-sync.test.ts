@@ -13,6 +13,7 @@ type SupabaseMockRow = SyncableRow & {
 const supabaseMock = vi.hoisted(() => ({
 	remoteRows: new Map<string, SupabaseMockRow[]>(),
 	uploadedRows: new Map<string, SyncableRow[]>(),
+	afterRange: null as (() => void) | null,
 	queryCalls: [] as Array<{
 		tableName: string;
 		filters: Array<{ operator: 'eq' | 'gte'; field: string; value: unknown }>;
@@ -79,6 +80,7 @@ vi.mock('./supabase', () => ({
 									return 0;
 								})
 								.slice(from, to + 1);
+							supabaseMock.afterRange?.();
 
 							return { data, error: null };
 						}
@@ -99,11 +101,21 @@ beforeEach(() => {
 	supabaseMock.remoteRows.clear();
 	supabaseMock.uploadedRows.clear();
 	supabaseMock.queryCalls.length = 0;
+	supabaseMock.afterRange = null;
 });
 
 const older = '2026-01-01T00:00:00.000Z';
 const newer = '2026-01-02T00:00:00.000Z';
 const newest = '2026-01-03T00:00:00.000Z';
+
+function deferred<T>() {
+	let resolve!: (value: T | PromiseLike<T>) => void;
+	const promise = new Promise<T>((nextResolve) => {
+		resolve = nextResolve;
+	});
+
+	return { promise, resolve };
+}
 
 const dependencies: DatabaseCloudSyncDependencies = {
 	db: {} as DatabaseCloudSyncDependencies['db'],
@@ -190,6 +202,28 @@ function createSessionSet(overrides: Partial<SessionSet> = {}): SessionSet {
 }
 
 describe('database cloud conflict reconciliation', () => {
+	it('aborts a pending remote merge before writing after the user changes', async () => {
+		let activeUserId: string | null = 'user-1';
+		const pendingRead = deferred<SyncableRow | undefined>();
+		const put = vi.fn(async (row: SyncableRow) => row.id);
+		const table = {
+			get: () => pendingRead.promise,
+			put
+		} as unknown as DataTable<SyncableRow>;
+		const merge = dbCloudSync.putMergedRemoteRow(
+			{ ...dependencies, getActiveSupabaseUserId: () => activeUserId },
+			'workouts',
+			table,
+			{ id: 'workout-1', updatedAt: newer }
+		);
+
+		activeUserId = 'user-2';
+		pendingRead.resolve(undefined);
+
+		await expect(merge).rejects.toThrow('signed-in user changed');
+		expect(put).not.toHaveBeenCalled();
+	});
+
 	it('stores a remote row when no local row exists', async () => {
 		const { rows, table } = createLocalTable<SyncableRow>();
 		const remoteRow = { id: 'workout-1', name: 'Push', createdAt: older, updatedAt: older };
@@ -409,6 +443,26 @@ describe('remote deletion conflicts', () => {
 });
 
 describe('Supabase pagination', () => {
+	it('stops reconciliation when auth changes during a remote page', async () => {
+		let activeUserId: string | null = 'user-1';
+		const localRow = { id: 'workout-1', name: 'Push', createdAt: older, updatedAt: newer };
+		const { dependencies: reconcileDependencies, workouts } = createReconcileDependencies(localRow);
+		supabaseMock.afterRange = () => {
+			activeUserId = 'user-2';
+			supabaseMock.afterRange = null;
+		};
+
+		await expect(
+			dbCloudSync.reconcileSupabaseDatabase(
+				{ ...reconcileDependencies, getActiveSupabaseUserId: () => activeUserId },
+				'user-1',
+				'richest'
+			)
+		).rejects.toThrow('signed-in user changed');
+		expect(workouts.rows.get(localRow.id)).toEqual(localRow);
+		expect(supabaseMock.uploadedRows.size).toBe(0);
+	});
+
 	it('orders full reconciliation pages by stable row id', async () => {
 		const localRow = { id: 'workout-1', name: 'Push', createdAt: older, updatedAt: newer };
 		const { dependencies: reconcileDependencies } = createReconcileDependencies(localRow);
