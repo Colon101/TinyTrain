@@ -152,6 +152,22 @@ type SyncedTableConfig<T extends SyncableRow = SyncableRow> = {
 	normalize?: (row: T) => T;
 };
 
+function assertSyncContextActive(deps: DatabaseCloudSyncDependencies, userId: string) {
+	if (deps.getActiveSupabaseUserId() !== userId) {
+		throw new Error('Cloud sync stopped because the signed-in user changed.');
+	}
+}
+
+function getActiveSyncUserId(deps: DatabaseCloudSyncDependencies) {
+	const userId = deps.getActiveSupabaseUserId();
+
+	if (!userId) {
+		throw new Error('Sign in with Google to sync workouts.');
+	}
+
+	return userId;
+}
+
 function stripSupabaseSyncFields<T extends { id: string }>(row: SupabaseSyncedRow): T {
 	const doc = { ...row };
 	delete doc.user_id;
@@ -398,6 +414,7 @@ function toSupabaseUpsertRow(userId: string, tableName: SupabaseTableName, row: 
 }
 
 async function fetchAllSupabaseRows<T extends SyncableRow>(
+	deps: DatabaseCloudSyncDependencies,
 	userId: string,
 	tableName: SupabaseTableName,
 	normalize: (row: T) => T = (row) => row
@@ -407,6 +424,7 @@ async function fetchAllSupabaseRows<T extends SyncableRow>(
 	let from = 0;
 
 	while (true) {
+		assertSyncContextActive(deps, userId);
 		const { data, error } = await supabase
 			.from(tableName)
 			.select('*')
@@ -417,6 +435,8 @@ async function fetchAllSupabaseRows<T extends SyncableRow>(
 		if (error) {
 			throw error;
 		}
+
+		assertSyncContextActive(deps, userId);
 
 		const pageRows = ((data ?? []) as SupabaseSyncedRow[]).map((row) => ({
 			row: normalize(stripSupabaseSyncFields<T>(row)),
@@ -435,6 +455,7 @@ async function fetchAllSupabaseRows<T extends SyncableRow>(
 }
 
 async function upsertSupabaseRows(
+	deps: DatabaseCloudSyncDependencies,
 	userId: string,
 	tableName: SupabaseTableName,
 	rows: SyncableRow[]
@@ -442,6 +463,7 @@ async function upsertSupabaseRows(
 	const pageSize = 200;
 
 	for (let index = 0; index < rows.length; index += pageSize) {
+		assertSyncContextActive(deps, userId);
 		const pageRows = rows
 			.slice(index, index + pageSize)
 			.map((row) => toSupabaseUpsertRow(userId, tableName, row));
@@ -455,11 +477,19 @@ async function upsertSupabaseRows(
 		if (error) {
 			throw error;
 		}
+
+		assertSyncContextActive(deps, userId);
 	}
 }
 
-async function putReconciledRows<T extends SyncableRow>(table: DataTable<T>, rows: T[]) {
+async function putReconciledRows<T extends SyncableRow>(
+	deps: DatabaseCloudSyncDependencies,
+	userId: string,
+	table: DataTable<T>,
+	rows: T[]
+) {
 	for (const row of rows) {
+		assertSyncContextActive(deps, userId);
 		await table.put(row);
 	}
 }
@@ -471,10 +501,13 @@ async function reconcileTable<T extends SyncableRow>(
 	options: ReconcileTableOptions<T>
 ): Promise<DatabaseTableUploadSummary> {
 	const normalize = options.normalize ?? ((row: T) => row);
+	assertSyncContextActive(deps, userId);
 	const localRows = (await options.localTable.toArray())
 		.filter((row) => options.filterLocal?.(row) ?? true)
 		.map(normalize);
-	const remoteRows = await fetchAllSupabaseRows(userId, options.tableName, normalize);
+	assertSyncContextActive(deps, userId);
+	const remoteRows = await fetchAllSupabaseRows(deps, userId, options.tableName, normalize);
+	assertSyncContextActive(deps, userId);
 	const localRowsById = new Map(localRows.map((row) => [row.id, row]));
 	const remoteRowsById = new Map(remoteRows.map((row) => [row.row.id, row]));
 	const ids = [...new Set([...localRowsById.keys(), ...remoteRowsById.keys()])];
@@ -489,6 +522,7 @@ async function reconcileTable<T extends SyncableRow>(
 		if (remoteRow?.deleted) {
 			if (shouldApplyRemoteDeletion(localRow, remoteRow)) {
 				if (localRow) {
+					assertSyncContextActive(deps, userId);
 					await options.localTable.delete(id);
 				}
 				remoteWins += 1;
@@ -517,8 +551,8 @@ async function reconcileTable<T extends SyncableRow>(
 		}
 	}
 
-	await putReconciledRows(options.localTable, mergedRows);
-	await upsertSupabaseRows(userId, options.tableName, mergedRows);
+	await putReconciledRows(deps, userId, options.localTable, mergedRows);
+	await upsertSupabaseRows(deps, userId, options.tableName, mergedRows);
 
 	return {
 		table: options.tableName,
@@ -537,6 +571,7 @@ async function reconcileSupabaseDatabase(
 	mode: DatabaseUploadMode,
 	options: ReconcileDatabaseOptions = {}
 ) {
+	assertSyncContextActive(deps, userId);
 	const totalTables = 7;
 	let completedTables = 0;
 
@@ -545,7 +580,9 @@ async function reconcileSupabaseDatabase(
 	async function reconcileNextTable<T extends SyncableRow>(
 		tableOptions: ReconcileTableOptions<T>
 	): Promise<DatabaseTableUploadSummary> {
+		assertSyncContextActive(deps, userId);
 		const summary = await reconcileTable<T>(deps, userId, mode, tableOptions);
+		assertSyncContextActive(deps, userId);
 		completedTables += 1;
 		options.onProgress?.({ completedTables, totalTables });
 		return summary;
@@ -608,6 +645,7 @@ async function reconcileSupabaseDatabase(
 		}
 	);
 
+	assertSyncContextActive(deps, userId);
 	deps.markSupabaseCacheHydrated(userId);
 
 	return summary;
@@ -620,7 +658,9 @@ async function putMergedRemoteRow<T extends SyncableRow>(
 	row: T,
 	normalize: (row: T) => T = (nextRow) => nextRow
 ) {
+	const userId = getActiveSyncUserId(deps);
 	const currentRow = await table.get(row.id);
+	assertSyncContextActive(deps, userId);
 	const choice = chooseReconciledRow(deps, tableName, currentRow, normalize(row), 'richest');
 
 	if (!choice) {
@@ -631,6 +671,7 @@ async function putMergedRemoteRow<T extends SyncableRow>(
 		return;
 	}
 
+	assertSyncContextActive(deps, userId);
 	await table.put(choice.row);
 }
 
@@ -691,11 +732,7 @@ async function fetchSupabaseRows<T extends SyncableRow>(
 	buildQuery: (query: any) => PromiseLike<{ data: unknown; error: unknown }>,
 	normalize: (row: T) => T = (row) => row
 ) {
-	const userId = deps.getActiveSupabaseUserId();
-
-	if (!userId) {
-		throw new Error('Sign in with Google to sync workouts.');
-	}
+	const userId = getActiveSyncUserId(deps);
 
 	const { data, error } = await buildQuery(
 		supabase.from(tableName).select('*').eq('user_id', userId).eq('_deleted', false)
@@ -704,6 +741,8 @@ async function fetchSupabaseRows<T extends SyncableRow>(
 	if (error) {
 		throw error;
 	}
+
+	assertSyncContextActive(deps, userId);
 
 	return ((data ?? []) as SupabaseSyncedRow[]).map((row) =>
 		normalize(stripSupabaseSyncFields<T>(row))
@@ -719,13 +758,10 @@ async function fetchRecentSupabaseRows<T extends SyncableRow>(
 	const pageSize = 1000;
 	const rows: RemoteReconcileRow<T>[] = [];
 	let from = 0;
-	const userId = deps.getActiveSupabaseUserId();
-
-	if (!userId) {
-		throw new Error('Sign in with Google to sync workouts.');
-	}
+	const userId = getActiveSyncUserId(deps);
 
 	while (true) {
+		assertSyncContextActive(deps, userId);
 		const { data, error } = await supabase
 			.from(tableName)
 			.select('*')
@@ -738,6 +774,8 @@ async function fetchRecentSupabaseRows<T extends SyncableRow>(
 		if (error) {
 			throw error;
 		}
+
+		assertSyncContextActive(deps, userId);
 
 		const pageRows = ((data ?? []) as SupabaseSyncedRow[]).map((row) => ({
 			row: normalize(stripSupabaseSyncFields<T>(row)),
@@ -760,9 +798,11 @@ async function backfillRecentRows(
 	userId: string,
 	days: number
 ) {
+	assertSyncContextActive(deps, userId);
 	const sinceDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
 	for (const tableConfig of getSyncedTableConfigs(deps)) {
+		assertSyncContextActive(deps, userId);
 		const remoteRows = await fetchRecentSupabaseRows(
 			deps,
 			tableConfig.tableName,
@@ -772,8 +812,10 @@ async function backfillRecentRows(
 		const localTable = tableConfig.localTable();
 
 		for (const remoteRow of remoteRows) {
+			assertSyncContextActive(deps, userId);
 			if (remoteRow.deleted) {
 				const localRow = await localTable.get(remoteRow.row.id);
+				assertSyncContextActive(deps, userId);
 
 				if (localRow && shouldApplyRemoteDeletion(localRow, remoteRow)) {
 					await localTable.delete(remoteRow.row.id);
@@ -791,6 +833,7 @@ async function backfillRecentRows(
 		}
 	}
 
+	assertSyncContextActive(deps, userId);
 	deps.markRecentBackfillComplete(userId);
 	deps.markSupabaseCacheHydrated(userId);
 }
