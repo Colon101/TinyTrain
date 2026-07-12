@@ -19,6 +19,7 @@
 	import SessionExerciseFooter from './SessionExerciseFooter.svelte';
 	import SessionExerciseHeader from './SessionExerciseHeader.svelte';
 	import SessionSetEditor from './SessionSetEditor.svelte';
+	import { isSessionExerciseRoute } from './session-navigation';
 	import { readSessionDataCache, writeSessionDataCache } from './session-data-cache';
 	import {
 		applySessionInputDraft,
@@ -200,16 +201,18 @@
 	});
 
 	beforeNavigate((navigation) => {
+		const targetUrl = navigation.to?.url;
+
 		if (
 			isReplayingInputNavigation ||
 			navigation.willUnload ||
 			!hasPendingSetInputWork() ||
-			!navigation.to?.url
+			!targetUrl ||
+			isSessionExerciseRoute(targetUrl.pathname, getSessionOverviewPathname())
 		) {
 			return;
 		}
 
-		const targetUrl = navigation.to.url;
 		const targetPath = `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`;
 
 		navigation.cancel();
@@ -884,20 +887,40 @@
 	}
 
 	function getSessionOverviewPath() {
-		const path = resolve('/(app)/sessions/[sessionId]', { sessionId });
+		const path = getSessionOverviewPathname();
 
 		return `${path}${isEditMode ? '?edit=1' : ''}`;
 	}
 
+	function getSessionOverviewPathname() {
+		return resolve('/(app)/sessions/[sessionId]', { sessionId });
+	}
+
+	async function navigateBetweenSessionExercises(targetPath: string) {
+		isSaving = true;
+		errorMessage = '';
+
+		try {
+			// Set input is already durable in the local draft. Its queued database write can safely
+			// finish while the user continues through this same session.
+			// eslint-disable-next-line svelte/no-navigation-without-resolve
+			await goto(targetPath);
+		} catch (error) {
+			errorMessage = getErrorMessage(error);
+		} finally {
+			isSaving = false;
+		}
+	}
+
 	function goToNextExercise() {
 		if (nextExercise) {
-			void navigateAfterSavingSetInputs(getSessionExercisePath(nextExercise.id));
+			void navigateBetweenSessionExercises(getSessionExercisePath(nextExercise.id));
 		}
 	}
 
 	function goToPreviousExercise() {
 		if (previousExercise) {
-			void navigateAfterSavingSetInputs(getSessionExercisePath(previousExercise.id));
+			void navigateBetweenSessionExercises(getSessionExercisePath(previousExercise.id));
 		}
 	}
 </script>
