@@ -75,6 +75,7 @@
 	let selectedPickerExerciseIds = $state<string[]>([]);
 	let newExerciseName = $state('');
 	let isNewExerciseUnilateral = $state(false);
+	let sessionSetEditorContainer = $state<HTMLElement | null>(null);
 	let loadDataGeneration = 0;
 	let inputVersions = new SvelteMap<string, number>();
 	let setInputSaveChains = new SvelteMap<string, Promise<void>>();
@@ -585,7 +586,9 @@
 
 	function focusNextSetInput(currentInput: HTMLInputElement) {
 		const inputs = [
-			...document.querySelectorAll<HTMLInputElement>('[data-session-set-input="true"]')
+			...(sessionSetEditorContainer?.querySelectorAll<HTMLInputElement>(
+				'[data-session-set-input="true"]'
+			) ?? [])
 		];
 		const currentIndex = inputs.indexOf(currentInput);
 		const nextInput = inputs[currentIndex + 1];
@@ -996,16 +999,18 @@
 			{isEditMode}
 		/>
 
-		<SessionSetEditor
-			sets={activeExercise.sets}
-			{isSaving}
-			isUnilateral={Boolean(activeExercise.exercise?.unilateral)}
-			onAutofillPreviousSet={autofillPreviousSet}
-			onSetInput={handleSetInput}
-			onSetInputKeydown={handleSetInputKeydown}
-			onAddSet={handleAddSet}
-			onRemoveSet={handleRemoveSet}
-		/>
+		<div bind:this={sessionSetEditorContainer} class="flex min-h-0 flex-1 flex-col">
+			<SessionSetEditor
+				sets={activeExercise.sets}
+				{isSaving}
+				isUnilateral={Boolean(activeExercise.exercise?.unilateral)}
+				onAutofillPreviousSet={autofillPreviousSet}
+				onSetInput={handleSetInput}
+				onSetInputKeydown={handleSetInputKeydown}
+				onAddSet={handleAddSet}
+				onRemoveSet={handleRemoveSet}
+			/>
+		</div>
 
 		<SessionExerciseFooter
 			{previousExercise}
