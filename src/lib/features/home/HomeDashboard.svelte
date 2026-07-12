@@ -2,8 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { untrack } from 'svelte';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import type { DayOverview, SessionSummary, Workout } from '$lib/db';
 	import { toDayKey } from '$lib/db';
@@ -47,6 +46,10 @@
 	let dayOverview = $state<DayOverview | null>(null);
 	let currentSession = $state<SessionSummary | null>(null);
 	let workouts = $state<Workout[]>([]);
+	let disposed = false;
+	let selectedDayRefreshGeneration = 0;
+	let visibleWeekHydrationGeneration = 0;
+	let workoutHydrationTimer: ReturnType<typeof setTimeout> | null = null;
 
 	let todayDayKey = $derived(toDayKey(new Date()));
 	let urlDateParam = $derived(page.url.searchParams.get('date'));
@@ -75,14 +78,14 @@
 		const nextDayKey = urlDayKey ?? todayDayKey;
 
 		if (nextDayKey !== untrack(() => selectedDayKey)) {
-			void updateSelectedDay(nextDayKey, 0, false);
+			void updateSelectedDay(nextDayKey, 0, false).catch(() => undefined);
 		}
 	});
 
 	onMount(() => {
-		let disposed = false;
 		let currentUserSubscription: SubscriptionLike | null = null;
 		let databaseSubscription: SubscriptionLike | null = null;
+		disposed = false;
 
 		void (async () => {
 			try {
@@ -92,53 +95,105 @@
 					return;
 				}
 
-				api = dbApi;
 				await dbApi.ensureDbOpen();
+
+				if (disposed) {
+					return;
+				}
+
+				api = dbApi;
 				currentUserSubscription = dbApi.db.cloud.currentUser.subscribe((nextUser) => {
-					currentUser = nextUser;
+					if (!disposed) {
+						currentUser = nextUser;
+					}
 				});
 				databaseSubscription = dbApi.subscribeToDatabaseChanges(
 					['workoutSessions', 'sessionExercises', 'sessionSets', 'workouts'],
 					() => {
+						if (disposed) {
+							return;
+						}
+
 						sessionsByMonthKey = {};
 						sessionsByWeekKey = {};
-						void refreshSelectedDay();
+						void refreshSelectedDay().catch(showError);
 					},
 					{ debounceMs: 250 }
 				);
 				await refreshSelectedDay();
+
+				if (disposed) {
+					return;
+				}
+
 				isLoading = false;
 				void dbApi
 					.cleanupStaleSessions(todayDayKey)
-					.then(() => refreshSelectedDay())
+					.then(() => (disposed ? undefined : refreshSelectedDay()))
 					.catch((error) => {
-						errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
+						if (!disposed) {
+							showError(error);
+						}
 					});
-				void hydrateVisibleWeek();
-				setTimeout(() => {
-					void dbApi.hydrateVisibleScope({ type: 'workouts' }).catch(() => undefined);
+				void hydrateVisibleWeek().catch(showBackgroundHydrationError);
+				workoutHydrationTimer = setTimeout(() => {
+					workoutHydrationTimer = null;
+					if (disposed) {
+						return;
+					}
+
+					void dbApi.hydrateVisibleScope({ type: 'workouts' }).catch(showBackgroundHydrationError);
 				}, 1200);
 			} catch (error) {
-				errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
+				if (!disposed) {
+					showError(error);
+				}
 			} finally {
-				isLoading = false;
+				if (!disposed) {
+					isLoading = false;
+				}
 			}
 		})();
 
 		return () => {
 			disposed = true;
+			selectedDayRefreshGeneration += 1;
+			visibleWeekHydrationGeneration += 1;
+			if (workoutHydrationTimer !== null) {
+				clearTimeout(workoutHydrationTimer);
+				workoutHydrationTimer = null;
+			}
 			currentUserSubscription?.unsubscribe();
 			databaseSubscription?.unsubscribe();
 		};
 	});
 
+	function showError(error: unknown) {
+		if (!disposed) {
+			errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
+		}
+	}
+
+	function showBackgroundHydrationError(error: unknown) {
+		if (!disposed) {
+			console.warn('Background hydration failed; using locally available data.', error);
+		}
+	}
+
 	async function reloadMonth(monthDate: Date) {
-		if (!api) {
+		const dbApi = api;
+
+		if (!dbApi || disposed) {
 			return;
 		}
 
 		const monthKey = getMonthCacheKey(monthDate);
-		const sessions = await api.listSessionSummariesForMonth(monthDate);
+		const sessions = await dbApi.listSessionSummariesForMonth(monthDate);
+
+		if (disposed || api !== dbApi) {
+			return;
+		}
+
 		sessionsByMonthKey = {
 			...sessionsByMonthKey,
 			[monthKey]: sessions
@@ -164,19 +219,49 @@
 	}
 
 	async function refreshSelectedDay() {
-		if (!api) {
-			return;
+		const dbApi = api;
+
+		if (!dbApi || disposed) {
+			return false;
 		}
 
-		await ensureWeekLoaded(visibleWeekDate);
-		const [nextDayOverview, nextCurrentSession, nextWorkouts] = await Promise.all([
-			api.getDayOverview(selectedDayKey),
-			api.getCurrentInProgressSession(),
-			api.listWorkoutSchedulingOptions()
-		]);
-		dayOverview = nextDayOverview;
-		currentSession = nextCurrentSession;
-		workouts = nextWorkouts;
+		const refreshGeneration = ++selectedDayRefreshGeneration;
+		const dayKey = selectedDayKey;
+		const weekDate = visibleWeekDate;
+		const isCurrentRefresh = () =>
+			!disposed &&
+			api === dbApi &&
+			refreshGeneration === selectedDayRefreshGeneration &&
+			selectedDayKey === dayKey;
+
+		try {
+			await ensureWeekLoaded(weekDate);
+
+			if (!isCurrentRefresh()) {
+				return false;
+			}
+
+			const [nextDayOverview, nextCurrentSession, nextWorkouts] = await Promise.all([
+				dbApi.getDayOverview(dayKey),
+				dbApi.getCurrentInProgressSession(),
+				dbApi.listWorkoutSchedulingOptions()
+			]);
+
+			if (!isCurrentRefresh()) {
+				return false;
+			}
+
+			dayOverview = nextDayOverview;
+			currentSession = nextCurrentSession;
+			workouts = nextWorkouts;
+			return true;
+		} catch (error) {
+			if (!isCurrentRefresh()) {
+				return false;
+			}
+
+			throw error;
+		}
 	}
 
 	function getWeekCacheKey(weekDate: Date) {
@@ -184,13 +269,20 @@
 	}
 
 	async function reloadWeek(weekDate: Date) {
-		if (!api) {
+		const dbApi = api;
+
+		if (!dbApi || disposed) {
 			return;
 		}
 
 		const weekStart = startOfWeek(weekDate);
 		const weekKey = getWeekCacheKey(weekStart);
-		const sessions = await api.listSessionCalendarRowsForWeek(weekStart);
+		const sessions = await dbApi.listSessionCalendarRowsForWeek(weekStart);
+
+		if (disposed || api !== dbApi) {
+			return;
+		}
+
 		sessionsByWeekKey = {
 			...sessionsByWeekKey,
 			[weekKey]: sessions
@@ -198,17 +290,39 @@
 	}
 
 	async function hydrateVisibleWeek() {
-		if (!api) {
+		const dbApi = api;
+
+		if (!dbApi || disposed) {
 			return;
 		}
 
+		const hydrationGeneration = ++visibleWeekHydrationGeneration;
 		const weekStart = startOfWeek(visibleWeekDate);
 		const weekEnd = addDays(weekStart, 6);
-		await api.hydrateVisibleScope({
-			type: 'week',
-			weekStartDayKey: toDayKey(weekStart),
-			weekEndDayKey: toDayKey(weekEnd)
-		});
+		const isCurrentHydration = () =>
+			!disposed &&
+			api === dbApi &&
+			hydrationGeneration === visibleWeekHydrationGeneration &&
+			getWeekCacheKey(visibleWeekDate) === getWeekCacheKey(weekStart);
+
+		try {
+			await dbApi.hydrateVisibleScope({
+				type: 'week',
+				weekStartDayKey: toDayKey(weekStart),
+				weekEndDayKey: toDayKey(weekEnd)
+			});
+		} catch (error) {
+			if (isCurrentHydration()) {
+				throw error;
+			}
+
+			return;
+		}
+
+		if (!isCurrentHydration()) {
+			return;
+		}
+
 		await reloadWeek(weekStart);
 	}
 
@@ -218,13 +332,22 @@
 
 		try {
 			await action();
+
+			if (disposed) {
+				return;
+			}
+
 			sessionsByMonthKey = {};
 			sessionsByWeekKey = {};
 			await refreshSelectedDay();
 		} catch (error) {
-			errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
+			if (!disposed) {
+				showError(error);
+			}
 		} finally {
-			isMutating = false;
+			if (!disposed) {
+				isMutating = false;
+			}
 		}
 	}
 
@@ -280,21 +403,34 @@
 			updateSelectedDateUrl(dayKey);
 		}
 
+		errorMessage = '';
+
 		try {
-			await refreshSelectedDay();
-			void hydrateVisibleWeek().catch(() => undefined);
+			const didRefresh = await refreshSelectedDay();
+
+			if (didRefresh) {
+				void hydrateVisibleWeek().catch(showBackgroundHydrationError);
+			}
 		} catch (error) {
-			errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
+			if (!disposed) {
+				showError(error);
+			}
+
+			throw error;
 		}
 	}
 
 	function selectDay(dayKey: string) {
-		void updateSelectedDay(dayKey);
+		void updateSelectedDay(dayKey).catch(() => undefined);
+	}
+
+	function selectDayFromPicker(dayKey: string) {
+		return updateSelectedDay(dayKey);
 	}
 
 	function shiftWeek(delta: -1 | 1) {
 		const nextDay = addWeeks(fromDayKey(selectedDayKey), delta);
-		void updateSelectedDay(toDayKey(nextDay), delta);
+		void updateSelectedDay(toDayKey(nextDay), delta).catch(() => undefined);
 	}
 
 	function openDayPicker() {
@@ -441,7 +577,7 @@
 		monthDate={pickerMonthDate}
 		{selectedDayKey}
 		{sessionByDayKey}
-		onSelectDay={selectDay}
+		onSelectDay={selectDayFromPicker}
 		onClose={closeDayPicker}
 		onPreviousMonth={showPreviousPickerMonth}
 		onNextMonth={showNextPickerMonth}

@@ -18,17 +18,24 @@
 <div class="fixed inset-0 z-20 bg-black/60 px-4 py-5">
 	<div
 		class="mx-auto flex h-full w-full max-w-[430px] flex-col rounded-lg border border-white/10 bg-[#0e1417]"
+		role="dialog"
+		aria-modal="true"
+		aria-labelledby="workout-picker-title"
 	>
 		<header class="flex items-center justify-between border-b border-white/10 px-4 py-4">
 			<div>
 				<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
 					Schedule workout
 				</p>
-				<h2 class="mt-2 text-xl font-semibold text-white">Pick today&apos;s session</h2>
+				<h2 id="workout-picker-title" class="mt-2 text-xl font-semibold text-white">
+					Pick today&apos;s session
+				</h2>
 			</div>
 			<button
 				class="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-300"
 				type="button"
+				aria-label="Close workout picker"
+				title="Close workout picker"
 				onclick={onClose}
 			>
 				<Icon name="x" class="h-4 w-4" />

@@ -22,6 +22,9 @@ const DEPLOYMENT_MANIFEST = '/deployment.json';
 const DEV = import.meta.env.DEV;
 const LOG_PREFIX = '[TinyTrain service worker]';
 const CACHE_UPDATE_MESSAGE = 'TINYTRAIN_CACHE_UPDATE_CHECK';
+const DEPLOYMENT_CHECK_TTL_MS = 60_000;
+// Keep this list synchronized with `authCacheParamNames` in src/app.html. That inline script
+// is not bundled with this module, so the compiler cannot enforce that they match.
 const AUTH_CACHE_PARAM_NAMES = [
 	'code',
 	'state',
@@ -57,7 +60,12 @@ type CacheUpdateMessage = {
 	failedAssets?: string[];
 };
 
-let currentDeploymentPromise: Promise<boolean> | undefined;
+type DeploymentCheck = {
+	promise: Promise<boolean>;
+	expiresAt: number;
+};
+
+let currentDeploymentCheck: DeploymentCheck | undefined;
 let lastCacheUpdateMessage: CacheUpdateMessage | undefined;
 
 async function fetchFresh(request: Request | string) {
@@ -108,7 +116,7 @@ function announceCacheUpdate(message: Omit<CacheUpdateMessage, 'type'>) {
 
 	console.info(`${LOG_PREFIX} ${message.status}`, message);
 
-	self.clients
+	return self.clients
 		.matchAll({ includeUncontrolled: true, type: 'window' })
 		.then((clients) => {
 			for (const client of clients) {
@@ -155,16 +163,27 @@ async function hasCurrentDeployment(cache: Cache) {
 }
 
 function hasVerifiedCurrentDeployment(cache: Cache) {
-	currentDeploymentPromise ??= hasCurrentDeployment(cache).catch((error: unknown) => {
-		announceCacheUpdate({
-			status: 'failed',
-			error: getErrorMessage(error)
-		});
+	if (!currentDeploymentCheck || Date.now() >= currentDeploymentCheck.expiresAt) {
+		const nextCheck: DeploymentCheck = {
+			promise: Promise.resolve(true),
+			expiresAt: Number.POSITIVE_INFINITY
+		};
+		nextCheck.promise = hasCurrentDeployment(cache)
+			.catch((error: unknown) => {
+				announceCacheUpdate({
+					status: 'failed',
+					error: getErrorMessage(error)
+				});
 
-		return true;
-	});
+				return true;
+			})
+			.finally(() => {
+				nextCheck.expiresAt = Date.now() + DEPLOYMENT_CHECK_TTL_MS;
+			});
+		currentDeploymentCheck = nextCheck;
+	}
 
-	return currentDeploymentPromise;
+	return currentDeploymentCheck.promise;
 }
 
 function cacheResponse(event: FetchEvent, cache: Cache, request: Request, response: Response) {
@@ -218,10 +237,12 @@ async function addFilesToCache(cache: Cache) {
 		.filter((asset): asset is string => Boolean(asset));
 
 	if (failedAssets.length > 0) {
-		announceCacheUpdate({
+		await announceCacheUpdate({
 			status: 'precache-skipped',
 			failedAssets
 		});
+
+		throw new Error(`Unable to precache ${failedAssets.length} required asset(s).`);
 	}
 }
 

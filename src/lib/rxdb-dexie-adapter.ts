@@ -71,6 +71,22 @@ function compareValues(first: unknown, second: unknown) {
 	return String(first ?? '').localeCompare(String(second ?? ''));
 }
 
+function compareRangeValues(first: unknown, second: unknown): number | null {
+	if (typeof first === 'number' && typeof second === 'number') {
+		if (Number.isNaN(first) || Number.isNaN(second)) {
+			return null;
+		}
+
+		return first === second ? 0 : first < second ? -1 : 1;
+	}
+
+	if (typeof first === 'string' && typeof second === 'string') {
+		return first === second ? 0 : first < second ? -1 : 1;
+	}
+
+	return null;
+}
+
 function getFieldValue(doc: PlainDoc, field: string) {
 	const compoundMatch = field.match(/^\[(.+)\]$/);
 
@@ -100,15 +116,22 @@ function matchesSelector(doc: PlainDoc, selector: Selector) {
 				);
 			}
 
-			if ('$gte' in operators || '$lte' in operators) {
-				const textActual = String(actual ?? '');
-				const gte = operators.$gte;
-				const lte = operators.$lte;
+			if ('$gt' in operators || '$gte' in operators || '$lt' in operators || '$lte' in operators) {
+				const comparisons = [
+					['$gt', (comparison: number) => comparison > 0],
+					['$gte', (comparison: number) => comparison >= 0],
+					['$lt', (comparison: number) => comparison < 0],
+					['$lte', (comparison: number) => comparison <= 0]
+				] as const;
 
-				return (
-					(gte === undefined || textActual >= String(gte)) &&
-					(lte === undefined || textActual <= String(lte))
-				);
+				return comparisons.every(([operator, matches]) => {
+					if (!(operator in operators)) {
+						return true;
+					}
+
+					const comparison = compareRangeValues(actual, operators[operator]);
+					return comparison !== null && matches(comparison);
+				});
 			}
 		}
 
@@ -135,8 +158,8 @@ class RxWhereQuery<T extends PlainDoc> {
 	between(lower: unknown, upper: unknown, includeLower = true, includeUpper = true) {
 		return new RxCollectionQuery<T>(this.table, {
 			[this.field]: {
-				...(includeLower ? { $gte: lower } : {}),
-				...(includeUpper ? { $lte: upper } : {})
+				...(includeLower ? { $gte: lower } : { $gt: lower }),
+				...(includeUpper ? { $lte: upper } : { $lt: upper })
 			}
 		});
 	}
@@ -327,6 +350,17 @@ export type RxDexieLikeDatabase = {
 
 const adaptersByUserId = new Map<string, Promise<RxDexieLikeDatabase>>();
 
+function cacheAdapterPromise(userId: string, promise: Promise<RxDexieLikeDatabase>) {
+	adaptersByUserId.set(userId, promise);
+	void promise.catch(() => {
+		if (adaptersByUserId.get(userId) === promise) {
+			adaptersByUserId.delete(userId);
+		}
+	});
+
+	return promise;
+}
+
 async function createRxDexieLikeDatabase(
 	userId: string,
 	options: { reopen?: boolean } = {}
@@ -412,8 +446,7 @@ export async function getRxDexieLikeDatabase(userId: string): Promise<RxDexieLik
 
 	const next = createRxDexieLikeDatabase(userId);
 
-	adaptersByUserId.set(userId, next);
-	return next;
+	return cacheAdapterPromise(userId, next);
 }
 
 export async function reopenRxDexieLikeDatabase(userId: string): Promise<RxDexieLikeDatabase> {
@@ -421,6 +454,5 @@ export async function reopenRxDexieLikeDatabase(userId: string): Promise<RxDexie
 
 	const next = createRxDexieLikeDatabase(userId, { reopen: true });
 
-	adaptersByUserId.set(userId, next);
-	return next;
+	return cacheAdapterPromise(userId, next);
 }

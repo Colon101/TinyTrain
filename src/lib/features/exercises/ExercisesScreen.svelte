@@ -24,57 +24,101 @@
 	let isLoading = $state(true);
 	let isSaving = $state(false);
 	let errorMessage = $state('');
+	let loadGeneration = 0;
+	let isDisposed = false;
 
 	onMount(() => {
-		let disposed = false;
+		isDisposed = false;
 
 		void (async () => {
 			try {
 				const dbApi = await import('$lib/db');
 
-				if (disposed) {
+				if (isDisposed) {
+					return;
+				}
+
+				await dbApi.ensureDbOpen();
+
+				if (isDisposed) {
 					return;
 				}
 
 				api = dbApi;
-				await dbApi.ensureDbOpen();
-				if (exerciseId) {
-					await loadDetail(exerciseId);
-				} else {
-					await loadItems();
-				}
 			} catch (error) {
-				errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
-				isLoading = false;
+				if (!isDisposed) {
+					errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
+					isLoading = false;
+				}
 			}
 		})();
 
 		return () => {
-			disposed = true;
+			isDisposed = true;
+			loadGeneration += 1;
 		};
 	});
 
-	async function loadItems() {
-		if (!api) {
+	$effect(() => {
+		const dbApi = api;
+		const nextExerciseId = exerciseId || null;
+
+		if (!dbApi) {
 			return;
 		}
 
-		isLoading = true;
-		items = await api.listExerciseItems();
-		isLoading = false;
+		void loadScreen(dbApi, nextExerciseId);
+	});
+
+	function isCurrentLoad(generation: number, requestedExerciseId: string | null) {
+		return (
+			!isDisposed && generation === loadGeneration && (exerciseId || null) === requestedExerciseId
+		);
 	}
 
-	async function loadDetail(nextExerciseId: string) {
-		if (!api) {
+	async function loadScreen(dbApi: DatabaseApi, nextExerciseId: string | null) {
+		if (isDisposed) {
 			return;
 		}
 
+		const generation = ++loadGeneration;
 		isLoading = true;
 		errorMessage = '';
-		selectedDetail = await api.getExerciseDetail(nextExerciseId);
-		errorMessage = selectedDetail ? '' : 'Exercise not found.';
-		detailTab = 'summary';
-		isLoading = false;
+
+		if (!nextExerciseId || selectedDetail?.exercise.id !== nextExerciseId) {
+			selectedDetail = null;
+		}
+
+		try {
+			if (nextExerciseId) {
+				const nextDetail = await dbApi.getExerciseDetail(nextExerciseId);
+
+				if (!isCurrentLoad(generation, nextExerciseId)) {
+					return;
+				}
+
+				selectedDetail = nextDetail;
+				errorMessage = nextDetail ? '' : 'Exercise not found.';
+				detailTab = 'summary';
+				return;
+			}
+
+			const nextItems = await dbApi.listExerciseItems();
+
+			if (!isCurrentLoad(generation, nextExerciseId)) {
+				return;
+			}
+
+			items = nextItems;
+		} catch (error) {
+			if (isCurrentLoad(generation, nextExerciseId)) {
+				errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
+			}
+		} finally {
+			if (isCurrentLoad(generation, nextExerciseId)) {
+				isLoading = false;
+			}
+		}
 	}
 
 	async function openExercise(nextExerciseId: string) {
@@ -117,17 +161,24 @@
 			return;
 		}
 
+		const targetExerciseId = selectedDetail.exercise.id;
 		isSaving = true;
 		errorMessage = '';
 
 		try {
-			await api.setExerciseUnilateral(selectedDetail.exercise.id, nextValue);
-			selectedDetail = await api.getExerciseDetail(selectedDetail.exercise.id);
-			await loadItems();
+			await api.setExerciseUnilateral(targetExerciseId, nextValue);
+
+			if (!isDisposed && (exerciseId || null) === targetExerciseId) {
+				await loadScreen(api, targetExerciseId);
+			}
 		} catch (error) {
-			errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
+			if (!isDisposed && (exerciseId || null) === targetExerciseId) {
+				errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
+			}
 		} finally {
-			isSaving = false;
+			if (!isDisposed) {
+				isSaving = false;
+			}
 		}
 	}
 
@@ -136,17 +187,24 @@
 			return;
 		}
 
+		const targetExerciseId = selectedDetail.exercise.id;
 		isSaving = true;
 		errorMessage = '';
 
 		try {
-			await api.recordExerciseReset(selectedDetail.exercise.id);
-			selectedDetail = await api.getExerciseDetail(selectedDetail.exercise.id);
-			await loadItems();
+			await api.recordExerciseReset(targetExerciseId);
+
+			if (!isDisposed && (exerciseId || null) === targetExerciseId) {
+				await loadScreen(api, targetExerciseId);
+			}
 		} catch (error) {
-			errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
+			if (!isDisposed && (exerciseId || null) === targetExerciseId) {
+				errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
+			}
 		} finally {
-			isSaving = false;
+			if (!isDisposed) {
+				isSaving = false;
+			}
 		}
 	}
 </script>

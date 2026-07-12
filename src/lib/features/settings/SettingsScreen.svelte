@@ -51,6 +51,7 @@
 	let statusMessage = $state('');
 	let mergeStatusMessage = $state('');
 	let preferenceErrorMessage = $state('');
+	let isDataOperationRunning = $derived(isUploading || isMergingExercises || isImportingTracked);
 	let selectedProgressIndicatorPosition = $derived(
 		$progressIndicatorPosition ?? DEFAULT_PROGRESS_INDICATOR_POSITION
 	);
@@ -92,13 +93,17 @@
 	let mergePickerSubmitLabel = $derived(
 		mergePickerTarget === 'main' ? 'Use as main exercise' : 'Use as secondary exercise'
 	);
+	let hasValidMergeExerciseName = $derived(
+		!selectedMainMergeOption?.canRename || Boolean(mergeExerciseName.trim())
+	);
 	let canSubmitExerciseMerge = $derived(
 		Boolean(
 			api &&
 			mainMergeExerciseId &&
 			secondaryMergeExerciseId &&
 			mainMergeExerciseId !== secondaryMergeExerciseId &&
-			!isMergingExercises
+			hasValidMergeExerciseName &&
+			!isDataOperationRunning
 		)
 	);
 
@@ -168,7 +173,7 @@
 	}
 
 	async function uploadLocalDatabase() {
-		if (!api || isUploading) {
+		if (!api || isDataOperationRunning) {
 			return;
 		}
 
@@ -185,12 +190,21 @@
 		statusMessage = 'Uploading this device.';
 
 		try {
-			summary = await api.uploadLocalDatabaseToCloud();
-			stats = await api.getLocalDatabaseStats();
-			statusMessage = 'Upload finished.';
-		} catch (error) {
-			errorMessage = error instanceof Error ? error.message : 'Upload failed.';
-			statusMessage = '';
+			try {
+				summary = await api.uploadLocalDatabaseToCloud();
+				statusMessage = 'Upload finished.';
+			} catch (error) {
+				errorMessage = error instanceof Error ? error.message : 'Upload failed.';
+				statusMessage = '';
+				return;
+			}
+
+			try {
+				stats = await api.getLocalDatabaseStats();
+			} catch (error) {
+				const refreshError = error instanceof Error ? `: ${error.message}` : '';
+				errorMessage = `Upload finished, but database statistics could not be refreshed${refreshError}`;
+			}
 		} finally {
 			isUploading = false;
 		}
@@ -276,30 +290,41 @@
 		mergeResult = null;
 
 		try {
-			mergeResult = await api.mergeExerciseHistory({
-				mainExerciseId: mainMergeExerciseId,
-				secondaryExerciseId: secondaryMergeExerciseId,
-				mainExerciseName: selectedMainMergeOption?.canRename ? mergeExerciseName : undefined
-			});
-			[stats, mergeOptions] = await Promise.all([
-				api.getLocalDatabaseStats(),
-				api.listExerciseMergeOptions()
-			]);
-			mergeExerciseName = mergeResult.mainExercise.name;
-			mergeStatusMessage =
-				mergeResult.syncStatus === 'synced'
-					? 'Exercise history merge finished and synced.'
-					: 'Exercise history merge finished locally. Sync failed.';
-		} catch (error) {
-			errorMessage = error instanceof Error ? error.message : 'Exercise merge failed.';
-			mergeStatusMessage = '';
+			try {
+				mergeResult = await api.mergeExerciseHistory({
+					mainExerciseId: mainMergeExerciseId,
+					secondaryExerciseId: secondaryMergeExerciseId,
+					mainExerciseName: selectedMainMergeOption?.canRename
+						? mergeExerciseName.trim()
+						: undefined
+				});
+				mergeExerciseName = mergeResult.mainExercise.name;
+				mergeStatusMessage =
+					mergeResult.syncStatus === 'synced'
+						? 'Exercise history merge finished and synced.'
+						: 'Exercise history merge finished locally. Sync failed.';
+			} catch (error) {
+				errorMessage = error instanceof Error ? error.message : 'Exercise merge failed.';
+				mergeStatusMessage = '';
+				return;
+			}
+
+			try {
+				[stats, mergeOptions] = await Promise.all([
+					api.getLocalDatabaseStats(),
+					api.listExerciseMergeOptions()
+				]);
+			} catch (error) {
+				const refreshError = error instanceof Error ? `: ${error.message}` : '';
+				errorMessage = `Exercise history was merged, but settings data could not be refreshed${refreshError}`;
+			}
 		} finally {
 			isMergingExercises = false;
 		}
 	}
 
 	async function onTrackedFileChange(event: Event) {
-		if (!trackedImportApi || isPreviewingTracked || isImportingTracked) {
+		if (!trackedImportApi || isPreviewingTracked || isDataOperationRunning) {
 			return;
 		}
 
@@ -338,7 +363,7 @@
 	}
 
 	async function importTrackedFile() {
-		if (!trackedImportApi || !trackedFile || isImportingTracked) {
+		if (!trackedImportApi || !trackedFile || isDataOperationRunning) {
 			return;
 		}
 
@@ -348,20 +373,31 @@
 		statusMessage = 'Importing Tracked workouts.';
 
 		try {
-			trackedSummary = await trackedImportApi.importTrackedArchive(trackedFile, {
-				limbPriorities: trackedLimbPriorities,
-				onProgress: (phase) => {
-					trackedImportPhase = phase;
+			try {
+				trackedSummary = await trackedImportApi.importTrackedArchive(trackedFile, {
+					limbPriorities: trackedLimbPriorities,
+					onProgress: (phase) => {
+						trackedImportPhase = phase;
+					}
+				});
+				statusMessage =
+					trackedSummary.syncStatus === 'synced'
+						? 'Tracked import finished and synced.'
+						: 'Tracked import finished locally. Sync failed.';
+			} catch (error) {
+				errorMessage = error instanceof Error ? error.message : 'Tracked import failed.';
+				statusMessage = '';
+				return;
+			}
+
+			if (api) {
+				try {
+					stats = await api.getLocalDatabaseStats();
+				} catch (error) {
+					const refreshError = error instanceof Error ? `: ${error.message}` : '';
+					errorMessage = `Tracked import finished, but database statistics could not be refreshed${refreshError}`;
 				}
-			});
-			stats = api ? await api.getLocalDatabaseStats() : stats;
-			statusMessage =
-				trackedSummary.syncStatus === 'synced'
-					? 'Tracked import finished and synced.'
-					: 'Tracked import finished locally. Sync failed.';
-		} catch (error) {
-			errorMessage = error instanceof Error ? error.message : 'Tracked import failed.';
-			statusMessage = '';
+			}
 		} finally {
 			isImportingTracked = false;
 		}
@@ -696,7 +732,7 @@
 					<button
 						class="flex min-h-[3.25rem] w-full min-w-0 items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-left text-sm font-medium text-zinc-200"
 						type="button"
-						disabled={!api || isMergingExercises || mergeOptions.length < 2}
+						disabled={!api || isDataOperationRunning || mergeOptions.length < 2}
 						onclick={() => openMergeExercisePicker('main')}
 					>
 						<span class="min-w-0 flex-1">
@@ -718,7 +754,7 @@
 					<button
 						class="flex min-h-[3.25rem] w-full min-w-0 items-center justify-between gap-3 rounded-lg border border-white/10 bg-zinc-950 px-3 py-2 text-left text-sm font-medium text-zinc-200"
 						type="button"
-						disabled={!api || isMergingExercises || !mainMergeExerciseId}
+						disabled={!api || isDataOperationRunning || !mainMergeExerciseId}
 						onclick={() => openMergeExercisePicker('secondary')}
 					>
 						<span class="min-w-0 flex-1">
@@ -741,7 +777,9 @@
 						<input
 							class="min-h-[3.25rem] w-full min-w-0 rounded-lg border border-white/10 bg-zinc-950 px-3 text-sm font-medium text-zinc-200 disabled:text-zinc-500"
 							type="text"
-							disabled={!selectedMainMergeOption.canRename || isMergingExercises}
+							disabled={!selectedMainMergeOption.canRename || isDataOperationRunning}
+							required={selectedMainMergeOption.canRename}
+							minlength="1"
 							bind:value={mergeExerciseName}
 						/>
 					</label>
@@ -850,7 +888,7 @@
 					class="rounded-lg border border-white/10 bg-zinc-950 px-3 py-3 text-sm font-medium text-zinc-200 file:mr-3 file:rounded-md file:border-0 file:bg-white/10 file:px-3 file:py-2 file:text-sm file:font-bold file:text-white"
 					type="file"
 					accept=".zip,application/zip"
-					disabled={!trackedImportApi || isPreviewingTracked || isImportingTracked}
+					disabled={!trackedImportApi || isPreviewingTracked || isDataOperationRunning}
 					onchange={onTrackedFileChange}
 				/>
 			</label>
@@ -987,7 +1025,10 @@
 			<button
 				class="flex min-h-[3.25rem] items-center justify-center gap-3 rounded-lg bg-sky-300 px-4 text-base font-bold text-zinc-950 transition disabled:bg-zinc-700 disabled:text-zinc-400"
 				type="button"
-				disabled={!trackedImportApi || !trackedFile || isPreviewingTracked || isImportingTracked}
+				disabled={!trackedImportApi ||
+					!trackedFile ||
+					isPreviewingTracked ||
+					isDataOperationRunning}
 				onclick={importTrackedFile}
 			>
 				{#if isImportingTracked}
@@ -1013,7 +1054,7 @@
 			<button
 				class="flex min-h-[3.25rem] items-center justify-center gap-3 rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950 transition disabled:bg-zinc-700 disabled:text-zinc-400"
 				type="button"
-				disabled={!api || isUploading}
+				disabled={!api || isDataOperationRunning}
 				onclick={uploadLocalDatabase}
 			>
 				{#if isUploading}
@@ -1052,7 +1093,7 @@
 		addSelectedLabel={mergePickerSubmitLabel}
 		submitDisabled={selectedMergePickerExerciseIds.length !== 1}
 		canCreateCustomExercise={false}
-		isSaving={isMergingExercises}
+		isSaving={isDataOperationRunning}
 		sheetEyebrow={mergePickerTarget === 'main' ? 'Main exercise' : 'Secondary exercise'}
 		sheetTitle={mergePickerTarget === 'main' ? 'Pick the head exercise' : 'Pick history to copy'}
 		onClose={closeMergeExercisePicker}

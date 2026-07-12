@@ -51,7 +51,7 @@ export function createId() {
 }
 
 export function normalizeName(name: string) {
-	return name.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+	return name.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 export function displayName(name: string) {

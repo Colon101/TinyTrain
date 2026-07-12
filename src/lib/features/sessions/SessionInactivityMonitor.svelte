@@ -19,6 +19,35 @@
 	let warningActivityAt = $state('');
 	let dismissedActivityAt = $state('');
 
+	function formatInactivityDuration(durationMs: number) {
+		const durationUnits = [
+			{ milliseconds: 60 * 60 * 1000, label: 'hour' },
+			{ milliseconds: 60 * 1000, label: 'minute' },
+			{ milliseconds: 1000, label: 'second' }
+		] as const;
+		let remainingMs = Math.max(Math.round(durationMs / 1000) * 1000, 0);
+		const parts: string[] = [];
+
+		for (const unit of durationUnits) {
+			const count = Math.floor(remainingMs / unit.milliseconds);
+
+			if (count === 0) {
+				continue;
+			}
+
+			parts.push(`${count} ${unit.label}${count === 1 ? '' : 's'}`);
+			remainingMs -= count * unit.milliseconds;
+		}
+
+		return parts.join(' ') || '0 seconds';
+	}
+
+	const inactivityWarningDuration = formatInactivityDuration(SESSION_INACTIVITY_WARNING_MS);
+	const inactivityAbandonDelay = formatInactivityDuration(
+		SESSION_INACTIVITY_ABANDON_MS - SESSION_INACTIVITY_WARNING_MS
+	);
+	const inactivityWarningMessage = `No session activity for ${inactivityWarningDuration}. This session will be abandoned in ${inactivityAbandonDelay} unless you make another change.`;
+
 	function getActivityTime(value?: string) {
 		const time = value ? new Date(value).getTime() : NaN;
 		return Number.isFinite(time) ? time : null;
@@ -37,7 +66,7 @@
 			}
 
 			new Notification('TinyTrain session still running', {
-				body: 'No session activity for 2 hours. This session will be abandoned in 1 hour unless you make another change.',
+				body: inactivityWarningMessage,
 				tag: `tinytrain-session-inactivity-${sessionId}`
 			});
 			localStorage.setItem(storageKey, activityAt);
@@ -137,8 +166,7 @@
 		role="status"
 	>
 		<p class="min-w-0 flex-1">
-			No session activity for 2 hours. This session will be abandoned in 1 hour unless you make
-			another change.
+			{inactivityWarningMessage}
 		</p>
 		<button
 			class="shrink-0 rounded-md border border-amber-200/20 px-2 py-1 text-xs font-semibold text-amber-50"

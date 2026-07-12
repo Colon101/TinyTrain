@@ -1,4 +1,4 @@
-import { listHistoricalSessionExerciseMatches } from '../exercises';
+import { getExercise, listHistoricalSessionExerciseMatches } from '../exercises';
 import type {
 	Exercise,
 	SessionExerciseDetail,
@@ -7,13 +7,7 @@ import type {
 	WorkoutSession
 } from '../models';
 import { db } from '../runtime';
-import {
-	createId,
-	getSessionSetOrderCount,
-	isDefined,
-	timestamp,
-	withExerciseDefaults
-} from '../shared';
+import { createId, getSessionSetOrderCount, timestamp } from '../shared';
 import { listSessionExerciseDetails } from './data';
 
 export async function getSeedSetOrderCount(exercise: Exercise, excludeSessionId?: string) {
@@ -104,17 +98,11 @@ export async function ensureEditableSessionSeedRows(
 		return sessionExercises;
 	}
 
+	const exercises = await Promise.all(
+		missingSeedRows.map((sessionExercise) => getExercise(sessionExercise.exerciseId))
+	);
 	const exerciseById = new Map(
-		(
-			await db.exercises.bulkGet(
-				missingSeedRows.map((sessionExercise) => sessionExercise.exerciseId)
-			)
-		)
-			.filter(isDefined)
-			.map((exercise) => {
-				const nextExercise = withExerciseDefaults(exercise);
-				return [nextExercise.id, nextExercise] as const;
-			})
+		exercises.flatMap((exercise) => (exercise ? ([[exercise.id, exercise]] as const) : []))
 	);
 	const now = timestamp();
 	const seedRowsBySessionExerciseId = new Map(

@@ -12,6 +12,7 @@ import {
 	findLatestHistoryEntryWithPerformedSets,
 	getLastSessionSetActivityAt,
 	getSessionActivityAt,
+	normalizeName,
 	summarizeExerciseProgress,
 	summarizeSession,
 	toParsedInputValue,
@@ -81,6 +82,12 @@ function historyEntry(
 		...overrides
 	};
 }
+
+describe('persisted name normalization', () => {
+	it('uses locale-independent lowercase keys', () => {
+		expect(normalizeName('  I   PRESS  ')).toBe('i press');
+	});
+});
 
 describe('session input values', () => {
 	it('preserves intentional blanks and parses only finite values', () => {

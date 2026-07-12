@@ -822,7 +822,7 @@ export const JOINT_ACTION_EXERCISES = [...new Set(JOINT_ACTION_EXERCISE_NAMES)].
 
 const BASELINE_EXERCISE_MAP = new Map(
 	[...BILATERAL_EXERCISES, ...UNILATERAL_EXERCISES, ...JOINT_ACTION_EXERCISES].map((exercise) => [
-		exercise.name.trim().replace(/\s+/g, ' ').toLocaleLowerCase(),
+		normalizeExerciseName(exercise.name),
 		exercise
 	])
 );
@@ -832,7 +832,7 @@ export const BASELINE_EXERCISES = [...BASELINE_EXERCISE_MAP.values()];
 export const BASELINE_EXERCISE_CATALOG_TIMESTAMP = '2026-04-01T00:00:00.000Z';
 
 export function normalizeExerciseName(name: string) {
-	return name.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+	return name.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 function hash32(input: string, seed: number) {

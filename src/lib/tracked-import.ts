@@ -94,6 +94,7 @@ type ImportPlan = {
 	exercisesByTrackedId: Map<string, PlannedExercise>;
 	exercisesByNormalizedName: Map<string, PlannedExercise>;
 	workoutNameByTrackedId: Map<string, string>;
+	sessionStartedAtById: Map<string, string>;
 	sessionRows: CsvRow[];
 	setRows: CsvRow[];
 };
@@ -240,18 +241,36 @@ async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
 		}
 	}
 
-	const sessionById = new Map(archive.rows.sessions.map((session) => [session.id, session]));
+	const trackedExerciseById = new Map(
+		archive.rows.exercises
+			.filter((exercise) => exercise.id)
+			.map((exercise) => [exercise.id, exercise])
+	);
+	const sessionStartedAtById = new Map<string, string>();
+	const invalidTimestampSessionRows: CsvRow[] = [];
+
+	for (const session of archive.rows.sessions) {
+		const startedAt = resolveSessionStartedAt(session);
+
+		if (!startedAt) {
+			invalidTimestampSessionRows.push(session);
+		} else if (session.id) {
+			sessionStartedAtById.set(session.id, startedAt);
+		}
+	}
+
+	const validTimestampSessionIds = new Set(sessionStartedAtById.keys());
 	const setRows = archive.rows.sets.filter((set) => {
 		return Boolean(
-			set.sessionId && sessionById.has(set.sessionId) && normalizeName(set.exerciseName)
+			set.sessionId &&
+			validTimestampSessionIds.has(set.sessionId) &&
+			set.exerciseId &&
+			normalizeName(resolveSetExerciseName(set, trackedExerciseById.get(set.exerciseId)))
 		);
 	});
 	const importableSessionIds = new Set(setRows.map((set) => set.sessionId));
 	const sessionRows = archive.rows.sessions.filter((session) =>
 		importableSessionIds.has(session.id)
-	);
-	const trackedExerciseById = new Map(
-		archive.rows.exercises.map((exercise) => [exercise.id, exercise])
 	);
 	const exercisesByTrackedId = new Map<string, PlannedExercise>();
 	const exercisesByNormalizedName = new Map<string, PlannedExercise>();
@@ -265,16 +284,17 @@ async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
 			continue;
 		}
 
-		const plannedExercise = exercisesByNormalizedName.get(normalizedName) ?? {
-			trackedIds: new Set<string>(),
-			trackedNames: new Set<string>(),
-			displayName: name,
-			normalizedName,
-			unilateral: parseBoolean(trackedExercise?.unilateral) || hasSecondarySetValues(set),
-			canonicalExercise: existingExerciseByNormalizedName.get(normalizedName) ?? null,
-			createdExercise: null,
-			usedBySets: false
-		};
+		const plannedExercise = exercisesByTrackedId.get(set.exerciseId) ??
+			exercisesByNormalizedName.get(normalizedName) ?? {
+				trackedIds: new Set<string>(),
+				trackedNames: new Set<string>(),
+				displayName: name,
+				normalizedName,
+				unilateral: parseBoolean(trackedExercise?.unilateral) || hasSecondarySetValues(set),
+				canonicalExercise: existingExerciseByNormalizedName.get(normalizedName) ?? null,
+				createdExercise: null,
+				usedBySets: false
+			};
 
 		plannedExercise.usedBySets = true;
 		plannedExercise.unilateral =
@@ -283,12 +303,10 @@ async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
 			hasSecondarySetValues(set);
 		plannedExercise.trackedNames.add(name);
 
-		if (set.exerciseId) {
-			plannedExercise.trackedIds.add(set.exerciseId);
-			exercisesByTrackedId.set(set.exerciseId, plannedExercise);
-		}
+		plannedExercise.trackedIds.add(set.exerciseId);
+		exercisesByTrackedId.set(set.exerciseId, plannedExercise);
 
-		exercisesByNormalizedName.set(normalizedName, plannedExercise);
+		exercisesByNormalizedName.set(plannedExercise.normalizedName, plannedExercise);
 	}
 
 	const workoutGroupById = new Map(archive.rows.workoutGroups.map((group) => [group.id, group]));
@@ -333,7 +351,7 @@ async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
 			name: exercise.canonicalExercise?.name ?? exercise.displayName,
 			setsWithSecondaryValues: setRows.filter(
 				(set) =>
-					resolveSetNormalizedName(set, trackedExerciseById) === exercise.normalizedName &&
+					exercisesByTrackedId.get(set.exerciseId)?.normalizedName === exercise.normalizedName &&
 					hasSecondarySetValues(set)
 			).length,
 			limbPriority: 'primary-right' as TrackedLimbPriority
@@ -349,11 +367,36 @@ async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
 	).length;
 	summary.workoutsCreated = workoutNames.length - summary.workoutsMatched;
 
-	const skippedSetRows = archive.rows.sets.length - setRows.length;
+	const invalidTimestampOnlySessionIds = new Set(
+		invalidTimestampSessionRows
+			.filter((session) => session.id && !validTimestampSessionIds.has(session.id))
+			.map((session) => session.id)
+	);
+	const timestampSkippedSetRows = archive.rows.sets.filter((set) =>
+		invalidTimestampOnlySessionIds.has(set.sessionId)
+	).length;
+	const skippedSetRows = archive.rows.sets.length - setRows.length - timestampSkippedSetRows;
+
+	if (invalidTimestampSessionRows.length > 0) {
+		const count = invalidTimestampSessionRows.length;
+		summary.warnings.push(
+			count === 1
+				? '1 session row with a missing or invalid historical timestamp was skipped.'
+				: `${count} session rows with missing or invalid historical timestamps were skipped.`
+		);
+	}
 
 	if (skippedSetRows > 0) {
 		summary.warnings.push(
 			`${skippedSetRows} set row${skippedSetRows === 1 ? ' references' : 's reference'} missing sessions or exercises.`
+		);
+	}
+
+	const invalidNumericValueCount = countInvalidImportedNumericValues(setRows);
+
+	if (invalidNumericValueCount > 0) {
+		summary.warnings.push(
+			`${invalidNumericValueCount} invalid numeric set value${invalidNumericValueCount === 1 ? '' : 's'} will be ignored.`
 		);
 	}
 
@@ -369,6 +412,7 @@ async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
 		exercisesByTrackedId,
 		exercisesByNormalizedName,
 		workoutNameByTrackedId,
+		sessionStartedAtById,
 		sessionRows,
 		setRows
 	};
@@ -428,13 +472,14 @@ async function writeImportPlan(
 			continue;
 		}
 
-		const startedAt = toIsoTimestamp(sessionRow.startedAt || sessionRow.sessionDate) ?? now;
+		const startedAt = plan.sessionStartedAtById.get(sessionRow.id)!;
+
 		const completedAt = toIsoTimestamp(sessionRow.endedAt) ?? startedAt;
 		const session: WorkoutSession = {
 			id: sessionId,
 			workoutId: workout.id,
 			workoutNameSnapshot: workout.name,
-			dayKey: sessionRow.sessionDate || toDayKey(startedAt),
+			dayKey: resolveSessionDayKey(sessionRow, startedAt),
 			startedAt,
 			completedAt,
 			status: parseBoolean(sessionRow.completed) ? 'completed' : 'abandoned',
@@ -445,7 +490,6 @@ async function writeImportPlan(
 			session,
 			sessionSetRows,
 			plan.exercisesByTrackedId,
-			exercises.byNormalizedName,
 			completedAt
 		);
 		const sessionExerciseByTrackedExerciseId = new Map(
@@ -626,7 +670,6 @@ function buildSessionExerciseRows(
 	session: WorkoutSession,
 	setRows: CsvRow[],
 	exercisesByTrackedId: Map<string, PlannedExercise>,
-	exercisesByNormalizedName: Map<string, Exercise>,
 	updatedAt: string
 ) {
 	const trackedExerciseIds = [...new Set(setRows.map((set) => set.exerciseId).filter(Boolean))];
@@ -634,13 +677,7 @@ function buildSessionExerciseRows(
 	return trackedExerciseIds
 		.map((trackedExerciseId, index): SessionExercise | null => {
 			const plannedExercise = exercisesByTrackedId.get(trackedExerciseId);
-			const exercise =
-				plannedExercise?.canonicalExercise ??
-				exercisesByNormalizedName.get(
-					normalizeName(
-						setRows.find((set) => set.exerciseId === trackedExerciseId)?.exerciseName ?? ''
-					)
-				);
+			const exercise = plannedExercise?.canonicalExercise;
 
 			if (!exercise) {
 				return null;
@@ -717,7 +754,11 @@ function createImportedSet(
 	const weightInput = sourceSide === 'secondary' ? set.secondaryWeight : set.weight;
 	const repsInput = sourceSide === 'secondary' ? set.secondaryRepetitions : set.repetitions;
 	const rirInput = sourceSide === 'secondary' ? set.secondaryRir : set.rir;
-	const createdAt = toIsoTimestamp(set.createdAt || set.sessionDate) ?? sessionExercise.createdAt;
+	const weight = normalizeImportedNumericValue(weightInput, false);
+	const reps = normalizeImportedNumericValue(repsInput, true);
+	const rir = normalizeImportedNumericValue(rirInput, true);
+	const createdAt =
+		toIsoTimestamp(set.createdAt) ?? toIsoTimestamp(set.sessionDate) ?? sessionExercise.createdAt;
 	const updatedAt = toIsoTimestamp(set.updatedAt) ?? sessionExercise.updatedAt;
 
 	return {
@@ -726,12 +767,12 @@ function createImportedSet(
 		exerciseId: sessionExercise.exerciseId,
 		order,
 		side,
-		weightInput: cleanDecimalInput(weightInput),
-		repsInput: cleanIntegerInput(repsInput),
-		rirInput: cleanIntegerInput(rirInput),
-		weight: parseOptionalNumber(weightInput),
-		reps: parseOptionalNumber(repsInput),
-		rir: parseOptionalNumber(rirInput),
+		weightInput: weight.input,
+		repsInput: reps.input,
+		rirInput: rir.input,
+		weight: weight.value,
+		reps: reps.value,
+		rir: rir.value,
 		createdAt,
 		updatedAt
 	};
@@ -891,11 +932,7 @@ function getWorkoutName(session: CsvRow, workoutNameByTrackedId: Map<string, str
 }
 
 function resolveSetExerciseName(set: CsvRow, trackedExercise: CsvRow | undefined) {
-	return displayName(trackedExercise?.name || set.exerciseName);
-}
-
-function resolveSetNormalizedName(set: CsvRow, trackedExerciseById: Map<string, CsvRow>) {
-	return normalizeName(resolveSetExerciseName(set, trackedExerciseById.get(set.exerciseId)));
+	return cleanDisplayName(trackedExercise?.name || set.exerciseName);
 }
 
 function toTrackedId(kind: string, id: string) {
@@ -903,20 +940,37 @@ function toTrackedId(kind: string, id: string) {
 }
 
 function displayName(name: string) {
-	return name.trim().replace(/\s+/g, ' ') || 'Tracked Workout';
+	return cleanDisplayName(name) || 'Tracked Workout';
 }
 
-function cleanDecimalInput(value: string | undefined) {
-	return value?.trim() ?? '';
+function cleanDisplayName(name: string | undefined) {
+	return name?.trim().replace(/\s+/g, ' ') ?? '';
 }
 
-function cleanIntegerInput(value: string | undefined) {
-	return value?.trim().replace(/\D/g, '') ?? '';
-}
+function normalizeImportedNumericValue(value: string | undefined, integer: boolean) {
+	const rawValue = value?.trim() ?? '';
 
-function parseOptionalNumber(value: string | undefined) {
-	const nextValue = Number(value);
-	return value?.trim() && Number.isFinite(nextValue) ? nextValue : undefined;
+	if (!rawValue) {
+		return { input: '', value: undefined, valid: true };
+	}
+
+	const normalizedValue = rawValue.replace(',', '.');
+
+	if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalizedValue)) {
+		return { input: '', value: undefined, valid: false };
+	}
+
+	const numericValue = Number(normalizedValue);
+
+	if (
+		!Number.isFinite(numericValue) ||
+		numericValue < 0 ||
+		(integer && !Number.isInteger(numericValue))
+	) {
+		return { input: '', value: undefined, valid: false };
+	}
+
+	return { input: String(numericValue), value: numericValue, valid: true };
 }
 
 function parseBoolean(value: string | undefined) {
@@ -924,7 +978,36 @@ function parseBoolean(value: string | undefined) {
 }
 
 function hasSecondarySetValues(set: CsvRow) {
-	return Boolean(set.secondaryRepetitions || set.secondaryWeight || set.secondaryRir);
+	return (
+		normalizeImportedNumericValue(set.secondaryRepetitions, true).value !== undefined ||
+		normalizeImportedNumericValue(set.secondaryWeight, false).value !== undefined ||
+		normalizeImportedNumericValue(set.secondaryRir, true).value !== undefined
+	);
+}
+
+function countInvalidImportedNumericValues(setRows: CsvRow[]) {
+	return setRows.reduce((count, set) => {
+		return (
+			count +
+			Number(!normalizeImportedNumericValue(set.weight, false).valid) +
+			Number(!normalizeImportedNumericValue(set.repetitions, true).valid) +
+			Number(!normalizeImportedNumericValue(set.rir, true).valid) +
+			Number(!normalizeImportedNumericValue(set.secondaryWeight, false).valid) +
+			Number(!normalizeImportedNumericValue(set.secondaryRepetitions, true).valid) +
+			Number(!normalizeImportedNumericValue(set.secondaryRir, true).valid)
+		);
+	}, 0);
+}
+
+function resolveSessionStartedAt(session: CsvRow) {
+	return toIsoTimestamp(session.startedAt) ?? toIsoTimestamp(session.sessionDate);
+}
+
+function resolveSessionDayKey(session: CsvRow, startedAt: string) {
+	const sessionDate = session.sessionDate?.trim() ?? '';
+	const calendarDate = /^(\d{4}-\d{2}-\d{2})(?:$|[T\s])/.exec(sessionDate)?.[1];
+
+	return calendarDate && toIsoTimestamp(sessionDate) ? calendarDate : toDayKey(startedAt);
 }
 
 function normalizeTrackedTimestamp(value: string) {
@@ -934,12 +1017,26 @@ function normalizeTrackedTimestamp(value: string) {
 		normalized = normalized.replace(' ', 'T');
 	}
 
-	return normalized.replace(/([+-]\d{2})$/, '$1:00');
+	return normalized.includes('T') ? normalized.replace(/([+-]\d{2})$/, '$1:00') : normalized;
 }
 
 function toIsoTimestamp(value: string | undefined) {
 	if (!value?.trim()) {
 		return undefined;
+	}
+
+	const calendarDate = /^(\d{4})-(\d{2})-(\d{2})(?:$|[T\s])/.exec(value.trim());
+
+	if (calendarDate) {
+		const year = Number(calendarDate[1]);
+		const month = Number(calendarDate[2]);
+		const day = Number(calendarDate[3]);
+		const daysInMonth =
+			month >= 1 && month <= 12 ? new Date(Date.UTC(year, month, 0)).getUTCDate() : 0;
+
+		if (day < 1 || day > daysInMonth) {
+			return undefined;
+		}
 	}
 
 	const date = new Date(normalizeTrackedTimestamp(value));

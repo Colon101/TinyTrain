@@ -23,6 +23,7 @@
 	let weekKey = $derived(weekCells[0]?.dayKey ?? '');
 	let pointerStartX = $state<number | null>(null);
 	let pointerId = $state<number | null>(null);
+	let suppressNextPointerClick = false;
 	const SWIPE_THRESHOLD = 36;
 
 	function getStatusTone(dayKey: string) {
@@ -36,8 +37,18 @@
 	}
 
 	function handlePointerDown(event: PointerEvent) {
+		if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) {
+			return;
+		}
+
 		pointerStartX = event.clientX;
 		pointerId = event.pointerId;
+		const eventTarget = event.target;
+		const captureTarget =
+			eventTarget instanceof Element
+				? (eventTarget.closest('button') ?? (event.currentTarget as HTMLElement))
+				: (event.currentTarget as HTMLElement);
+		captureTarget.setPointerCapture(event.pointerId);
 	}
 
 	function handlePointerUp(event: PointerEvent) {
@@ -53,12 +64,25 @@
 			return;
 		}
 
+		suppressNextPointerClick = true;
+		event.preventDefault();
 		onShiftWeek(deltaX < 0 ? 1 : -1);
 	}
 
 	function resetSwipe() {
 		pointerStartX = null;
 		pointerId = null;
+	}
+
+	function selectDay(event: MouseEvent, dayKey: string) {
+		if (event.detail !== 0 && suppressNextPointerClick) {
+			suppressNextPointerClick = false;
+			event.preventDefault();
+			event.stopPropagation();
+			return;
+		}
+
+		onSelectDay(dayKey);
 	}
 </script>
 
@@ -69,6 +93,7 @@
 	onpointerdown={handlePointerDown}
 	onpointerup={handlePointerUp}
 	onpointercancel={resetSwipe}
+	onlostpointercapture={resetSwipe}
 >
 	{#key weekKey}
 		<div
@@ -85,7 +110,7 @@
 						month: 'long',
 						day: 'numeric'
 					})}
-					onclick={() => onSelectDay(cell.dayKey)}
+					onclick={(event) => selectDay(event, cell.dayKey)}
 				>
 					<span class="text-[10px] font-medium tracking-[0.18em] uppercase opacity-70">
 						{cell.date.toLocaleDateString(undefined, { weekday: 'narrow' })}

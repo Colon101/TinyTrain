@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbCloudSync, type DatabaseCloudSyncDependencies, type SyncableRow } from './db-cloud-sync';
 import type { DataTable } from './db/runtime';
 import type { SessionSet } from './db/models';
@@ -12,18 +12,80 @@ type SupabaseMockRow = SyncableRow & {
 
 const supabaseMock = vi.hoisted(() => ({
 	remoteRows: new Map<string, SupabaseMockRow[]>(),
-	uploadedRows: new Map<string, SyncableRow[]>()
+	uploadedRows: new Map<string, SyncableRow[]>(),
+	queryCalls: [] as Array<{
+		tableName: string;
+		filters: Array<{ operator: 'eq' | 'gte'; field: string; value: unknown }>;
+		orders: Array<{ field: string; ascending: boolean }>;
+		from: number;
+		to: number;
+	}>
 }));
 
 vi.mock('./supabase', () => ({
 	supabase: {
 		from(tableName: string) {
 			return {
-				select: () => ({
-					eq: () => ({
-						range: async () => ({ data: supabaseMock.remoteRows.get(tableName) ?? [], error: null })
-					})
-				}),
+				select: () => {
+					const filters: Array<{
+						operator: 'eq' | 'gte';
+						field: string;
+						value: unknown;
+					}> = [];
+					const orders: Array<{ field: string; ascending: boolean }> = [];
+					const query = {
+						eq(field: string, value: unknown) {
+							filters.push({ operator: 'eq' as const, field, value });
+							return this;
+						},
+						gte(field: string, value: unknown) {
+							filters.push({ operator: 'gte' as const, field, value });
+							return this;
+						},
+						order(field: string, options: { ascending?: boolean } = {}) {
+							orders.push({ field, ascending: options.ascending ?? true });
+							return this;
+						},
+						async range(from: number, to: number) {
+							supabaseMock.queryCalls.push({
+								tableName,
+								filters: [...filters],
+								orders: [...orders],
+								from,
+								to
+							});
+
+							const data = [...(supabaseMock.remoteRows.get(tableName) ?? [])]
+								.filter((row) =>
+									filters.every(({ operator, field, value }) => {
+										const rowValue = (row as Record<string, unknown>)[field];
+
+										return operator === 'eq'
+											? rowValue === value
+											: String(rowValue ?? '') >= String(value ?? '');
+									})
+								)
+								.sort((first, second) => {
+									for (const { field, ascending } of orders) {
+										const comparison = String(
+											(first as Record<string, unknown>)[field] ?? ''
+										).localeCompare(String((second as Record<string, unknown>)[field] ?? ''));
+
+										if (comparison !== 0) {
+											return ascending ? comparison : -comparison;
+										}
+									}
+
+									return 0;
+								})
+								.slice(from, to + 1);
+
+							return { data, error: null };
+						}
+					};
+
+					return query;
+				},
 				upsert: async (rows: SyncableRow[]) => {
 					supabaseMock.uploadedRows.set(tableName, rows);
 					return { error: null };
@@ -32,6 +94,12 @@ vi.mock('./supabase', () => ({
 		}
 	}
 }));
+
+beforeEach(() => {
+	supabaseMock.remoteRows.clear();
+	supabaseMock.uploadedRows.clear();
+	supabaseMock.queryCalls.length = 0;
+});
 
 const older = '2026-01-01T00:00:00.000Z';
 const newer = '2026-01-02T00:00:00.000Z';
@@ -310,5 +378,44 @@ describe('remote deletion conflicts', () => {
 		expect(supabaseMock.uploadedRows.get('workouts')).toEqual([
 			expect.objectContaining({ id: localRow.id, user_id: 'user-1' })
 		]);
+	});
+
+	it.each([
+		{ modifiedAt: newest, shouldDelete: true },
+		{ modifiedAt: older, shouldDelete: false }
+	])(
+		'applies recent-backfill tombstones only when recency permits ($modifiedAt)',
+		async ({ modifiedAt, shouldDelete }) => {
+			const localRow = { id: 'workout-1', name: 'Push', createdAt: older, updatedAt: newer };
+			const { dependencies: reconcileDependencies, workouts } =
+				createReconcileDependencies(localRow);
+			supabaseMock.remoteRows.set('workouts', [
+				{ ...localRow, user_id: 'user-1', _deleted: true, _modified: modifiedAt }
+			]);
+
+			await dbCloudSync.backfillRecentRows(reconcileDependencies, 'user-1', 1000);
+
+			expect(workouts.rows.has(localRow.id)).toBe(!shouldDelete);
+			const workoutQuery = supabaseMock.queryCalls.find((call) => call.tableName === 'workouts');
+			expect(workoutQuery?.filters).not.toContainEqual(
+				expect.objectContaining({ field: '_deleted' })
+			);
+			expect(workoutQuery?.orders).toEqual([
+				{ field: '_modified', ascending: false },
+				{ field: 'id', ascending: true }
+			]);
+		}
+	);
+});
+
+describe('Supabase pagination', () => {
+	it('orders full reconciliation pages by stable row id', async () => {
+		const localRow = { id: 'workout-1', name: 'Push', createdAt: older, updatedAt: newer };
+		const { dependencies: reconcileDependencies } = createReconcileDependencies(localRow);
+
+		await dbCloudSync.reconcileSupabaseDatabase(reconcileDependencies, 'user-1', 'richest');
+
+		const workoutQuery = supabaseMock.queryCalls.find((call) => call.tableName === 'workouts');
+		expect(workoutQuery?.orders).toEqual([{ field: 'id', ascending: true }]);
 	});
 });

@@ -10,31 +10,56 @@
 	type DatabaseApi = typeof import('$lib/db');
 
 	let api = $state<DatabaseApi | null>(null);
+	let isLoadingApi = $state(true);
 	let isBusy = $state(false);
 	let actionError = $state('');
+	let dbApiImportPromise: Promise<DatabaseApi> | null = null;
+	let currentUserSubscription: SubscriptionLike | null = null;
+	let disposed = false;
+
+	function importDatabaseApi() {
+		dbApiImportPromise ??= import('$lib/db').catch((error: unknown) => {
+			dbApiImportPromise = null;
+			throw new Error('Sign-in tools failed to load. Check your connection, then try again.', {
+				cause: error
+			});
+		});
+
+		return dbApiImportPromise;
+	}
+
+	function activateDatabaseApi(dbApi: DatabaseApi) {
+		if (disposed) return;
+
+		api = dbApi;
+		currentUserSubscription ??= dbApi.db.cloud.currentUser.subscribe((nextUser) => {
+			if (nextUser.isLoggedIn) {
+				void goto(resolve('/'), { replaceState: true });
+			}
+		});
+	}
 
 	onMount(() => {
-		let disposed = false;
-		let currentUserSubscription: SubscriptionLike | null = null;
+		disposed = false;
 
 		void (async () => {
-			const dbApi = await import('$lib/db');
-
-			if (disposed) {
-				return;
-			}
-
-			api = dbApi;
-			currentUserSubscription = dbApi.db.cloud.currentUser.subscribe((nextUser) => {
-				if (nextUser.isLoggedIn) {
-					void goto(resolve('/'), { replaceState: true });
-				}
-			});
-
 			try {
+				const dbApi = await importDatabaseApi();
+				activateDatabaseApi(dbApi);
+
+				if (disposed) return;
+
 				await dbApi.ensureDbOpen();
-			} catch {
+			} catch (error) {
+				if (!api && !disposed) {
+					actionError = getErrorMessage(error);
+				}
+
 				// Keep the sign-in UI usable even if IndexedDB bootstrap fails here.
+			} finally {
+				if (!disposed) {
+					isLoadingApi = false;
+				}
 			}
 		})();
 
@@ -53,16 +78,16 @@
 	}
 
 	async function signIn() {
-		if (!api) {
-			actionError = 'Account tools are still loading. Try again in a moment.';
-			return;
-		}
-
 		isBusy = true;
 		actionError = '';
 
 		try {
-			await api.loginWithSupabaseGoogleForApp('/');
+			const dbApi = api ?? (await importDatabaseApi());
+
+			if (disposed) return;
+
+			activateDatabaseApi(dbApi);
+			await dbApi.loginWithSupabaseGoogleForApp('/');
 		} catch (error) {
 			if (isOAuthRedirect(error)) {
 				return;
@@ -96,10 +121,16 @@
 			<button
 				class="mt-4 min-h-12 w-full rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
 				type="button"
-				disabled={!api || Boolean(isBusy)}
+				disabled={isLoadingApi || Boolean(isBusy)}
 				onclick={signIn}
 			>
-				{isBusy ? 'Opening Google...' : 'Continue with Google'}
+				{isLoadingApi
+					? 'Loading sign-in...'
+					: isBusy
+						? 'Opening Google...'
+						: api
+							? 'Continue with Google'
+							: 'Retry loading sign-in'}
 			</button>
 		</section>
 	</div>

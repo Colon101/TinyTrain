@@ -1,24 +1,15 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type {
-		SessionFieldDelta,
-		SessionInputField,
-		SessionSetOverview,
-		SessionSetSide
-	} from '$lib/db';
+	import type { SessionInputField, SessionSetOverview, SessionSetSide } from '$lib/db';
 	import {
 		DEFAULT_PROGRESS_INDICATOR_POSITION,
 		initializeProgressIndicatorPreference,
-		progressIndicatorPosition,
-		type ProgressIndicatorPosition
+		progressIndicatorPosition
 	} from '$lib/progress-indicator-preference';
 	import Icon from '$lib/ui/Icon.svelte';
+	import SessionSetFieldInput from './SessionSetFieldInput.svelte';
 
 	const setEditorGridClass = 'grid grid-cols-[3.2rem_repeat(3,minmax(0,1fr))_2rem] gap-2';
-	const setInputBaseClass =
-		'h-11 w-full rounded-md border px-2 py-0 text-center text-[1.0625rem] leading-none font-semibold outline-none placeholder:text-zinc-500 focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-[#080b0d]';
-	const deltaIndicatorBaseClass =
-		'pointer-events-none absolute z-10 max-w-[calc(100%-1rem)] overflow-hidden text-[9px] leading-none font-semibold whitespace-nowrap text-ellipsis tabular-nums';
 
 	let {
 		sets,
@@ -44,10 +35,6 @@
 		initializeProgressIndicatorPreference();
 	});
 
-	function formatPlaceholder(value?: number) {
-		return typeof value === 'number' && Number.isFinite(value) ? `${Number(value.toFixed(2))}` : '';
-	}
-
 	function formatSetBadgeValue(side: SessionSetSide, order: number) {
 		const paddedOrder = String(order).padStart(2, '0');
 
@@ -60,61 +47,6 @@
 		}
 
 		return paddedOrder;
-	}
-
-	function getDeltaToneClass(state: SessionFieldDelta['state']) {
-		if (state === 'improved') {
-			return 'text-emerald-700';
-		}
-
-		if (state === 'regressed') {
-			return 'text-red-700';
-		}
-
-		return 'text-zinc-500';
-	}
-
-	function getFieldInputClass(state: SessionFieldDelta['state']) {
-		if (state === 'improved') {
-			return 'border-2 border-emerald-500 bg-white text-black';
-		}
-
-		if (state === 'regressed') {
-			return 'border-2 border-red-500 bg-white text-black';
-		}
-
-		return 'border-zinc-300 bg-white text-black';
-	}
-
-	function getDeltaPositionClass(position: ProgressIndicatorPosition) {
-		switch (position) {
-			case 'top-left':
-				return 'top-1 left-2 text-left';
-			case 'top-center':
-				return 'top-1 left-1/2 -translate-x-1/2 text-center';
-			case 'top-right':
-				return 'top-1 right-2 text-right';
-			case 'bottom-center':
-				return 'bottom-1 left-1/2 -translate-x-1/2 text-center';
-			case 'bottom-right':
-				return 'right-2 bottom-1 text-right';
-			case 'bottom-left':
-			default:
-				return 'bottom-1 left-2 text-left';
-		}
-	}
-
-	function getDeltaDescription(delta: SessionFieldDelta) {
-		if (!delta.label || delta.state === 'empty' || delta.state === 'matched') {
-			return '';
-		}
-
-		const value = delta.label.replace(/^[+-]/, '');
-		return `${value} ${delta.state === 'improved' ? 'higher' : 'lower'} than the previous session`;
-	}
-
-	function getDeltaDescriptionId(setId: string, field: SessionInputField) {
-		return `set-${setId}-${field}-comparison`;
 	}
 
 	function getSetInputLabel(set: SessionSetOverview, field: string) {
@@ -157,109 +89,46 @@
 						</button>
 					</div>
 
-					<div
-						class="relative w-full max-w-[7.25rem] min-w-0 justify-self-center"
-						data-delta-position={indicatorPosition}
-					>
-						<input
-							class={`${setInputBaseClass} ${getFieldInputClass(set.weightDelta.state)}`}
-							type="text"
-							name={`tinytrain-set-${set.id}-weight`}
-							autocomplete="off"
-							inputmode="decimal"
-							enterkeyhint="next"
-							data-session-set-input="true"
-							aria-label={getSetInputLabel(set, 'weight')}
-							aria-describedby={set.weightDelta.label
-								? getDeltaDescriptionId(set.id, 'weight')
-								: undefined}
-							value={set.weightInput ?? ''}
-							placeholder={formatPlaceholder(set.previousReference?.weight)}
-							oninput={(event) => onSetInput(set.id, 'weight', event)}
-							onkeydown={onSetInputKeydown}
-						/>
-						{#if set.weightDelta.label}
-							<span
-								class={`${deltaIndicatorBaseClass} ${getDeltaPositionClass(indicatorPosition)} ${getDeltaToneClass(set.weightDelta.state)}`}
-								aria-hidden="true"
-							>
-								{set.weightDelta.label}
-							</span>
-							<span id={getDeltaDescriptionId(set.id, 'weight')} class="sr-only">
-								{getDeltaDescription(set.weightDelta)}
-							</span>
-						{/if}
-					</div>
+					<SessionSetFieldInput
+						setId={set.id}
+						field="weight"
+						inputMode="decimal"
+						ariaLabel={getSetInputLabel(set, 'weight')}
+						value={set.weightInput ?? ''}
+						previousValue={set.previousReference?.weight}
+						delta={set.weightDelta}
+						{indicatorPosition}
+						onInput={(event) => onSetInput(set.id, 'weight', event)}
+						onKeydown={onSetInputKeydown}
+					/>
 
-					<div
-						class="relative w-full max-w-[7.25rem] min-w-0 justify-self-center"
-						data-delta-position={indicatorPosition}
-					>
-						<input
-							class={`${setInputBaseClass} ${getFieldInputClass(set.repsDelta.state)}`}
-							type="text"
-							name={`tinytrain-set-${set.id}-reps`}
-							autocomplete="off"
-							inputmode="numeric"
-							pattern="[0-9]*"
-							enterkeyhint="next"
-							data-session-set-input="true"
-							aria-label={getSetInputLabel(set, 'reps')}
-							aria-describedby={set.repsDelta.label
-								? getDeltaDescriptionId(set.id, 'reps')
-								: undefined}
-							value={set.repsInput ?? ''}
-							placeholder={formatPlaceholder(set.previousReference?.reps)}
-							oninput={(event) => onSetInput(set.id, 'reps', event)}
-							onkeydown={onSetInputKeydown}
-						/>
-						{#if set.repsDelta.label}
-							<span
-								class={`${deltaIndicatorBaseClass} ${getDeltaPositionClass(indicatorPosition)} ${getDeltaToneClass(set.repsDelta.state)}`}
-								aria-hidden="true"
-							>
-								{set.repsDelta.label}
-							</span>
-							<span id={getDeltaDescriptionId(set.id, 'reps')} class="sr-only">
-								{getDeltaDescription(set.repsDelta)}
-							</span>
-						{/if}
-					</div>
+					<SessionSetFieldInput
+						setId={set.id}
+						field="reps"
+						inputMode="numeric"
+						pattern="[0-9]*"
+						ariaLabel={getSetInputLabel(set, 'reps')}
+						value={set.repsInput ?? ''}
+						previousValue={set.previousReference?.reps}
+						delta={set.repsDelta}
+						{indicatorPosition}
+						onInput={(event) => onSetInput(set.id, 'reps', event)}
+						onKeydown={onSetInputKeydown}
+					/>
 
-					<div
-						class="relative w-full max-w-[7.25rem] min-w-0 justify-self-center"
-						data-delta-position={indicatorPosition}
-					>
-						<input
-							class={`${setInputBaseClass} ${getFieldInputClass(set.rirDelta.state)}`}
-							type="text"
-							name={`tinytrain-set-${set.id}-rir`}
-							autocomplete="off"
-							inputmode="numeric"
-							pattern="[0-9]*"
-							enterkeyhint="next"
-							data-session-set-input="true"
-							aria-label={getSetInputLabel(set, 'RIR')}
-							aria-describedby={set.rirDelta.label
-								? getDeltaDescriptionId(set.id, 'rir')
-								: undefined}
-							value={set.rirInput ?? ''}
-							placeholder={formatPlaceholder(set.previousReference?.rir)}
-							oninput={(event) => onSetInput(set.id, 'rir', event)}
-							onkeydown={onSetInputKeydown}
-						/>
-						{#if set.rirDelta.label}
-							<span
-								class={`${deltaIndicatorBaseClass} ${getDeltaPositionClass(indicatorPosition)} ${getDeltaToneClass(set.rirDelta.state)}`}
-								aria-hidden="true"
-							>
-								{set.rirDelta.label}
-							</span>
-							<span id={getDeltaDescriptionId(set.id, 'rir')} class="sr-only">
-								{getDeltaDescription(set.rirDelta)}
-							</span>
-						{/if}
-					</div>
+					<SessionSetFieldInput
+						setId={set.id}
+						field="rir"
+						inputMode="numeric"
+						pattern="[0-9]*"
+						ariaLabel={getSetInputLabel(set, 'RIR')}
+						value={set.rirInput ?? ''}
+						previousValue={set.previousReference?.rir}
+						delta={set.rirDelta}
+						{indicatorPosition}
+						onInput={(event) => onSetInput(set.id, 'rir', event)}
+						onKeydown={onSetInputKeydown}
+					/>
 
 					<div class="flex items-center justify-center">
 						<button

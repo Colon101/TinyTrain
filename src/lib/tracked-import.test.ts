@@ -18,7 +18,8 @@ const dbMock = vi.hoisted(() => ({
 }));
 
 vi.mock('./db', async () => {
-	const { normalizeName } = await vi.importActual<typeof import('./db/shared')>('./db/shared');
+	const { normalizeName, toDayKey } =
+		await vi.importActual<typeof import('./db/shared')>('./db/shared');
 
 	return {
 		db: {
@@ -50,7 +51,7 @@ vi.mock('./db', async () => {
 		ensureDbOpen: dbMock.ensureDbOpen,
 		normalizeName,
 		syncNow: dbMock.syncNow,
-		toDayKey: vi.fn()
+		toDayKey
 	};
 });
 
@@ -229,6 +230,124 @@ describe('Tracked archive', () => {
 		expect(summary.warnings).toEqual([
 			'2 set rows reference missing sessions or exercises.',
 			'2 unsupported CSV files will be ignored.'
+		]);
+	});
+
+	it('plans only ID-backed exercises while resolving missing set names from the exercise catalog', async () => {
+		const file = trackedZip({
+			'exercises.csv': 'id,name\nbench,Barbell Bench Press',
+			'sessions.csv': 'id,sessionDate\ns1,2026-07-01',
+			'sets.csv': [
+				'id,sessionId,exerciseId,exerciseName,repetitions,weight,rir',
+				'catalog-name,s1,bench,,8,80,2',
+				'name-only,s1,,Cable Row,10,50,1'
+			].join('\n')
+		});
+
+		const preview = await previewTrackedArchive(file);
+
+		expect(preview).toEqual(
+			expect.objectContaining({
+				sessionsImportable: 1,
+				strengthSetRowsFound: 2,
+				strengthSetRowsImportable: 1,
+				warnings: ['1 set row references missing sessions or exercises.']
+			})
+		);
+
+		const summary = await importTrackedArchive(file);
+		const sessionExercises = dbMock.sessionExercisesBulkAdd.mock.calls[0]?.[0];
+		const sessionSets = dbMock.sessionSetsBulkAdd.mock.calls[0]?.[0];
+
+		expect(summary.sessionSetsImported).toBe(1);
+		expect(sessionExercises).toEqual([
+			expect.objectContaining({ id: 'tracked:session:s1:exercise:bench' })
+		]);
+		expect(sessionSets).toEqual([
+			expect.objectContaining({
+				id: 'tracked:session:s1:exercise:bench:set:catalog-name:primary'
+			})
+		]);
+	});
+
+	it('skips sessions without a historical timestamp and falls back to a valid session date', async () => {
+		const file = trackedZip({
+			'exercises.csv': 'id,name\nbench,Barbell Bench Press',
+			'sessions.csv': [
+				'id,sessionDate,startedAt',
+				'invalid,not-a-date,also-not-a-date',
+				'fallback,2026-06-30,not-a-date'
+			].join('\n'),
+			'sets.csv': [
+				'id,sessionId,exerciseId,exerciseName,repetitions,weight,rir',
+				'invalid-set,invalid,bench,Barbell Bench Press,8,80,2',
+				'fallback-set,fallback,bench,Barbell Bench Press,6,85,1'
+			].join('\n')
+		});
+
+		const preview = await previewTrackedArchive(file);
+
+		expect(preview).toEqual(
+			expect.objectContaining({
+				sessionsFound: 2,
+				sessionsImportable: 1,
+				strengthSetRowsFound: 2,
+				strengthSetRowsImportable: 1,
+				warnings: ['1 session row with a missing or invalid historical timestamp was skipped.']
+			})
+		);
+
+		const summary = await importTrackedArchive(file);
+		const workoutSessions = dbMock.workoutSessionsBulkAdd.mock.calls[0]?.[0];
+
+		expect(summary.sessionsImported).toBe(1);
+		expect(workoutSessions).toEqual([
+			expect.objectContaining({
+				id: 'tracked:session:fallback',
+				dayKey: '2026-06-30',
+				startedAt: '2026-06-30T00:00:00.000Z',
+				createdAt: '2026-06-30T00:00:00.000Z'
+			})
+		]);
+	});
+
+	it('stores numeric inputs and values from one validated canonical representation', async () => {
+		const file = trackedZip({
+			'exercises.csv': 'id,name,unilateral\ncustom,Custom Lift,true',
+			'sessions.csv': 'id,sessionDate\ns1,2026-07-01',
+			'sets.csv': [
+				'id,sessionId,exerciseId,exerciseName,repetitions,weight,rir,secondaryRepetitions,secondaryWeight,secondaryRir',
+				'set1,s1,custom,Custom Lift,5.0,012.50,12.5,-3,7.50,oops'
+			].join('\n')
+		});
+
+		const preview = await previewTrackedArchive(file);
+
+		expect(preview.warnings).toContain('3 invalid numeric set values will be ignored.');
+
+		const summary = await importTrackedArchive(file);
+		const sessionSets = dbMock.sessionSetsBulkAdd.mock.calls[0]?.[0];
+
+		expect(summary.sessionSetsImported).toBe(2);
+		expect(sessionSets).toEqual([
+			expect.objectContaining({
+				side: 'right',
+				weightInput: '12.5',
+				weight: 12.5,
+				repsInput: '5',
+				reps: 5,
+				rirInput: '',
+				rir: undefined
+			}),
+			expect.objectContaining({
+				side: 'left',
+				weightInput: '7.5',
+				weight: 7.5,
+				repsInput: '',
+				reps: undefined,
+				rirInput: '',
+				rir: undefined
+			})
 		]);
 	});
 

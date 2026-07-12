@@ -940,7 +940,7 @@
 		const nextX = dragPointerPosition.clientX - dragPreview.grabX;
 		const nextY = dragPointerPosition.clientY - dragPreview.grabY;
 
-		dragPreviewElement.style.transform = `translate3d(${nextX - dragPreview.x}px, ${nextY - dragPreview.y}px, 0)`;
+		dragPreviewElement.style.transform = `translate3d(${nextX}px, ${nextY}px, 0)`;
 	}
 
 	function queueDragPreviewPosition(clientX: number, clientY: number) {
@@ -972,8 +972,8 @@
 
 		dragPointerPosition = null;
 
-		if (dragPreviewElement) {
-			dragPreviewElement.style.transform = '';
+		if (dragPreviewElement && dragPreview) {
+			dragPreviewElement.style.transform = `translate3d(${dragPreview.x}px, ${dragPreview.y}px, 0)`;
 		}
 	}
 
@@ -1135,10 +1135,25 @@
 		}
 
 		const summaryId = overview.summary.id;
+		const overviewBeforeReorder = overview;
 		orderSessionExercises(finalSessionExerciseIds);
+		const optimisticOverview = overview;
 
 		void runMutation(async () => {
-			await requireApi().reorderSessionExercises(summaryId, finalSessionExerciseIds);
+			try {
+				await requireApi().reorderSessionExercises(summaryId, finalSessionExerciseIds);
+			} catch (error) {
+				if (overview === optimisticOverview) {
+					overview = overviewBeforeReorder;
+					writeSessionDataCache(sessionId, {
+						overview: overviewBeforeReorder,
+						exercises,
+						exerciseUsagePreferences
+					});
+				}
+
+				throw error;
+			}
 		});
 	}
 

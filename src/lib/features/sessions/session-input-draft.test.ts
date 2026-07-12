@@ -1,10 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionOverview, SessionSetOverview, SessionStatus } from '../../db/models';
 import {
 	applySessionInputDraft,
+	clearSessionInputDraft,
+	getSessionInputDraftKey,
+	readSessionInputDraft,
 	type SessionInputDraft,
-	type SessionInputDraftSet
+	type SessionInputDraftSet,
+	writeSessionInputDraft
 } from './session-input-draft';
+
+vi.mock('$app/environment', () => ({ browser: true }));
 
 const timestamp = '2026-07-11T10:00:00.000Z';
 
@@ -167,5 +173,79 @@ describe('applySessionInputDraft', () => {
 			weight: 120,
 			weightDelta: { state: 'improved', label: '+25' }
 		});
+	});
+
+	it('ignores a malformed draft set instead of applying it', () => {
+		const overview = buildOverview();
+		const draft = buildDraft({ weightInput: 5 } as unknown as SessionInputDraftSet);
+
+		expect(() => applySessionInputDraft(overview, draft)).not.toThrow();
+		expect(getOnlySet(applySessionInputDraft(overview, draft))).toBe(getOnlySet(overview));
+	});
+});
+
+describe('session input draft storage', () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it('discards persisted sets containing non-string input fields', () => {
+		const storedDraft = {
+			sessionId: 'session-1',
+			sets: {
+				'valid-set': { weightInput: '102.5', weightInputBase: '100' },
+				'invalid-input-set': { repsInput: 8 },
+				'invalid-base-set': { rirInput: '2', rirInputBase: null }
+			},
+			updatedAt: Date.parse(timestamp)
+		};
+		vi.stubGlobal('localStorage', {
+			getItem: vi.fn(() => JSON.stringify(storedDraft))
+		});
+
+		expect(readSessionInputDraft('session-1')).toEqual({
+			sessionId: 'session-1',
+			sets: {
+				'valid-set': { weightInput: '102.5', weightInputBase: '100' }
+			},
+			updatedAt: Date.parse(timestamp)
+		});
+	});
+
+	it('does not throw when optional draft storage is unavailable', () => {
+		const storageError = new DOMException('Storage is unavailable.', 'SecurityError');
+		vi.stubGlobal('localStorage', {
+			setItem: vi.fn(() => {
+				throw storageError;
+			}),
+			removeItem: vi.fn(() => {
+				throw storageError;
+			})
+		});
+		vi.stubGlobal('window', { dispatchEvent: vi.fn() });
+		const draft = buildDraft({ weightInput: '102.5' });
+
+		expect(() => writeSessionInputDraft(draft)).not.toThrow();
+		expect(() => clearSessionInputDraft('session-1')).not.toThrow();
+	});
+
+	it('does not throw when draft change notification fails', () => {
+		vi.stubGlobal('localStorage', {
+			setItem: vi.fn(),
+			removeItem: vi.fn()
+		});
+		vi.stubGlobal('window', {
+			dispatchEvent: vi.fn(() => {
+				throw new Error('Listener failed.');
+			})
+		});
+		const draft = buildDraft({ weightInput: '102.5' });
+
+		expect(() => writeSessionInputDraft(draft)).not.toThrow();
+		expect(() => clearSessionInputDraft('session-1')).not.toThrow();
+		expect(localStorage.setItem).toHaveBeenCalledWith(
+			getSessionInputDraftKey('session-1'),
+			JSON.stringify(draft)
+		);
 	});
 });
