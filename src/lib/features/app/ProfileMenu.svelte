@@ -31,6 +31,8 @@
 	);
 
 	onMount(() => {
+		let disposed = false;
+
 		function handlePointerDown(event: PointerEvent) {
 			const target = event.target as Node | null;
 
@@ -43,13 +45,23 @@
 
 		void import('$lib/db')
 			.then((dbApi) => {
+				if (disposed) {
+					return;
+				}
+
 				api = dbApi;
 			})
 			.catch(() => {
+				if (disposed) {
+					return;
+				}
+
 				actionError = 'Account tools failed to load. Reload and try again.';
 			});
 
 		return () => {
+			disposed = true;
+
 			if (manualSyncDismissTimeout) {
 				clearTimeout(manualSyncDismissTimeout);
 			}

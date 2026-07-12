@@ -131,7 +131,7 @@
 					isCheckingAuth = false;
 				});
 
-				if (window.location.search.includes('code=')) {
+				if (isHandlingOAuthCallback) {
 					callbackTimeoutId = setTimeout(() => {
 						callbackTimedOut = true;
 						authError = 'Google sign-in did not finish. Try again from the sign-in page.';
