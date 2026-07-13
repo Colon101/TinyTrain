@@ -713,7 +713,7 @@
 	}
 
 	function handleDragPointerDown(event: PointerEvent, workoutExerciseId: string) {
-		if (isSaving || workoutExercises.length < 2) {
+		if (isSaving || workoutExercises.length < 2 || draggedWorkoutExerciseId || dragPreview) {
 			return;
 		}
 

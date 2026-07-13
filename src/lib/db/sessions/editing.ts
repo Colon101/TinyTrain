@@ -279,6 +279,12 @@ export async function addSessionSetRow(sessionExerciseId: string) {
 	let nextSets: SessionSet[] = [];
 
 	await db.transaction('rw', db.sessionSets, db.sessionExercises, db.workoutSessions, async () => {
+		const currentSessionExercise = await db.sessionExercises.get(sessionExerciseId);
+
+		if (!currentSessionExercise || currentSessionExercise.exerciseId !== exercise.id) {
+			throw new Error('Exercise not found in this session.');
+		}
+
 		const currentSets = await db.sessionSets
 			.where('sessionExerciseId')
 			.equals(sessionExerciseId)
@@ -290,7 +296,7 @@ export async function addSessionSetRow(sessionExerciseId: string) {
 			) + 1;
 		nextSets = buildSeedSessionSetRows(
 			sessionExerciseId,
-			sessionExercise.exerciseId,
+			currentSessionExercise.exerciseId,
 			1,
 			exercise.unilateral,
 			now
@@ -301,7 +307,7 @@ export async function addSessionSetRow(sessionExerciseId: string) {
 
 		await db.sessionSets.bulkAdd(nextSets);
 		await db.sessionExercises.update(sessionExerciseId, { updatedAt: now });
-		await db.workoutSessions.update(sessionExercise.sessionId, { updatedAt: now });
+		await db.workoutSessions.update(currentSessionExercise.sessionId, { updatedAt: now });
 	});
 
 	return nextSets.map(withSessionSetDefaults).sort(compareSessionSetRows);

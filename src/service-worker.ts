@@ -161,11 +161,7 @@ function canStoreResponse(request: Request, response: Response) {
 
 	const cacheControl = response.headers.get('cache-control')?.toLowerCase() ?? '';
 
-	return (
-		!cacheControl.includes('no-store') &&
-		!cacheControl.includes('private') &&
-		!response.headers.has('set-cookie')
-	);
+	return !cacheControl.includes('no-store') && !cacheControl.includes('private');
 }
 
 async function hasCurrentDeployment(cache: Cache) {

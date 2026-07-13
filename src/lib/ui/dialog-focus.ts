@@ -57,11 +57,12 @@ export function trapDialogFocus(node: HTMLElement, options: DialogFocusOptions =
 		const first = focusableElements[0];
 		const last = focusableElements.at(-1)!;
 		const activeElement = document.activeElement;
+		const isFocusableElement = focusableElements.includes(activeElement as HTMLElement);
 
-		if (event.shiftKey && (activeElement === first || !node.contains(activeElement))) {
+		if (event.shiftKey && (activeElement === first || !isFocusableElement)) {
 			event.preventDefault();
 			last.focus();
-		} else if (!event.shiftKey && (activeElement === last || !node.contains(activeElement))) {
+		} else if (!event.shiftKey && (activeElement === last || !isFocusableElement)) {
 			event.preventDefault();
 			first.focus();
 		}

@@ -12,6 +12,7 @@ const dbMock = vi.hoisted(() => ({
 	workoutExercisesToArray: vi.fn(),
 	workoutExercisesBulkPut: vi.fn(),
 	workoutExercisesBulkDelete: vi.fn(),
+	workoutSessionsToArray: vi.fn(),
 	workoutSessionsBulkGet: vi.fn(),
 	workoutSessionsBulkAdd: vi.fn(),
 	sessionExercisesBulkAdd: vi.fn(),
@@ -36,7 +37,7 @@ vi.mock('./db', async () => {
 			},
 			workoutExercises: {
 				where: () => ({
-					equals: () => ({
+					anyOf: () => ({
 						toArray: dbMock.workoutExercisesToArray
 					})
 				}),
@@ -44,6 +45,11 @@ vi.mock('./db', async () => {
 				bulkDelete: dbMock.workoutExercisesBulkDelete
 			},
 			workoutSessions: {
+				where: () => ({
+					anyOf: () => ({
+						toArray: dbMock.workoutSessionsToArray
+					})
+				}),
 				bulkGet: dbMock.workoutSessionsBulkGet,
 				bulkAdd: dbMock.workoutSessionsBulkAdd
 			},
@@ -67,10 +73,37 @@ const validCsv = {
 		'id,sessionId,exerciseId,exerciseName,repetitions,weight,rir\nset1,s1,bench,Barbell Bench Press,8,80,2'
 };
 
-function trackedZip(files: Record<string, string>, name = 'tracked.zip') {
+function trackedZip(
+	files: Record<string, string>,
+	name = 'tracked.zip',
+	declaredOriginalSize?: number
+) {
 	const zipped = zipSync(
 		Object.fromEntries(Object.entries(files).map(([path, contents]) => [path, strToU8(contents)]))
 	);
+
+	if (declaredOriginalSize !== undefined) {
+		const view = new DataView(zipped.buffer, zipped.byteOffset, zipped.byteLength);
+		let offset = 0;
+
+		while (offset + 30 <= zipped.length && view.getUint32(offset, true) === 0x04034b50) {
+			view.setUint32(offset + 22, declaredOriginalSize, true);
+			offset +=
+				30 +
+				view.getUint16(offset + 26, true) +
+				view.getUint16(offset + 28, true) +
+				view.getUint32(offset + 18, true);
+		}
+
+		while (offset + 46 <= zipped.length && view.getUint32(offset, true) === 0x02014b50) {
+			view.setUint32(offset + 24, declaredOriginalSize, true);
+			offset +=
+				46 +
+				view.getUint16(offset + 28, true) +
+				view.getUint16(offset + 30, true) +
+				view.getUint16(offset + 32, true);
+		}
+	}
 
 	return new File([Uint8Array.from(zipped)], name, { type: 'application/zip' });
 }
@@ -123,6 +156,7 @@ describe('Tracked archive', () => {
 		dbMock.workoutExercisesToArray.mockResolvedValue([]);
 		dbMock.workoutExercisesBulkPut.mockResolvedValue([]);
 		dbMock.workoutExercisesBulkDelete.mockResolvedValue(undefined);
+		dbMock.workoutSessionsToArray.mockResolvedValue([]);
 		dbMock.workoutSessionsBulkGet.mockResolvedValue([]);
 		dbMock.workoutSessionsBulkAdd.mockResolvedValue([]);
 		dbMock.sessionExercisesBulkAdd.mockResolvedValue([]);
@@ -176,14 +210,35 @@ describe('Tracked archive', () => {
 		expect(dbMock.ensureDbOpen).not.toHaveBeenCalled();
 	});
 
-	it('rejects an archive before expanding an oversized CSV entry', async () => {
-		const file = trackedZip({
-			...validCsv,
-			'exercises.csv': `id,name\nbench,${'x'.repeat(12 * 1024 * 1024)}`
-		});
+	it('rejects actual decompressed CSV bytes even when the declared size is smaller', async () => {
+		const file = trackedZip(
+			{
+				...validCsv,
+				'exercises.csv': `id,name\nbench,${'x'.repeat(12 * 1024 * 1024)}`
+			},
+			'tracked.zip',
+			1
+		);
 
 		await expect(previewTrackedArchive(file)).rejects.toThrow(
 			'Tracked CSV is too large: exercises.csv.'
+		);
+		expect(dbMock.ensureDbOpen).not.toHaveBeenCalled();
+	});
+
+	it('counts actual decompressed bytes toward the aggregate CSV limit', async () => {
+		const file = trackedZip(
+			{
+				'exercises.csv': 'x'.repeat(11 * 1024 * 1024),
+				'sessions.csv': 'x'.repeat(11 * 1024 * 1024),
+				'sets.csv': 'x'.repeat(11 * 1024 * 1024)
+			},
+			'tracked.zip',
+			1
+		);
+
+		await expect(previewTrackedArchive(file)).rejects.toThrow(
+			'Tracked zip expands beyond the 32 MB safety limit.'
 		);
 		expect(dbMock.ensureDbOpen).not.toHaveBeenCalled();
 	});
@@ -425,6 +480,49 @@ describe('Tracked archive', () => {
 				order: 1
 			})
 		]);
+	});
+
+	it('preserves a workout template when a persisted session is newer than the import', async () => {
+		dbMock.workoutExercisesToArray.mockResolvedValue([
+			{
+				id: 'persisted-template',
+				workoutId: 'tracked:workout:upper',
+				exerciseId: 'tracked:exercise:newer lift',
+				order: 1,
+				createdAt: '2026-07-03T10:00:00.000Z',
+				updatedAt: '2026-07-03T10:00:00.000Z'
+			}
+		]);
+		dbMock.workoutSessionsToArray.mockResolvedValue([
+			{
+				id: 'persisted-newer-session',
+				workoutId: 'tracked:workout:upper',
+				workoutNameSnapshot: 'Upper',
+				dayKey: '2026-07-03',
+				startedAt: '2026-07-03T10:00:00.000Z',
+				completedAt: '2026-07-03T11:00:00.000Z',
+				status: 'completed',
+				createdAt: '2026-07-03T10:00:00.000Z',
+				updatedAt: '2026-07-03T11:00:00.000Z'
+			}
+		]);
+		const file = trackedZip({
+			'exercises.csv': 'id,name\nolder,Older Lift',
+			'workouts.csv': 'id,name\nupper,Upper',
+			'sessions.csv': [
+				'id,sessionDate,workoutId,startedAt',
+				'older-session,2026-07-01,upper,2026-07-01T10:00:00Z'
+			].join('\n'),
+			'sets.csv': [
+				'id,sessionId,exerciseId,exerciseName,repetitions,weight,rir',
+				'older-set,older-session,older,Older Lift,10,50,1'
+			].join('\n')
+		});
+
+		await importTrackedArchive(file);
+
+		expect(dbMock.workoutExercisesBulkDelete).not.toHaveBeenCalled();
+		expect(dbMock.workoutExercisesBulkPut).not.toHaveBeenCalled();
 	});
 
 	it('imports a signed-in archive with deterministic rows and the selected limb priority', async () => {

@@ -1,4 +1,4 @@
-import { strFromU8, unzip } from 'fflate';
+import { strFromU8, Unzip, UnzipInflate } from 'fflate';
 import {
 	db,
 	ensureDbOpen,
@@ -172,7 +172,7 @@ async function readTrackedArchive(file: File): Promise<TrackedArchive> {
 	for (const [path, contents] of Object.entries(unzipped)) {
 		const fileName = path.split('/').at(-1)?.toLocaleLowerCase() ?? '';
 
-		if (!fileName || !fileName.endsWith('.csv')) {
+		if (!fileName) {
 			continue;
 		}
 
@@ -223,48 +223,102 @@ function unzipTrackedArchive(data: Uint8Array) {
 	return new Promise<Record<string, Uint8Array>>((resolve, reject) => {
 		let entryCount = 0;
 		let totalCsvBytes = 0;
+		let settled = false;
+		const files: Record<string, Uint8Array> = {};
+		const rejectInvalidArchive = (error: unknown) => {
+			if (settled) {
+				return;
+			}
+
+			settled = true;
+			reject(new Error('Tracked zip could not be opened.', { cause: error }));
+		};
+		const rejectWith = (error: Error) => {
+			if (settled) {
+				return;
+			}
+
+			settled = true;
+			reject(error);
+		};
+		const unzipper = new Unzip((entry) => {
+			entryCount += 1;
+
+			if (entryCount > MAX_ARCHIVE_ENTRIES) {
+				rejectWith(new Error('Tracked zip contains too many files.'));
+				return;
+			}
+
+			const fileName = entry.name.split('/').at(-1)?.toLowerCase() ?? '';
+
+			if (!fileName.endsWith('.csv')) {
+				return;
+			}
+
+			let fileBytes = 0;
+			const chunks: Uint8Array[] = [];
+
+			entry.ondata = (error, chunk, final) => {
+				if (settled) {
+					return;
+				}
+
+				if (error) {
+					rejectInvalidArchive(error);
+					return;
+				}
+
+				fileBytes += chunk.length;
+				totalCsvBytes += chunk.length;
+
+				if (fileBytes > MAX_CSV_BYTES) {
+					rejectWith(new Error(`Tracked CSV is too large: ${fileName}.`));
+					return;
+				}
+
+				if (totalCsvBytes > MAX_TOTAL_CSV_BYTES) {
+					rejectWith(new Error('Tracked zip expands beyond the 32 MB safety limit.'));
+					return;
+				}
+
+				chunks.push(chunk);
+
+				if (final) {
+					const contents = new Uint8Array(fileBytes);
+					let offset = 0;
+
+					for (const currentChunk of chunks) {
+						contents.set(currentChunk, offset);
+						offset += currentChunk.length;
+					}
+
+					files[entry.name] = contents;
+				}
+			};
+
+			try {
+				entry.start();
+			} catch (error) {
+				rejectInvalidArchive(error);
+			}
+		});
+
+		unzipper.register(UnzipInflate);
 
 		try {
-			unzip(
-				data,
-				{
-					filter: (entry) => {
-						entryCount += 1;
+			const inputChunkBytes = 64 * 1024;
 
-						if (entryCount > MAX_ARCHIVE_ENTRIES) {
-							throw new Error('Tracked zip contains too many files.');
-						}
+			for (let offset = 0; offset < data.length && !settled; offset += inputChunkBytes) {
+				const end = Math.min(offset + inputChunkBytes, data.length);
+				unzipper.push(data.subarray(offset, end), end === data.length);
+			}
 
-						const fileName = entry.name.split('/').at(-1)?.toLowerCase() ?? '';
-
-						if (!fileName.endsWith('.csv')) {
-							return false;
-						}
-
-						if (entry.originalSize > MAX_CSV_BYTES) {
-							throw new Error(`Tracked CSV is too large: ${fileName}.`);
-						}
-
-						totalCsvBytes += entry.originalSize;
-
-						if (totalCsvBytes > MAX_TOTAL_CSV_BYTES) {
-							throw new Error('Tracked zip expands beyond the 32 MB safety limit.');
-						}
-
-						return true;
-					}
-				},
-				(error, files) => {
-					if (error) {
-						reject(new Error('Tracked zip could not be opened.', { cause: error }));
-						return;
-					}
-
-					resolve(files);
-				}
-			);
+			if (!settled) {
+				settled = true;
+				resolve(files);
+			}
 		} catch (error) {
-			reject(error);
+			rejectInvalidArchive(error);
 		}
 	});
 }
@@ -870,8 +924,48 @@ async function buildWorkoutExerciseRewrite(
 ) {
 	const rows: WorkoutExercise[] = [];
 	const idsToDelete: string[] = [];
+	const workoutIds = [...latestWorkoutTemplateByWorkoutId.keys()].filter((workoutId) =>
+		workoutById.has(workoutId)
+	);
 
-	for (const [workoutId, template] of latestWorkoutTemplateByWorkoutId.entries()) {
+	if (workoutIds.length === 0) {
+		return { rows, idsToDelete };
+	}
+
+	const persistedSessions = await db.workoutSessions.where('workoutId').anyOf(workoutIds).toArray();
+	const latestPersistedStartedAtByWorkoutId = new Map<string, string>();
+
+	for (const session of persistedSessions) {
+		if (!session.startedAt) {
+			continue;
+		}
+
+		const currentStartedAt = latestPersistedStartedAtByWorkoutId.get(session.workoutId);
+
+		if (!currentStartedAt || session.startedAt > currentStartedAt) {
+			latestPersistedStartedAtByWorkoutId.set(session.workoutId, session.startedAt);
+		}
+	}
+
+	const templatesToRewrite = [...latestWorkoutTemplateByWorkoutId.entries()].filter(
+		([workoutId, template]) =>
+			workoutById.has(workoutId) &&
+			(latestPersistedStartedAtByWorkoutId.get(workoutId) ?? '') <= template.startedAt
+	);
+
+	if (templatesToRewrite.length === 0) {
+		return { rows, idsToDelete };
+	}
+
+	const existingRowsByWorkoutId = groupBy(
+		await db.workoutExercises
+			.where('workoutId')
+			.anyOf(templatesToRewrite.map(([workoutId]) => workoutId))
+			.toArray(),
+		(workoutExercise) => workoutExercise.workoutId
+	);
+
+	for (const [workoutId, template] of templatesToRewrite) {
 		const workout = workoutById.get(workoutId);
 
 		if (!workout) {
@@ -880,7 +974,7 @@ async function buildWorkoutExerciseRewrite(
 
 		const uniqueExerciseIds = [...new Set(template.exerciseIds)];
 		const uniqueExerciseIdSet = new Set(uniqueExerciseIds);
-		const existingRows = await db.workoutExercises.where('workoutId').equals(workoutId).toArray();
+		const existingRows = existingRowsByWorkoutId.get(workoutId) ?? [];
 		const existingByExerciseId = new Map(
 			existingRows.map((workoutExercise) => [workoutExercise.exerciseId, workoutExercise])
 		);
