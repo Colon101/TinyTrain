@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import type { SessionSummary } from '$lib/db';
 	import { formatMonthHeading } from '$lib/features/sessions/session-format';
 	import Icon from '$lib/ui/Icon.svelte';
+	import { trapDialogFocus } from '$lib/ui/dialog-focus';
 	import { buildCalendarMonth } from './calendar';
 
 	let {
@@ -28,20 +28,6 @@
 	let weeks = $derived(buildCalendarMonth(monthDate));
 	let isSelecting = $state(false);
 	let selectionError = $state('');
-
-	onMount(() => {
-		function handleKeydown(event: KeyboardEvent) {
-			if (event.key === 'Escape') {
-				onClose();
-			}
-		}
-
-		window.addEventListener('keydown', handleKeydown);
-
-		return () => {
-			window.removeEventListener('keydown', handleKeydown);
-		};
-	});
 
 	function getStatusTone(dayKey: string) {
 		const session = sessionByDayKey.get(dayKey);
@@ -90,6 +76,7 @@
 		aria-label="Choose a day"
 		aria-busy={isSelecting}
 		tabindex="-1"
+		use:trapDialogFocus={{ onEscape: onClose }}
 	>
 		<header class="flex items-center justify-between border-b border-white/10 px-4 py-4">
 			<div>

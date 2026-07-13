@@ -130,13 +130,30 @@ export async function ensureEditableSessionSeedRows(
 	}
 
 	await db.transaction('rw', db.sessionSets, db.sessionExercises, db.workoutSessions, async () => {
+		const stillMissingSessionExerciseIds: string[] = [];
+
+		for (const sessionExerciseId of seededSessionExerciseIds) {
+			const currentSets = await db.sessionSets
+				.where('sessionExerciseId')
+				.equals(sessionExerciseId)
+				.toArray();
+
+			if (currentSets.length === 0) {
+				stillMissingSessionExerciseIds.push(sessionExerciseId);
+			}
+		}
+
+		if (stillMissingSessionExerciseIds.length === 0) {
+			return;
+		}
+
 		await db.sessionSets.bulkAdd(
-			seededSessionExerciseIds.flatMap(
+			stillMissingSessionExerciseIds.flatMap(
 				(sessionExerciseId) => seedRowsBySessionExerciseId.get(sessionExerciseId) ?? []
 			)
 		);
 		await Promise.all(
-			seededSessionExerciseIds.map((sessionExerciseId) =>
+			stillMissingSessionExerciseIds.map((sessionExerciseId) =>
 				db.sessionExercises.update(sessionExerciseId, { updatedAt: now })
 			)
 		);

@@ -119,41 +119,60 @@ export async function listWorkoutExercises(workoutId: string) {
 }
 
 export async function addExerciseToWorkout(workoutId: string, exerciseId: string) {
+	const [workoutExercise] = await addExercisesToWorkout(workoutId, [exerciseId]);
+
+	return workoutExercise;
+}
+
+export async function addExercisesToWorkout(workoutId: string, exerciseIds: string[]) {
 	requireLoggedInUser();
+	const uniqueExerciseIds = [...new Set(exerciseIds)];
 
-	return db.transaction('rw', db.workoutExercises, db.workouts, async () => {
-		const existingWorkoutExercise = await db.workoutExercises
-			.where('[workoutId+exerciseId]')
-			.equals([workoutId, exerciseId])
-			.first();
+	if (uniqueExerciseIds.length === 0) {
+		return [];
+	}
 
-		if (existingWorkoutExercise) {
-			return existingWorkoutExercise;
-		}
-
+	return db.transaction<WorkoutExercise[]>('rw', db.workoutExercises, db.workouts, async () => {
 		const workoutExercises = await db.workoutExercises
 			.where('workoutId')
 			.equals(workoutId)
 			.toArray();
-		const nextOrder =
+		const workoutExerciseByExerciseId = new Map(
+			workoutExercises.map((workoutExercise) => [workoutExercise.exerciseId, workoutExercise])
+		);
+		let nextOrder =
 			workoutExercises.reduce(
 				(highestOrder, workoutExercise) => Math.max(highestOrder, workoutExercise.order),
 				0
 			) + 1;
 		const now = timestamp();
-		const workoutExercise: WorkoutExercise = {
-			id: createId(),
-			workoutId,
-			exerciseId,
-			order: nextOrder,
-			createdAt: now,
-			updatedAt: now
-		};
+		const workoutExercisesToAdd = uniqueExerciseIds.flatMap((exerciseId) => {
+			if (workoutExerciseByExerciseId.has(exerciseId)) {
+				return [];
+			}
 
-		await db.workoutExercises.add(workoutExercise);
-		await db.workouts.update(workoutId, { updatedAt: now });
+			const workoutExercise: WorkoutExercise = {
+				id: createId(),
+				workoutId,
+				exerciseId,
+				order: nextOrder,
+				createdAt: now,
+				updatedAt: now
+			};
+			nextOrder += 1;
+			workoutExerciseByExerciseId.set(exerciseId, workoutExercise);
+			return [workoutExercise];
+		});
 
-		return workoutExercise;
+		if (workoutExercisesToAdd.length > 0) {
+			await db.workoutExercises.bulkAdd(workoutExercisesToAdd);
+			await db.workouts.update(workoutId, { updatedAt: now });
+		}
+
+		return uniqueExerciseIds.flatMap((exerciseId) => {
+			const workoutExercise = workoutExerciseByExerciseId.get(exerciseId);
+			return workoutExercise ? [workoutExercise] : [];
+		});
 	});
 }
 

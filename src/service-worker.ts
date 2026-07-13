@@ -41,6 +41,9 @@ const ASSETS = [
 	...files, // everything in `static`
 	APP_SHELL
 ];
+const CACHEABLE_ASSET_PATHS = new Set(
+	ASSETS.map((asset) => new URL(asset, self.location.origin).pathname)
+);
 
 type DeploymentManifest = {
 	id?: unknown;
@@ -136,8 +139,29 @@ function hasAuthCacheParams(url: URL) {
 	return false;
 }
 
-function isCacheableSameOriginUrl(url: URL) {
+function isSafeSameOriginUrl(url: URL) {
 	return url.origin === self.location.origin && !hasAuthCacheParams(url);
+}
+
+function canUseOfflineCache(request: Request, url: URL) {
+	return (
+		isSafeSameOriginUrl(url) &&
+		(request.mode === 'navigate' || CACHEABLE_ASSET_PATHS.has(url.pathname))
+	);
+}
+
+function canStoreResponse(request: Request, response: Response) {
+	if (
+		request.mode === 'navigate' ||
+		request.headers.has('authorization') ||
+		response.status !== 200
+	) {
+		return false;
+	}
+
+	const cacheControl = response.headers.get('cache-control')?.toLowerCase() ?? '';
+
+	return !cacheControl.includes('no-store') && !cacheControl.includes('private');
 }
 
 async function hasCurrentDeployment(cache: Cache) {
@@ -187,7 +211,10 @@ function hasVerifiedCurrentDeployment(cache: Cache) {
 }
 
 function cacheResponse(event: FetchEvent, cache: Cache, request: Request, response: Response) {
-	if (response.status === 200 && isCacheableSameOriginUrl(new URL(request.url))) {
+	if (
+		CACHEABLE_ASSET_PATHS.has(new URL(request.url).pathname) &&
+		canStoreResponse(request, response)
+	) {
 		event.waitUntil(cache.put(request, response.clone()).catch(() => undefined));
 	}
 }
@@ -208,7 +235,7 @@ async function cacheUrls(urls: unknown) {
 			try {
 				const parsedUrl = new URL(url, self.location.origin);
 
-				if (!isCacheableSameOriginUrl(parsedUrl)) {
+				if (!isSafeSameOriginUrl(parsedUrl) || !CACHEABLE_ASSET_PATHS.has(parsedUrl.pathname)) {
 					return;
 				}
 
@@ -256,7 +283,6 @@ self.addEventListener('install', (event) => {
 
 		const cache = await caches.open(CACHE);
 		await addFilesToCache(cache);
-		await self.skipWaiting();
 	}
 
 	event.waitUntil(installCache());
@@ -269,7 +295,9 @@ self.addEventListener('activate', (event) => {
 			if (DEV || key !== CACHE) await caches.delete(key);
 		}
 
-		await self.clients.claim();
+		if (DEV) {
+			await self.clients.claim();
+		}
 	}
 
 	event.waitUntil(deleteOldCaches());
@@ -294,7 +322,7 @@ self.addEventListener('fetch', (event) => {
 	async function respond() {
 		const url = new URL(event.request.url);
 		const isSameOrigin = url.origin === self.location.origin;
-		const isCacheableSameOrigin = isSameOrigin && isCacheableSameOriginUrl(url);
+		const isCacheableSameOrigin = isSameOrigin && canUseOfflineCache(event.request, url);
 		const cache = await caches.open(CACHE);
 
 		if (DEV) {

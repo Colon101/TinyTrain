@@ -242,7 +242,7 @@ export async function flushSessionInputDraft(
 
 	if (options.clearDraft !== false) {
 		if (Object.keys(unresolvedDraftSets).length > 0) {
-			writeSessionInputDraft(sessionId, {
+			writeSessionInputDraft({
 				...draft,
 				sets: unresolvedDraftSets
 			});
