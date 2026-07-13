@@ -1,117 +1,40 @@
-import { browser } from '$app/environment';
 import type {
 	SessionFieldDelta,
 	SessionInputField,
 	SessionOverview,
 	SessionSetOverview
 } from '$lib/db';
+import {
+	clearSessionInputDraft,
+	createEmptySessionInputDraft,
+	getSessionInputDraftKey,
+	isSessionInputDraftSet,
+	readSessionInputDraft,
+	SESSION_INPUT_DRAFT_CHANGE_EVENT,
+	writeSessionInputDraft,
+	type SessionInputDraft,
+	type SessionInputDraftSet,
+	type SessionInputFieldBaseKey,
+	type SessionInputFieldKey
+} from '$lib/db/session-drafts';
 
-export type SessionInputFieldKey = `${SessionInputField}Input`;
-export type SessionInputFieldBaseKey = `${SessionInputFieldKey}Base`;
-export type SessionInputDraftSet = Partial<
-	Record<SessionInputFieldKey | SessionInputFieldBaseKey, string>
-> & {
-	updatedAt?: number;
+export {
+	clearSessionInputDraft,
+	createEmptySessionInputDraft,
+	getSessionInputDraftKey,
+	readSessionInputDraft,
+	SESSION_INPUT_DRAFT_CHANGE_EVENT,
+	writeSessionInputDraft
 };
-export type SessionInputDraft = {
-	sessionId: string;
-	sets: Record<string, SessionInputDraftSet>;
-	updatedAt: number;
+export type {
+	SessionInputDraft,
+	SessionInputDraftSet,
+	SessionInputFieldBaseKey,
+	SessionInputFieldKey
 };
-export const SESSION_INPUT_DRAFT_CHANGE_EVENT = 'tinytrain:session-input-draft-change';
-const SESSION_INPUT_DRAFT_SET_STRING_KEYS = [
-	'weightInput',
-	'weightInputBase',
-	'repsInput',
-	'repsInputBase',
-	'rirInput',
-	'rirInputBase'
-] as const satisfies readonly (SessionInputFieldKey | SessionInputFieldBaseKey)[];
 type ApplySessionInputDraftOptions = {
 	includeCompleted?: boolean;
 };
-
-function notifySessionInputDraftChange(sessionId: string) {
-	window.dispatchEvent(
-		new CustomEvent(SESSION_INPUT_DRAFT_CHANGE_EVENT, { detail: { sessionId } })
-	);
-}
-
-export function getSessionInputDraftKey(sessionId: string) {
-	return `tinytrain:session-input-draft:${sessionId}`;
-}
-
-export function createEmptySessionInputDraft(sessionId: string): SessionInputDraft {
-	return {
-		sessionId,
-		sets: {},
-		updatedAt: Date.now()
-	};
-}
-
-export function readSessionInputDraft(sessionId: string) {
-	if (!browser) {
-		return null;
-	}
-
-	try {
-		const rawDraft = localStorage.getItem(getSessionInputDraftKey(sessionId));
-		const parsedDraft = rawDraft ? (JSON.parse(rawDraft) as Partial<SessionInputDraft>) : null;
-
-		if (
-			!parsedDraft ||
-			parsedDraft.sessionId !== sessionId ||
-			!parsedDraft.sets ||
-			typeof parsedDraft.sets !== 'object' ||
-			Array.isArray(parsedDraft.sets)
-		) {
-			return null;
-		}
-
-		const sets = Object.fromEntries(
-			Object.entries(parsedDraft.sets).filter((entry): entry is [string, SessionInputDraftSet] =>
-				isSessionInputDraftSet(entry[1])
-			)
-		);
-
-		return {
-			sessionId,
-			sets,
-			updatedAt:
-				typeof parsedDraft.updatedAt === 'number' && Number.isFinite(parsedDraft.updatedAt)
-					? parsedDraft.updatedAt
-					: Date.now()
-		};
-	} catch {
-		return null;
-	}
-}
-
-export function writeSessionInputDraft(draft: SessionInputDraft) {
-	if (!browser) {
-		return;
-	}
-
-	try {
-		localStorage.setItem(getSessionInputDraftKey(draft.sessionId), JSON.stringify(draft));
-		notifySessionInputDraftChange(draft.sessionId);
-	} catch {
-		// Optional draft persistence must never interrupt rapid workout input.
-	}
-}
-
-export function clearSessionInputDraft(sessionId: string) {
-	if (!browser) {
-		return;
-	}
-
-	try {
-		localStorage.removeItem(getSessionInputDraftKey(sessionId));
-		notifySessionInputDraftChange(sessionId);
-	} catch {
-		// Optional draft cleanup must never block the underlying workout mutation.
-	}
-}
 
 export function getSessionInputFieldKey(field: SessionInputField): SessionInputFieldKey {
 	return `${field}Input`;
@@ -170,22 +93,6 @@ export function applySessionInputDraft(
 			)
 		}))
 	};
-}
-
-function isSessionInputDraftSet(value: unknown): value is SessionInputDraftSet {
-	if (!value || typeof value !== 'object' || Array.isArray(value)) {
-		return false;
-	}
-
-	const candidate = value as Record<string, unknown>;
-	const hasValidStringFields = SESSION_INPUT_DRAFT_SET_STRING_KEYS.every(
-		(key) => !Object.hasOwn(candidate, key) || typeof candidate[key] === 'string'
-	);
-	const hasValidUpdatedAt =
-		!Object.hasOwn(candidate, 'updatedAt') ||
-		(typeof candidate.updatedAt === 'number' && Number.isFinite(candidate.updatedAt));
-
-	return hasValidStringFields && hasValidUpdatedAt;
 }
 
 function hasDraftInputValue(

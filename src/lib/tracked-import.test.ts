@@ -9,7 +9,9 @@ const dbMock = vi.hoisted(() => ({
 	exercisesBulkAdd: vi.fn(),
 	workoutsToArray: vi.fn(),
 	workoutsBulkAdd: vi.fn(),
+	workoutExercisesToArray: vi.fn(),
 	workoutExercisesBulkPut: vi.fn(),
+	workoutExercisesBulkDelete: vi.fn(),
 	workoutSessionsBulkGet: vi.fn(),
 	workoutSessionsBulkAdd: vi.fn(),
 	sessionExercisesBulkAdd: vi.fn(),
@@ -35,10 +37,11 @@ vi.mock('./db', async () => {
 			workoutExercises: {
 				where: () => ({
 					equals: () => ({
-						toArray: async () => []
+						toArray: dbMock.workoutExercisesToArray
 					})
 				}),
-				bulkPut: dbMock.workoutExercisesBulkPut
+				bulkPut: dbMock.workoutExercisesBulkPut,
+				bulkDelete: dbMock.workoutExercisesBulkDelete
 			},
 			workoutSessions: {
 				bulkGet: dbMock.workoutSessionsBulkGet,
@@ -98,6 +101,7 @@ function expectNoDatabaseWrites() {
 	for (const write of [
 		dbMock.exercisesBulkAdd,
 		dbMock.workoutsBulkAdd,
+		dbMock.workoutExercisesBulkDelete,
 		dbMock.workoutExercisesBulkPut,
 		dbMock.workoutSessionsBulkAdd,
 		dbMock.sessionExercisesBulkAdd,
@@ -116,7 +120,9 @@ describe('Tracked archive', () => {
 		dbMock.exercisesBulkAdd.mockResolvedValue([]);
 		dbMock.workoutsToArray.mockResolvedValue([]);
 		dbMock.workoutsBulkAdd.mockResolvedValue([]);
+		dbMock.workoutExercisesToArray.mockResolvedValue([]);
 		dbMock.workoutExercisesBulkPut.mockResolvedValue([]);
+		dbMock.workoutExercisesBulkDelete.mockResolvedValue(undefined);
 		dbMock.workoutSessionsBulkGet.mockResolvedValue([]);
 		dbMock.workoutSessionsBulkAdd.mockResolvedValue([]);
 		dbMock.sessionExercisesBulkAdd.mockResolvedValue([]);
@@ -167,6 +173,30 @@ describe('Tracked archive', () => {
 		}
 	])('$name', async ({ file, message }) => {
 		await expect(previewTrackedArchive(file())).rejects.toThrow(message);
+		expect(dbMock.ensureDbOpen).not.toHaveBeenCalled();
+	});
+
+	it('rejects an archive before expanding an oversized CSV entry', async () => {
+		const file = trackedZip({
+			...validCsv,
+			'exercises.csv': `id,name\nbench,${'x'.repeat(12 * 1024 * 1024)}`
+		});
+
+		await expect(previewTrackedArchive(file)).rejects.toThrow(
+			'Tracked CSV is too large: exercises.csv.'
+		);
+		expect(dbMock.ensureDbOpen).not.toHaveBeenCalled();
+	});
+
+	it('rejects archives with excessive entry counts', async () => {
+		const extraFiles = Object.fromEntries(
+			Array.from({ length: 62 }, (_, index) => [`notes/${index}.txt`, 'ignored'])
+		);
+		const file = trackedZip({ ...validCsv, ...extraFiles });
+
+		await expect(previewTrackedArchive(file)).rejects.toThrow(
+			'Tracked zip contains too many files.'
+		);
 		expect(dbMock.ensureDbOpen).not.toHaveBeenCalled();
 	});
 
@@ -347,6 +377,52 @@ describe('Tracked archive', () => {
 				reps: undefined,
 				rirInput: '',
 				rir: undefined
+			})
+		]);
+	});
+
+	it('rebuilds workout templates from the newest imported session and removes stale rows', async () => {
+		dbMock.workoutExercisesToArray.mockResolvedValue([
+			{
+				id: 'existing-newer',
+				workoutId: 'tracked:workout:upper',
+				exerciseId: 'tracked:exercise:newer lift',
+				order: 2,
+				createdAt: '2026-06-01T00:00:00.000Z',
+				updatedAt: '2026-06-01T00:00:00.000Z'
+			},
+			{
+				id: 'stale-older',
+				workoutId: 'tracked:workout:upper',
+				exerciseId: 'tracked:exercise:older lift',
+				order: 1,
+				createdAt: '2026-06-01T00:00:00.000Z',
+				updatedAt: '2026-06-01T00:00:00.000Z'
+			}
+		]);
+		const file = trackedZip({
+			'exercises.csv': 'id,name\nnewer,Newer Lift\nolder,Older Lift',
+			'workouts.csv': 'id,name\nupper,Upper',
+			'sessions.csv': [
+				'id,sessionDate,workoutId,startedAt',
+				'newer-session,2026-07-02,upper,2026-07-02T10:00:00Z',
+				'older-session,2026-07-01,upper,2026-07-01T10:00:00Z'
+			].join('\n'),
+			'sets.csv': [
+				'id,sessionId,exerciseId,exerciseName,repetitions,weight,rir',
+				'newer-set,newer-session,newer,Newer Lift,8,80,2',
+				'older-set,older-session,older,Older Lift,10,50,1'
+			].join('\n')
+		});
+
+		await importTrackedArchive(file);
+
+		expect(dbMock.workoutExercisesBulkDelete).toHaveBeenCalledWith(['stale-older']);
+		expect(dbMock.workoutExercisesBulkPut).toHaveBeenCalledWith([
+			expect.objectContaining({
+				id: 'existing-newer',
+				exerciseId: 'tracked:exercise:newer lift',
+				order: 1
 			})
 		]);
 	});

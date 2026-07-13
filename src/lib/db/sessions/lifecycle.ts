@@ -252,6 +252,14 @@ export async function scheduleWorkoutSession(workoutId: string, dayKey: string) 
 		db.sessionSets,
 		db.workouts,
 		async () => {
+			const conflictingSession = (
+				await db.workoutSessions.where('dayKey').equals(dayKey).toArray()
+			).find((candidate) => candidate.id !== session.id);
+
+			if (conflictingSession) {
+				throw new Error('A session already exists for today.');
+			}
+
 			await db.workoutSessions.add(session);
 
 			if (sessionExercises.length > 0) {
@@ -379,6 +387,7 @@ export async function completeWorkoutSession(sessionId: string) {
 	await flushSessionInputDraft(sessionId);
 
 	const now = timestamp();
+	let didComplete = false;
 
 	await db.transaction(
 		'rw',
@@ -387,15 +396,34 @@ export async function completeWorkoutSession(sessionId: string) {
 		db.workoutExercises,
 		db.workouts,
 		async () => {
+			const currentSession = await db.workoutSessions.get(sessionId);
+
+			if (!currentSession) {
+				throw new Error('Session not found.');
+			}
+
+			if (currentSession.status === 'completed' || currentSession.status === 'abandoned') {
+				return;
+			}
+
+			if (currentSession.status !== 'in_progress') {
+				throw new Error('Start the session before completing it.');
+			}
+
 			await syncWorkoutExercisesFromSession(sessionId, now);
 			await db.workoutSessions.update(sessionId, {
 				status: 'completed',
-				startedAt: session.startedAt ?? now,
+				startedAt: currentSession.startedAt ?? now,
 				completedAt: now,
 				updatedAt: now
 			});
+			didComplete = true;
 		}
 	);
+
+	if (!didComplete) {
+		return;
+	}
 
 	clearSessionInputDraft(sessionId);
 
@@ -440,17 +468,43 @@ export async function updateWorkoutSessionTiming(
 		throw new Error('End time is required for a completed session.');
 	}
 
-	const currentStartedAtMs = session.startedAt ? new Date(session.startedAt).getTime() : NaN;
-	const startedAtDeltaMs = Number.isNaN(currentStartedAtMs)
-		? 0
-		: startedAtDate.getTime() - currentStartedAtMs;
 	const now = timestamp();
 
 	await db.transaction('rw', db.workoutSessions, db.sessionExercises, async () => {
+		const currentSession = await db.workoutSessions.get(sessionId);
+
+		if (!currentSession) {
+			throw new Error('Session not found.');
+		}
+
+		if (currentSession.status === 'planned') {
+			throw new Error('Start the session before editing its time.');
+		}
+
+		if (currentSession.status === 'completed' && !completedAtDate) {
+			throw new Error('End time is required for a completed session.');
+		}
+
+		const nextDayKey = toDayKey(startedAtDate);
+		const conflictingSession = (
+			await db.workoutSessions.where('dayKey').equals(nextDayKey).toArray()
+		).find((candidate) => candidate.id !== sessionId);
+
+		if (conflictingSession) {
+			throw new Error('A session already exists for that day.');
+		}
+
+		const currentStartedAtMs = currentSession.startedAt
+			? new Date(currentSession.startedAt).getTime()
+			: NaN;
+		const startedAtDeltaMs = Number.isNaN(currentStartedAtMs)
+			? 0
+			: startedAtDate.getTime() - currentStartedAtMs;
+
 		await db.workoutSessions.update(sessionId, {
 			startedAt: timestamp(startedAtDate),
 			completedAt: completedAtDate ? timestamp(completedAtDate) : undefined,
-			dayKey: toDayKey(startedAtDate),
+			dayKey: nextDayKey,
 			updatedAt: now
 		});
 

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Workout } from '$lib/db';
 	import Icon from '$lib/ui/Icon.svelte';
+	import { trapDialogFocus } from '$lib/ui/dialog-focus';
 
 	let {
 		workouts,
@@ -21,6 +22,8 @@
 		role="dialog"
 		aria-modal="true"
 		aria-labelledby="workout-picker-title"
+		tabindex="-1"
+		use:trapDialogFocus={{ onEscape: onClose }}
 	>
 		<header class="flex items-center justify-between border-b border-white/10 px-4 py-4">
 			<div>

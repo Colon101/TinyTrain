@@ -22,6 +22,7 @@
 		onDragPointerMove,
 		onDragPointerUp,
 		onDragPointerCancel,
+		onReorderKeydown,
 		children
 	}: {
 		selectedWorkout: Workout;
@@ -36,6 +37,7 @@
 		onDragPointerMove: (event: PointerEvent) => void;
 		onDragPointerUp: (event: PointerEvent) => void;
 		onDragPointerCancel: (event: PointerEvent) => void;
+		onReorderKeydown: (event: KeyboardEvent, workoutExerciseId: string) => void;
 		children?: import('svelte').Snippet;
 	} = $props();
 </script>
@@ -78,11 +80,13 @@
 							<button
 								class="flex h-10 w-10 shrink-0 touch-none items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-400 select-none"
 								type="button"
-								aria-label="Reorder exercise"
+								aria-label={`Reorder ${workoutExercise.exercise.name}. Use the up and down arrow keys.`}
+								aria-keyshortcuts="ArrowUp ArrowDown"
 								onpointerdown={(event) => onDragPointerDown(event, workoutExercise.id)}
 								onpointermove={onDragPointerMove}
 								onpointerup={onDragPointerUp}
 								onpointercancel={onDragPointerCancel}
+								onkeydown={(event) => onReorderKeydown(event, workoutExercise.id)}
 							>
 								<Icon name="grip-vertical" class="h-4 w-4" />
 							</button>

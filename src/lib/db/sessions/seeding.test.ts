@@ -11,6 +11,9 @@ const dataHarness = vi.hoisted(() => ({
 }));
 
 const runtimeHarness = vi.hoisted(() => {
+	const state = {
+		existingSessionSetIds: new Set<string>()
+	};
 	const db = {
 		exercises: {
 			bulkGet: vi.fn(async () => [])
@@ -18,7 +21,11 @@ const runtimeHarness = vi.hoisted(() => {
 		sessionSets: {
 			bulkAdd: vi.fn(async (rows: SessionSet[]) => rows.map((row) => row.id)),
 			where: vi.fn(() => ({
-				anyOf: () => ({ toArray: async () => [] })
+				anyOf: () => ({ toArray: async () => [] }),
+				equals: (sessionExerciseId: string) => ({
+					toArray: async () =>
+						state.existingSessionSetIds.has(sessionExerciseId) ? [{ id: 'concurrent-set' }] : []
+				})
 			})),
 			bulkDelete: vi.fn()
 		},
@@ -40,7 +47,7 @@ const runtimeHarness = vi.hoisted(() => {
 		})
 	};
 
-	return { db };
+	return { db, state };
 });
 
 vi.mock('../exercises', () => exerciseHarness);
@@ -83,6 +90,7 @@ const sessionExercise: SessionExerciseDetail = {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	runtimeHarness.state.existingSessionSetIds.clear();
 	exerciseHarness.getExercise.mockResolvedValue(baselineExercise);
 	exerciseHarness.listHistoricalSessionExerciseMatches.mockResolvedValue([
 		{
@@ -120,5 +128,15 @@ describe('ensureEditableSessionSeedRows', () => {
 				side: 'bilateral'
 			})
 		]);
+	});
+
+	it('rechecks for concurrent seed insertion inside the write transaction', async () => {
+		runtimeHarness.state.existingSessionSetIds.add(sessionExercise.id);
+
+		await ensureEditableSessionSeedRows(session, [sessionExercise]);
+
+		expect(runtimeHarness.db.sessionSets.bulkAdd).not.toHaveBeenCalled();
+		expect(runtimeHarness.db.sessionExercises.update).not.toHaveBeenCalled();
+		expect(runtimeHarness.db.workoutSessions.update).not.toHaveBeenCalled();
 	});
 });

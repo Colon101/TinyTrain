@@ -149,7 +149,7 @@ describe('updateSessionSetInputValues', () => {
 			repsInput: '10',
 			reps: 10
 		});
-		expect(draftHarness.write).toHaveBeenCalledWith('session-1', {
+		expect(draftHarness.write).toHaveBeenCalledWith({
 			sessionId: 'session-1',
 			updatedAt: draftUpdatedAt,
 			sets: {

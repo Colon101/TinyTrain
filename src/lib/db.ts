@@ -42,6 +42,7 @@ export {
 export { listExerciseMergeOptions, mergeExerciseHistory } from './db/exercise-merge';
 export {
 	addExerciseToWorkout,
+	addExercisesToWorkout,
 	createWorkout,
 	listWorkoutExercises,
 	listWorkoutSchedulingOptions,

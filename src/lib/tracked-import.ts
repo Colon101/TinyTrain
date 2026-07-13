@@ -1,4 +1,4 @@
-import { strFromU8, unzipSync } from 'fflate';
+import { strFromU8, unzip } from 'fflate';
 import {
 	db,
 	ensureDbOpen,
@@ -101,6 +101,10 @@ type ImportPlan = {
 
 const REQUIRED_FILES = ['sessions.csv', 'sets.csv', 'exercises.csv'];
 const OPTIONAL_FILES = ['workouts.csv', 'workout_groups.csv'];
+const MAX_ARCHIVE_BYTES = 20 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRIES = 64;
+const MAX_CSV_BYTES = 12 * 1024 * 1024;
+const MAX_TOTAL_CSV_BYTES = 32 * 1024 * 1024;
 const UNSUPPORTED_CATEGORIES = [
 	'bodyweight',
 	'daily steps',
@@ -158,7 +162,11 @@ async function readTrackedArchive(file: File): Promise<TrackedArchive> {
 		throw new Error('Choose a Tracked zip export.');
 	}
 
-	const unzipped = unzipSync(new Uint8Array(await file.arrayBuffer()));
+	if (file.size > MAX_ARCHIVE_BYTES) {
+		throw new Error('Tracked zip is too large. Choose an export smaller than 20 MB.');
+	}
+
+	const unzipped = await unzipTrackedArchive(new Uint8Array(await file.arrayBuffer()));
 	const files = new Map<string, string>();
 
 	for (const [path, contents] of Object.entries(unzipped)) {
@@ -209,6 +217,56 @@ async function readTrackedArchive(file: File): Promise<TrackedArchive> {
 		optionalFilesPresent: OPTIONAL_FILES.filter((fileName) => files.has(fileName)),
 		rows
 	};
+}
+
+function unzipTrackedArchive(data: Uint8Array) {
+	return new Promise<Record<string, Uint8Array>>((resolve, reject) => {
+		let entryCount = 0;
+		let totalCsvBytes = 0;
+
+		try {
+			unzip(
+				data,
+				{
+					filter: (entry) => {
+						entryCount += 1;
+
+						if (entryCount > MAX_ARCHIVE_ENTRIES) {
+							throw new Error('Tracked zip contains too many files.');
+						}
+
+						const fileName = entry.name.split('/').at(-1)?.toLowerCase() ?? '';
+
+						if (!fileName.endsWith('.csv')) {
+							return false;
+						}
+
+						if (entry.originalSize > MAX_CSV_BYTES) {
+							throw new Error(`Tracked CSV is too large: ${fileName}.`);
+						}
+
+						totalCsvBytes += entry.originalSize;
+
+						if (totalCsvBytes > MAX_TOTAL_CSV_BYTES) {
+							throw new Error('Tracked zip expands beyond the 32 MB safety limit.');
+						}
+
+						return true;
+					}
+				},
+				(error, files) => {
+					if (error) {
+						reject(new Error('Tracked zip could not be opened.', { cause: error }));
+						return;
+					}
+
+					resolve(files);
+				}
+			);
+		} catch (error) {
+			reject(error);
+		}
+	});
 }
 
 async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
@@ -439,7 +497,10 @@ async function writeImportPlan(
 	const sessionsToAdd: WorkoutSession[] = [];
 	const sessionExercisesToAdd: SessionExercise[] = [];
 	const sessionSetsToAdd: SessionSet[] = [];
-	const latestExerciseIdsByWorkoutId = new Map<string, string[]>();
+	const latestWorkoutTemplateByWorkoutId = new Map<
+		string,
+		{ startedAt: string; sessionId: string; exerciseIds: string[] }
+	>();
 
 	summary.exercisesCreated = exercises.created;
 	summary.exercisesMatched = exercises.matched;
@@ -455,12 +516,6 @@ async function writeImportPlan(
 		const sessionId = toTrackedId('session', sessionRow.id);
 		const sessionSetRows = setRowsBySessionId.get(sessionRow.id) ?? [];
 
-		if (existingSessionIds.has(sessionId)) {
-			summary.sessionsSkipped += 1;
-			summary.sessionSetsSkipped += countImportedSetRows(sessionSetRows);
-			continue;
-		}
-
 		const workoutName = getWorkoutName(sessionRow, plan.workoutNameByTrackedId);
 		const workout = workouts.byName.get(normalizeName(workoutName));
 
@@ -473,6 +528,33 @@ async function writeImportPlan(
 		}
 
 		const startedAt = plan.sessionStartedAtById.get(sessionRow.id)!;
+		const exerciseIds = [
+			...new Set(
+				sessionSetRows.flatMap((setRow) => {
+					const exercise = plan.exercisesByTrackedId.get(setRow.exerciseId)?.canonicalExercise;
+					return exercise ? [exercise.id] : [];
+				})
+			)
+		];
+		const currentTemplate = latestWorkoutTemplateByWorkoutId.get(workout.id);
+
+		if (
+			!currentTemplate ||
+			startedAt > currentTemplate.startedAt ||
+			(startedAt === currentTemplate.startedAt && sessionId > currentTemplate.sessionId)
+		) {
+			latestWorkoutTemplateByWorkoutId.set(workout.id, {
+				startedAt,
+				sessionId,
+				exerciseIds
+			});
+		}
+
+		if (existingSessionIds.has(sessionId)) {
+			summary.sessionsSkipped += 1;
+			summary.sessionSetsSkipped += countImportedSetRows(sessionSetRows);
+			continue;
+		}
 
 		const completedAt = toIsoTimestamp(sessionRow.endedAt) ?? startedAt;
 		const session: WorkoutSession = {
@@ -508,19 +590,9 @@ async function writeImportPlan(
 		sessionsToAdd.push(session);
 		sessionExercisesToAdd.push(...exerciseRowsForSession);
 		sessionSetsToAdd.push(...setRowsForSession);
-		latestExerciseIdsByWorkoutId.set(
-			workout.id,
-			exerciseRowsForSession.map((sessionExercise) => sessionExercise.exerciseId)
-		);
 		summary.sessionsImported += 1;
 		summary.sessionSetsImported += setRowsForSession.length;
 	}
-
-	const workoutExercisesToPut = await buildWorkoutExerciseRows(
-		latestExerciseIdsByWorkoutId,
-		workouts.byId,
-		now
-	);
 
 	await db.transaction(
 		'rw',
@@ -551,8 +623,18 @@ async function writeImportPlan(
 				await db.sessionSets.bulkAdd(sessionSetsToAdd);
 			}
 
-			if (workoutExercisesToPut.length > 0) {
-				await db.workoutExercises.bulkPut(workoutExercisesToPut);
+			const workoutExerciseRewrite = await buildWorkoutExerciseRewrite(
+				latestWorkoutTemplateByWorkoutId,
+				workouts.byId,
+				now
+			);
+
+			if (workoutExerciseRewrite.idsToDelete.length > 0) {
+				await db.workoutExercises.bulkDelete(workoutExerciseRewrite.idsToDelete);
+			}
+
+			if (workoutExerciseRewrite.rows.length > 0) {
+				await db.workoutExercises.bulkPut(workoutExerciseRewrite.rows);
 			}
 		}
 	);
@@ -778,24 +860,34 @@ function createImportedSet(
 	};
 }
 
-async function buildWorkoutExerciseRows(
-	latestExerciseIdsByWorkoutId: Map<string, string[]>,
+async function buildWorkoutExerciseRewrite(
+	latestWorkoutTemplateByWorkoutId: Map<
+		string,
+		{ startedAt: string; sessionId: string; exerciseIds: string[] }
+	>,
 	workoutById: Map<string, Workout>,
 	now: string
 ) {
 	const rows: WorkoutExercise[] = [];
+	const idsToDelete: string[] = [];
 
-	for (const [workoutId, exerciseIds] of latestExerciseIdsByWorkoutId.entries()) {
+	for (const [workoutId, template] of latestWorkoutTemplateByWorkoutId.entries()) {
 		const workout = workoutById.get(workoutId);
 
 		if (!workout) {
 			continue;
 		}
 
-		const uniqueExerciseIds = [...new Set(exerciseIds)];
+		const uniqueExerciseIds = [...new Set(template.exerciseIds)];
+		const uniqueExerciseIdSet = new Set(uniqueExerciseIds);
 		const existingRows = await db.workoutExercises.where('workoutId').equals(workoutId).toArray();
 		const existingByExerciseId = new Map(
 			existingRows.map((workoutExercise) => [workoutExercise.exerciseId, workoutExercise])
+		);
+		idsToDelete.push(
+			...existingRows
+				.filter((workoutExercise) => !uniqueExerciseIdSet.has(workoutExercise.exerciseId))
+				.map((workoutExercise) => workoutExercise.id)
 		);
 
 		rows.push(
@@ -814,7 +906,7 @@ async function buildWorkoutExerciseRows(
 		);
 	}
 
-	return rows;
+	return { rows, idsToDelete };
 }
 
 function parseCsvFile(contents: string, fileName: string): CsvRow[] {

@@ -3,7 +3,8 @@ import type { WorkoutSession } from '../models';
 
 const runtimeHarness = vi.hoisted(() => {
 	const state = {
-		session: undefined as WorkoutSession | undefined
+		session: undefined as WorkoutSession | undefined,
+		conflictingSessions: [] as WorkoutSession[]
 	};
 	const db = {
 		workoutSessions: {
@@ -17,7 +18,15 @@ const runtimeHarness = vi.hoisted(() => {
 
 				state.session = { ...state.session, ...patch };
 				return 1;
-			})
+			}),
+			where: vi.fn(() => ({
+				equals: (dayKey: string) => ({
+					toArray: async () =>
+						[state.session, ...state.conflictingSessions].filter(
+							(session): session is WorkoutSession => session?.dayKey === dayKey
+						)
+				})
+			}))
 		},
 		sessionExercises: {
 			where: vi.fn(() => ({
@@ -63,10 +72,11 @@ vi.mock('./seeding', () => ({
 	ensureEditableSessionSeedRows: vi.fn()
 }));
 
-import { updateWorkoutSessionTiming } from './lifecycle';
+import { completeWorkoutSession, updateWorkoutSessionTiming } from './lifecycle';
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	runtimeHarness.state.conflictingSessions = [];
 	runtimeHarness.state.session = {
 		id: 'session-1',
 		workoutId: 'workout-1',
@@ -88,5 +98,41 @@ describe('updateWorkoutSessionTiming', () => {
 
 		expect(runtimeHarness.db.transaction).not.toHaveBeenCalled();
 		expect(runtimeHarness.state.session?.completedAt).toBe('2026-05-05T11:00:00.000Z');
+	});
+
+	it('rejects moving a session onto a day that already has a session', async () => {
+		runtimeHarness.state.conflictingSessions = [
+			{
+				...runtimeHarness.state.session!,
+				id: 'session-2'
+			}
+		];
+
+		await expect(
+			updateWorkoutSessionTiming(
+				'session-1',
+				'2026-05-05T09:30:00.000Z',
+				'2026-05-05T10:30:00.000Z'
+			)
+		).rejects.toThrow('A session already exists for that day.');
+
+		expect(runtimeHarness.db.workoutSessions.update).not.toHaveBeenCalled();
+	});
+});
+
+describe('completeWorkoutSession', () => {
+	it('does not allow a planned session to skip the in-progress state', async () => {
+		runtimeHarness.state.session = {
+			...runtimeHarness.state.session!,
+			status: 'planned',
+			startedAt: undefined,
+			completedAt: undefined
+		};
+
+		await expect(completeWorkoutSession('session-1')).rejects.toThrow(
+			'Start the session before completing it.'
+		);
+
+		expect(runtimeHarness.db.workoutSessions.update).not.toHaveBeenCalled();
 	});
 });

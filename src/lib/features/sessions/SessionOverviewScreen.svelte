@@ -16,6 +16,7 @@
 		writeExercisePickerCache
 	} from '$lib/features/workouts/exercise-picker-cache';
 	import Icon from '$lib/ui/Icon.svelte';
+	import { trapDialogFocus } from '$lib/ui/dialog-focus';
 	import SessionDragPreview from './SessionDragPreview.svelte';
 	import SessionExerciseList from './SessionExerciseList.svelte';
 	import SessionOverviewHeader from './SessionOverviewHeader.svelte';
@@ -682,9 +683,7 @@
 			return;
 		}
 
-		for (const exerciseId of exerciseIds) {
-			await dbApi.addExerciseToSession(overview.summary.id, exerciseId);
-		}
+		await dbApi.addExercisesToSession(overview.summary.id, exerciseIds);
 
 		closeExercisePicker();
 	}
@@ -1305,7 +1304,11 @@
 	{#if isTimeEditorOpen}
 		<div
 			class="fixed inset-0 z-40 flex items-end px-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]"
-			role="presentation"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="time-editor-title"
+			tabindex="-1"
+			use:trapDialogFocus={{ onEscape: closeTimeEditor, initialFocus: 'input[type="time"]' }}
 		>
 			<button
 				class="absolute inset-0 bg-black/65 backdrop-blur-[2px]"
@@ -1326,7 +1329,10 @@
 						<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
 							Edit time
 						</p>
-						<h2 class="mt-1 text-2xl leading-tight font-semibold text-white tabular-nums">
+						<h2
+							id="time-editor-title"
+							class="mt-1 text-2xl leading-tight font-semibold text-white tabular-nums"
+						>
 							{timeEditorDurationText}
 						</h2>
 					</div>

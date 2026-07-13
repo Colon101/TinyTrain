@@ -8,6 +8,7 @@ export {
 export { flushSessionInputDraft } from './sessions/inputs';
 export {
 	addExerciseToSession,
+	addExercisesToSession,
 	addSessionSetRow,
 	removeSessionExercise,
 	removeSessionSetRow,

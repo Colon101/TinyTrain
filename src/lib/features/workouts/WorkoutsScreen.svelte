@@ -549,10 +549,7 @@
 
 		void runMutation(async () => {
 			const api = requireDbApi();
-
-			for (const exerciseId of exerciseIdsToAdd) {
-				await api.addExerciseToWorkout(selectedWorkoutId, exerciseId);
-			}
+			await api.addExercisesToWorkout(selectedWorkoutId, exerciseIdsToAdd);
 
 			closeExercisePicker();
 			await loadSelectedWorkoutExercises();
@@ -749,7 +746,7 @@
 	}
 
 	function handleDragPointerMove(event: PointerEvent) {
-		if (!draggedWorkoutExerciseId || !dragPreview) {
+		if (!draggedWorkoutExerciseId || !dragPreview || event.pointerId !== dragPreview.pointerId) {
 			return;
 		}
 
@@ -765,6 +762,10 @@
 	}
 
 	function handleDragPointerUp(event: PointerEvent) {
+		if (dragPreview && event.pointerId !== dragPreview.pointerId) {
+			return;
+		}
+
 		if (!draggedWorkoutExerciseId || !selectedWorkoutId) {
 			resetDrag();
 			return;
@@ -786,6 +787,14 @@
 			return;
 		}
 
+		persistWorkoutExerciseOrder(workoutId, startedWorkoutExerciseIds, finalWorkoutExerciseIds);
+	}
+
+	function persistWorkoutExerciseOrder(
+		workoutId: string,
+		startedWorkoutExerciseIds: string[],
+		finalWorkoutExerciseIds: string[]
+	) {
 		void runMutation(async () => {
 			try {
 				await requireDbApi().reorderWorkoutExercises(workoutId, finalWorkoutExerciseIds);
@@ -804,7 +813,43 @@
 		});
 	}
 
+	function handleReorderKeydown(event: KeyboardEvent, workoutExerciseId: string) {
+		if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') {
+			return;
+		}
+
+		event.preventDefault();
+
+		if (isSaving || !selectedWorkoutId) {
+			return;
+		}
+
+		const startedWorkoutExerciseIds = getWorkoutExerciseIds();
+		const currentIndex = startedWorkoutExerciseIds.indexOf(workoutExerciseId);
+		const nextIndex = currentIndex + (event.key === 'ArrowUp' ? -1 : 1);
+
+		if (currentIndex < 0 || nextIndex < 0 || nextIndex >= startedWorkoutExerciseIds.length) {
+			return;
+		}
+
+		const finalWorkoutExerciseIds = [...startedWorkoutExerciseIds];
+		[finalWorkoutExerciseIds[currentIndex], finalWorkoutExerciseIds[nextIndex]] = [
+			finalWorkoutExerciseIds[nextIndex],
+			finalWorkoutExerciseIds[currentIndex]
+		];
+		orderWorkoutExercises(finalWorkoutExerciseIds);
+		persistWorkoutExerciseOrder(
+			selectedWorkoutId,
+			startedWorkoutExerciseIds,
+			finalWorkoutExerciseIds
+		);
+	}
+
 	function handleDragPointerCancel(event: PointerEvent) {
+		if (dragPreview && event.pointerId !== dragPreview.pointerId) {
+			return;
+		}
+
 		const target = event.currentTarget as HTMLElement;
 
 		if (target.hasPointerCapture(event.pointerId)) {
@@ -865,6 +910,7 @@
 		onDragPointerMove={handleDragPointerMove}
 		onDragPointerUp={handleDragPointerUp}
 		onDragPointerCancel={handleDragPointerCancel}
+		onReorderKeydown={handleReorderKeydown}
 	>
 		{#if isExercisePickerOpen}
 			<ExercisePickerSheet
