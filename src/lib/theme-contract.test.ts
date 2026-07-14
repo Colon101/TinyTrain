@@ -96,9 +96,25 @@ describe('accent theme contract', () => {
 
 	it('restores the same persisted preference key before the app paints', () => {
 		const appTemplate = readFileSync(appTemplatePath, 'utf8');
+		const storageRead = `const savedAccentTheme = localStorage.getItem('${ACCENT_THEME_STORAGE_KEY}');`;
+		const themeAssignment = 'document.documentElement.dataset.accentTheme = savedAccentTheme;';
+		const inlineScripts = [...appTemplate.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];
+		const bootstrapScripts = inlineScripts.filter((match) => match[1].includes(storageRead));
 
-		expect(appTemplate).toContain(`localStorage.getItem('${ACCENT_THEME_STORAGE_KEY}')`);
-		expect(appTemplate).toContain('document.documentElement.dataset.accentTheme');
+		expect(bootstrapScripts).toHaveLength(1);
+
+		const [bootstrapMatch] = bootstrapScripts;
+		const bootstrapScript = bootstrapMatch[1];
+		const readIndex = bootstrapScript.indexOf(storageRead);
+		const assignmentIndex = bootstrapScript.indexOf(themeAssignment);
+		const bootstrapEndIndex = bootstrapMatch.index! + bootstrapMatch[0].length;
+		const svelteHeadIndex = appTemplate.indexOf('%sveltekit.head%');
+		const svelteBodyIndex = appTemplate.indexOf('%sveltekit.body%');
+
+		expect(readIndex).toBeGreaterThanOrEqual(0);
+		expect(assignmentIndex).toBeGreaterThan(readIndex);
+		expect(bootstrapEndIndex).toBeLessThan(svelteHeadIndex);
+		expect(svelteHeadIndex).toBeLessThan(svelteBodyIndex);
 	});
 
 	it('keeps share-image accent and positive progress independent', () => {
