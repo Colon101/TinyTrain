@@ -15,9 +15,17 @@ describe('accent theme preference', () => {
 		});
 	});
 
+	it('includes the requested Olive Brown preset exactly', () => {
+		expect(ACCENT_THEMES.find((theme) => theme.id === 'olive-brown')).toMatchObject({
+			name: 'Olive Brown',
+			hex: '#5B543A'
+		});
+	});
+
 	it('accepts only registered theme identifiers', () => {
 		expect(isAccentThemeId('emerald')).toBe(true);
 		expect(isAccentThemeId('ocean-blue')).toBe(true);
+		expect(isAccentThemeId('olive-brown')).toBe(true);
 		expect(isAccentThemeId('custom')).toBe(false);
 		expect(isAccentThemeId(null)).toBe(false);
 	});

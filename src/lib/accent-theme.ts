@@ -37,6 +37,12 @@ export const ACCENT_THEMES = [
 		name: 'Arctic',
 		hex: '#67E8F9',
 		description: 'Cool and bright'
+	},
+	{
+		id: 'olive-brown',
+		name: 'Olive Brown',
+		hex: '#5B543A',
+		description: 'Earthy and grounded'
 	}
 ] as const;
 

@@ -11,18 +11,20 @@ the first CSS paint so returning users do not see an emerald flash before their 
 
 ## Available presets
 
-| Preset     | Main accent | Character            |
-| ---------- | ----------- | -------------------- |
-| Emerald    | `#6EE7B7`   | Fresh and focused    |
-| Ocean Blue | `#8AA3C1`   | Calm and understated |
-| Lavender   | `#C4B5FD`   | Soft and reflective  |
-| Rose       | `#FDA4AF`   | Warm and expressive  |
-| Amber      | `#FCD34D`   | Bold and energetic   |
-| Arctic     | `#67E8F9`   | Cool and bright      |
+| Preset      | Main accent | Character            |
+| ----------- | ----------- | -------------------- |
+| Emerald     | `#6EE7B7`   | Fresh and focused    |
+| Ocean Blue  | `#8AA3C1`   | Calm and understated |
+| Lavender    | `#C4B5FD`   | Soft and reflective  |
+| Rose        | `#FDA4AF`   | Warm and expressive  |
+| Amber       | `#FCD34D`   | Bold and energetic   |
+| Arctic      | `#67E8F9`   | Cool and bright      |
+| Olive Brown | `#5B543A`   | Earthy and grounded  |
 
-Ocean Blue's main accent is the product-specified `#8AA3C1` exactly. Each preset also defines its own
-soft/subtle accent values, shadow, and tinted dark surface stack. Emerald remains the fallback for
-missing, invalid, or unavailable browser storage.
+Ocean Blue and Olive Brown use the product-specified `#8AA3C1` and `#5B543A` values exactly. Each
+preset also defines its own soft/subtle accent values, shadow, tinted dark surface stack, and a
+contrasting solid-button foreground. Emerald remains the fallback for missing, invalid, or
+unavailable browser storage.
 
 ## Theme tokens
 
@@ -143,7 +145,7 @@ positive values untouched unless a separate product setting is introduced for th
 
 `theme-contract.test.ts` verifies that every metadata entry has a matching CSS block, exact main
 accent, and WCAG AA contrast for text on the solid accent. `accent-theme.test.ts` protects preset
-validation and the product-specified Ocean Blue value.
+validation and the product-specified Ocean Blue and Olive Brown values.
 
 QA a new theme against this screen matrix:
 

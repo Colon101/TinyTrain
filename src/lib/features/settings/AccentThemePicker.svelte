@@ -28,9 +28,13 @@
 	</div>
 
 	<div class="grid grid-cols-2 gap-2.5">
-		{#each ACCENT_THEMES as theme (theme.id)}
+		{#each ACCENT_THEMES as theme, index (theme.id)}
 			<label
-				class="relative min-w-0 cursor-pointer"
+				class={`relative min-w-0 cursor-pointer ${
+					ACCENT_THEMES.length % 2 === 1 && index === ACCENT_THEMES.length - 1
+						? 'col-span-2 w-[calc(50%-0.3125rem)] justify-self-center'
+						: ''
+				}`}
 				style={`--preview-accent: ${theme.hex}; --preview-surface: var(--theme-preset-${theme.id}-surface);`}
 			>
 				<input
