@@ -1,9 +1,28 @@
 # Accent theming contract and audit
 
-TinyTrain's accent is a runtime CSS-variable contract in `src/routes/layout.css`. The current
-values preserve the existing emerald appearance, but the UI no longer depends on Tailwind's
-concrete emerald palette. A future theme picker can override the `--theme-*` variables on the root
-element without rewriting components.
+TinyTrain's accent is a runtime CSS-variable contract in `src/routes/layout.css`. The default values
+preserve the existing emerald appearance, but the UI no longer depends on Tailwind's concrete
+emerald palette. The Appearance settings picker switches the complete `--theme-*` stack by setting
+`data-accent-theme` on the root element, without rewriting individual components.
+
+`src/lib/accent-theme.ts` owns the selectable preset metadata, preference validation, persistence,
+cross-tab synchronization, and live application. `src/app.html` restores the saved preset before
+the first CSS paint so returning users do not see an emerald flash before their theme appears.
+
+## Available presets
+
+| Preset   | Main accent | Character            |
+| -------- | ----------- | -------------------- |
+| Emerald  | `#6EE7B7`   | Fresh and focused    |
+| Steel    | `#8AA3C1`   | Calm and understated |
+| Lavender | `#C4B5FD`   | Soft and reflective  |
+| Rose     | `#FDA4AF`   | Warm and expressive  |
+| Amber    | `#FCD34D`   | Bold and energetic   |
+| Arctic   | `#67E8F9`   | Cool and bright      |
+
+Steel's main accent is the product-specified `#8AA3C1` exactly. Each preset also defines its own
+soft/subtle accent values, shadow, and tinted dark surface stack. Emerald remains the fallback for
+missing, invalid, or unavailable browser storage.
 
 ## Theme tokens
 
@@ -96,9 +115,10 @@ accent consumes the global contract; semantic items explicitly do not change wit
 
 ### Settings and data tools
 
-- `SettingsScreen.svelte`: Settings, Appearance, Database, Merge exercises, and Import icon badges;
-  loading/progress states; selected appearance card/check/focus; primary merge/import/upload
-  actions; importer information tint; and limb-side selections.
+- `SettingsScreen.svelte` and `AccentThemePicker.svelte`: live accent preset selection; Settings,
+  Appearance, Database, Merge exercises, and Import icon badges; loading/progress states; selected
+  appearance card/check/focus; primary merge/import/upload actions; importer information tint; and
+  limb-side selections.
 - The formerly separate sky importer palette now uses the global accent, and the Database badge is
   aligned with the other accent icon badges.
 - The `+2` appearance preview uses semantic positive. Imported-session confirmation uses semantic
@@ -113,12 +133,17 @@ runtime CSS variables and are not part of the selectable in-app accent contract.
 or browser chrome should vary by theme later, they will need generated assets and explicit metadata
 updates rather than component-token changes.
 
-## Adding a future theme
+## Adding a preset
 
-Override all `--theme-*` values together, including the surface stack when the new accent needs a
-different ambient tint. In particular, never assume dark text is readable on every accent; set
-`--theme-on-accent` for the selected color. Keep semantic success and positive values untouched
-unless a separate product setting is introduced for them.
+Add its user-facing metadata to `ACCENT_THEMES`, then add the matching
+`:root[data-accent-theme='…']` variable block and preview surface in `layout.css`. Override all
+`--theme-*` values together, including the surface stack. Never assume dark text is readable on
+every accent; set and test `--theme-on-accent` for the selected color. Keep semantic success and
+positive values untouched unless a separate product setting is introduced for them.
+
+`theme-contract.test.ts` verifies that every metadata entry has a matching CSS block, exact main
+accent, and WCAG AA contrast for text on the solid accent. `accent-theme.test.ts` protects preset
+validation and the product-specified Steel value.
 
 QA a new theme against this screen matrix:
 

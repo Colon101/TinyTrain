@@ -3,8 +3,11 @@
 	import { injectSpeedInsights } from '@vercel/speed-insights/sveltekit';
 	import { dev } from '$app/environment';
 	import { injectAnalytics } from '@vercel/analytics/sveltekit';
+	import { initializeAccentThemePreference } from '$lib/accent-theme';
 
 	let { children } = $props();
+
+	initializeAccentThemePreference();
 
 	const privateDynamicRouteReplacements: Array<[RegExp, string]> = [
 		[

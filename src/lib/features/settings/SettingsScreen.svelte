@@ -20,6 +20,7 @@
 		saveProgressIndicatorPosition,
 		type ProgressIndicatorPosition
 	} from '$lib/progress-indicator-preference';
+	import AccentThemePicker from '$lib/features/settings/AccentThemePicker.svelte';
 	import ExercisePickerSheet from '$lib/features/workouts/ExercisePickerSheet.svelte';
 	import Icon from '$lib/ui/Icon.svelte';
 
@@ -560,12 +561,16 @@
 			</div>
 			<div class="min-w-0">
 				<p class="text-xs font-semibold tracking-[0.18em] text-zinc-500 uppercase">Appearance</p>
-				<h2 class="mt-1 text-lg font-semibold text-white">Workout inputs</h2>
+				<h2 class="mt-1 text-lg font-semibold text-white">Appearance</h2>
 				<p class="mt-1 text-sm leading-5 text-zinc-400">
-					Choose where changes from your previous session appear inside Weight, Reps, and RIR.
+					Personalize TinyTrain and choose how workout comparisons appear.
 				</p>
 			</div>
 		</div>
+
+		<AccentThemePicker />
+
+		<div class="h-px bg-white/10"></div>
 
 		<fieldset class="grid gap-3">
 			<legend class="text-sm font-semibold text-white">Comparison indicator position</legend>

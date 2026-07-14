@@ -2,10 +2,14 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { ACCENT_THEMES, ACCENT_THEME_STORAGE_KEY } from './accent-theme';
 import { resolveShareImagePalette } from './features/sessions/session-share-image';
 
 const sourceRoot = fileURLToPath(new URL('../', import.meta.url));
 const tokenRegistryPath = join(sourceRoot, 'routes', 'layout.css');
+const themeMetadataPath = join(sourceRoot, 'lib', 'accent-theme.ts');
+const appTemplatePath = join(sourceRoot, 'app.html');
+const concretePaletteRegistryPaths = new Set([tokenRegistryPath, themeMetadataPath]);
 const sourceExtensions = new Set(['.css', '.svelte', '.ts']);
 
 function collectSourceFiles(directory: string): string[] {
@@ -30,6 +34,13 @@ function readHexVariable(css: string, variable: string) {
 	return match![1];
 }
 
+function readThemeBlock(css: string, themeId: string) {
+	const selector = themeId === 'emerald' ? ':root' : `:root\\[data-accent-theme='${themeId}'\\]`;
+	const match = css.match(new RegExp(`${selector}\\s*\\{([\\s\\S]*?)\\}`));
+	expect(match, `${themeId} should have a CSS theme block`).not.toBeNull();
+	return match![1];
+}
+
 function getRelativeLuminance(color: string) {
 	const channels = color
 		.slice(1)
@@ -43,14 +54,14 @@ function getRelativeLuminance(color: string) {
 }
 
 describe('accent theme contract', () => {
-	it('keeps concrete green and legacy importer palettes in the token registry', () => {
+	it('keeps concrete theme colors in the theme registries', () => {
 		const forbiddenPalette = /\b(?:emerald|green|sky|teal)-\d{2,3}\b/gi;
 		const forbiddenLiteral =
 			/#(?:ecfdf5|d1fae5|a7f3d0|6ee7b7|34d399|10b981|059669|047857|065f46|064e3b|022c22|e0f2fe|bae6fd|7dd3fc|082f49)\b|rgba?\(\s*52(?:\s*,\s*|\s+)211(?:\s*,\s*|\s+)153\b/gi;
 		const forbiddenSurfaceLiteral =
 			/#(?:070a0d|0b1014|06080a|080b0d|0e1417|11171a|0f1519|0b1013|121a20|1c252c)\b/gi;
 		const violations = collectSourceFiles(sourceRoot)
-			.filter((path) => path !== tokenRegistryPath)
+			.filter((path) => !concretePaletteRegistryPaths.has(path))
 			.flatMap((path) => {
 				const source = readFileSync(path, 'utf8');
 				const matches = [
@@ -65,15 +76,29 @@ describe('accent theme contract', () => {
 		expect(violations).toEqual([]);
 	});
 
-	it('keeps the solid accent and foreground readable', () => {
+	it('registers every preset with its exact accent and a readable foreground', () => {
 		const css = readFileSync(tokenRegistryPath, 'utf8');
-		const accentLuminance = getRelativeLuminance(readHexVariable(css, '--theme-accent'));
-		const foregroundLuminance = getRelativeLuminance(readHexVariable(css, '--theme-on-accent'));
-		const contrast =
-			(Math.max(accentLuminance, foregroundLuminance) + 0.05) /
-			(Math.min(accentLuminance, foregroundLuminance) + 0.05);
 
-		expect(contrast).toBeGreaterThanOrEqual(4.5);
+		for (const theme of ACCENT_THEMES) {
+			const block = readThemeBlock(css, theme.id);
+			const accent = readHexVariable(block, '--theme-accent');
+			const foreground = readHexVariable(block, '--theme-on-accent');
+			const accentLuminance = getRelativeLuminance(accent);
+			const foregroundLuminance = getRelativeLuminance(foreground);
+			const contrast =
+				(Math.max(accentLuminance, foregroundLuminance) + 0.05) /
+				(Math.min(accentLuminance, foregroundLuminance) + 0.05);
+
+			expect(accent.toLowerCase(), `${theme.name} accent`).toBe(theme.hex.toLowerCase());
+			expect(contrast, `${theme.name} contrast`).toBeGreaterThanOrEqual(4.5);
+		}
+	});
+
+	it('restores the same persisted preference key before the app paints', () => {
+		const appTemplate = readFileSync(appTemplatePath, 'utf8');
+
+		expect(appTemplate).toContain(`localStorage.getItem('${ACCENT_THEME_STORAGE_KEY}')`);
+		expect(appTemplate).toContain('document.documentElement.dataset.accentTheme');
 	});
 
 	it('keeps share-image accent and positive progress independent', () => {

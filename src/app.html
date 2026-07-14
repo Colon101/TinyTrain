@@ -18,6 +18,18 @@
 		<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 		<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 		<script>
+			// Apply the saved theme before CSS paints. Keep this key synchronized with accent-theme.ts.
+			try {
+				const savedAccentTheme = localStorage.getItem('tinytrain:accent-theme:v1');
+
+				if (savedAccentTheme) {
+					document.documentElement.dataset.accentTheme = savedAccentTheme;
+				}
+			} catch {
+				// Storage may be disabled; the CSS default remains fully usable.
+			}
+		</script>
+		<script>
 			window.__tinytrainInstallPrompt = null;
 			window.addEventListener('beforeinstallprompt', (event) => {
 				event.preventDefault();
