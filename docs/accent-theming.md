@@ -49,7 +49,7 @@ also inherit the current accent through `accent-color`.
 
 The fixed semantic variables are intentionally outside the theme:
 
-- `--semantic-success*` keeps completed-session dots and the `Done` pill green.
+- `--semantic-success*` keeps the `Done` pill and completion confirmations green.
 - `--semantic-positive*` keeps improved weight/reps/RIR values and positive workout comparisons
   green.
 - Warning, destructive, regression, disabled, and neutral colors remain on their existing semantic
@@ -79,8 +79,8 @@ accent consumes the global contract; semantic items explicitly do not change wit
 - `DayOverviewPanel.svelte`: Schedule workout action.
 - `HomeSessionCard.svelte`: current/selected-session label and Start action.
 - `DayPickerSheet.svelte`: Choose day label, month navigation hovers, selected-day tint/border, and
-  today text. Completed dots use semantic success; planned dots remain warning amber.
-- `HomeCalendar.svelte`: completed dots use semantic success; planned dots remain warning amber.
+  today text. Completed dots use the active accent; planned dots remain warning amber.
+- `HomeCalendar.svelte`: completed dots use the active accent; planned dots remain warning amber.
 - `WorkoutPickerSheet.svelte`: Schedule workout label and workout-row hover border.
 
 ### Workouts and exercise library

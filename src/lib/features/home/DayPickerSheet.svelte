@@ -36,7 +36,7 @@
 			return '';
 		}
 
-		return session.status === 'completed' ? 'bg-success' : 'bg-amber-300';
+		return session.status === 'completed' ? 'bg-accent' : 'bg-amber-300';
 	}
 
 	async function chooseDay(dayKey: string) {

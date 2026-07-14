@@ -76,6 +76,15 @@ describe('accent theme contract', () => {
 		expect(violations).toEqual([]);
 	});
 
+	it('keeps completed calendar dots on the active accent', () => {
+		for (const file of ['HomeCalendar.svelte', 'DayPickerSheet.svelte']) {
+			const source = readFileSync(join(sourceRoot, 'lib', 'features', 'home', file), 'utf8');
+
+			expect(source).toContain("session.status === 'completed' ? 'bg-accent' : 'bg-amber-300'");
+			expect(source).not.toContain("session.status === 'completed' ? 'bg-success'");
+		}
+	});
+
 	it('registers every preset with its exact accent and a readable foreground', () => {
 		const css = readFileSync(tokenRegistryPath, 'utf8');
 
