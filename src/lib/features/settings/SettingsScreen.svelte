@@ -506,7 +506,7 @@
 		aria-labelledby="tracked-import-title"
 	>
 		<div
-			class="grid w-full max-w-sm gap-5 rounded-2xl border border-accent-soft/20 bg-zinc-950 p-6 text-center shadow-2xl shadow-accent-shadow/30"
+			class="grid w-full max-w-sm gap-5 rounded-2xl border border-accent-soft/20 bg-surface-raised p-6 text-center shadow-2xl shadow-accent-shadow/30"
 		>
 			<div
 				class="mx-auto grid h-16 w-16 place-items-center rounded-full border border-accent-soft/25 bg-accent/10 text-accent-subtle"

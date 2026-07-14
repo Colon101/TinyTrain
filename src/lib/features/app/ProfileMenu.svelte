@@ -158,7 +158,7 @@
 		aria-describedby="manual-sync-description"
 	>
 		<div
-			class="grid w-full max-w-sm gap-5 rounded-2xl border border-accent-soft/20 bg-zinc-950 p-6 text-center shadow-2xl shadow-accent-shadow/30"
+			class="grid w-full max-w-sm gap-5 rounded-2xl border border-accent-soft/20 bg-surface-raised p-6 text-center shadow-2xl shadow-accent-shadow/30"
 		>
 			<div
 				class="mx-auto grid h-16 w-16 place-items-center rounded-full border border-accent-soft/25 bg-accent/10 text-accent-subtle"
@@ -200,7 +200,7 @@
 
 {#if isManualSyncing && !isManualSyncOverlayOpen}
 	<div
-		class="fixed right-4 bottom-4 z-40 flex items-center gap-2 rounded-lg border border-accent-soft/20 bg-zinc-950 px-4 py-3 text-sm font-medium text-zinc-200 shadow-xl"
+		class="fixed right-4 bottom-4 z-40 flex items-center gap-2 rounded-lg border border-accent-soft/20 bg-surface-raised px-4 py-3 text-sm font-medium text-zinc-200 shadow-xl"
 		role="status"
 	>
 		<Icon name="loader-circle" class="h-4 w-4 animate-spin text-accent-soft" />

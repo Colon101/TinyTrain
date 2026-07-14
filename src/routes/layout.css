@@ -37,7 +37,7 @@
 		--theme-accent-subtle: #d1fae5;
 		--theme-accent-shadow: #022c22;
 		--theme-on-accent: #09090b;
-		--theme-accent-glow: rgb(52 211 153 / 0.14);
+		--theme-accent-glow: color-mix(in srgb, var(--theme-accent) 14%, transparent);
 		--theme-surface-canvas: #070a0d;
 		--theme-surface-canvas-top: #0b1014;
 		--theme-surface-canvas-bottom: #06080a;

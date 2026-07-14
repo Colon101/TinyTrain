@@ -22,6 +22,11 @@ export type ShareImagePalette = {
 	lineSoft: string;
 };
 
+type ShareImageRenderContext = {
+	ctx: CanvasRenderingContext2D;
+	palette: ShareImagePalette;
+};
+
 const IMAGE_WIDTH = 560;
 const OUTER_PADDING = 24;
 const HEADER_HEIGHT = 252;
@@ -58,12 +63,13 @@ export async function renderSessionShareImage(
 		throw new Error('Image rendering is not available in this browser.');
 	}
 	const palette = getShareImagePalette();
+	const renderContext: ShareImageRenderContext = { ctx, palette };
 
 	ctx.fillStyle = palette.page;
 	ctx.fillRect(0, 0, IMAGE_WIDTH, layoutHeight);
 
-	drawHeader(ctx, overview, nowMs, previousOverview, palette);
-	drawExercises(ctx, overview, palette);
+	drawHeader(renderContext, overview, nowMs, previousOverview);
+	drawExercises(renderContext, overview);
 	drawWatermark(ctx, layoutHeight);
 
 	const blob = await canvasToBlob(canvas);
@@ -118,12 +124,12 @@ function getExerciseCardHeight(sessionExercise: SessionExerciseOverview) {
 }
 
 function drawHeader(
-	ctx: CanvasRenderingContext2D,
+	renderContext: ShareImageRenderContext,
 	overview: SessionOverview,
 	nowMs: number,
-	previousOverview: SessionOverview | null,
-	palette: ShareImagePalette
+	previousOverview: SessionOverview | null
 ) {
+	const { ctx, palette } = renderContext;
 	const { summary } = overview;
 	const statsY = OUTER_PADDING + 112;
 	const currentVolume = getSessionVolume(overview);
@@ -155,62 +161,54 @@ function drawHeader(
 	);
 
 	drawStatPill(
-		ctx,
+		renderContext,
 		{ x: OUTER_PADDING, y: statsY },
 		'Volume',
 		formatVolume(currentVolume),
 		getVolumeTone(currentVolume, previousVolume, palette.positive),
-		palette,
 		getVolumeComparisonLabel(currentVolume, previousVolume)
 	);
 	drawStatPill(
-		ctx,
+		renderContext,
 		{ x: OUTER_PADDING + (STAT_PILL_WIDTH + STAT_PILL_GAP), y: statsY },
 		'Duration',
 		formatDuration(summary.startedAt, summary.completedAt, nowMs),
-		COLORS.text,
-		palette
+		COLORS.text
 	);
 	drawStatPill(
-		ctx,
+		renderContext,
 		{ x: OUTER_PADDING, y: statsY + 68 },
 		'Exercises',
 		String(summary.totalExercises),
-		COLORS.text,
-		palette
+		COLORS.text
 	);
 	drawStatPill(
-		ctx,
+		renderContext,
 		{ x: OUTER_PADDING + (STAT_PILL_WIDTH + STAT_PILL_GAP), y: statsY + 68 },
 		'Sets',
 		String(summary.totalSets),
-		COLORS.text,
-		palette
+		COLORS.text
 	);
 }
 
-function drawExercises(
-	ctx: CanvasRenderingContext2D,
-	overview: SessionOverview,
-	palette: ShareImagePalette
-) {
+function drawExercises(renderContext: ShareImageRenderContext, overview: SessionOverview) {
 	let y = OUTER_PADDING + HEADER_HEIGHT;
 
 	for (const [index, sessionExercise] of overview.exercises.entries()) {
 		const height = getExerciseCardHeight(sessionExercise);
-		drawExerciseCard(ctx, sessionExercise, index + 1, y, height, palette);
+		drawExerciseCard(renderContext, sessionExercise, index + 1, y, height);
 		y += height + EXERCISE_GAP;
 	}
 }
 
 function drawExerciseCard(
-	ctx: CanvasRenderingContext2D,
+	renderContext: ShareImageRenderContext,
 	sessionExercise: SessionExerciseOverview,
 	position: number,
 	y: number,
-	height: number,
-	palette: ShareImagePalette
+	height: number
 ) {
+	const { ctx, palette } = renderContext;
 	const x = OUTER_PADDING;
 	const width = IMAGE_WIDTH - OUTER_PADDING * 2;
 	const sets = getPerformedSets(sessionExercise);
@@ -241,18 +239,17 @@ function drawExerciseCard(
 	drawTableHeader(ctx, x + CARD_PADDING, tableY, width - CARD_PADDING * 2);
 
 	if (sets.length === 0) {
-		drawEmptySetRow(ctx, x + CARD_PADDING, tableY + 34, width - CARD_PADDING * 2, palette);
+		drawEmptySetRow(renderContext, x + CARD_PADDING, tableY + 34, width - CARD_PADDING * 2);
 		return;
 	}
 
 	sets.forEach((set, index) => {
 		drawSetRow(
-			ctx,
+			renderContext,
 			set,
 			x + CARD_PADDING,
 			tableY + 34 + index * TABLE_ROW_HEIGHT,
-			width - CARD_PADDING * 2,
-			palette
+			width - CARD_PADDING * 2
 		);
 	});
 }
@@ -269,13 +266,13 @@ function drawTableHeader(ctx: CanvasRenderingContext2D, x: number, y: number, wi
 }
 
 function drawSetRow(
-	ctx: CanvasRenderingContext2D,
+	renderContext: ShareImageRenderContext,
 	set: SessionSetOverview,
 	x: number,
 	y: number,
-	width: number,
-	palette: ShareImagePalette
+	width: number
 ) {
+	const { ctx, palette } = renderContext;
 	roundedRect(ctx, x, y, width, TABLE_ROW_HEIGHT - 4, 12);
 	ctx.fillStyle = palette.panelSoft;
 	ctx.fill();
@@ -318,12 +315,12 @@ function drawSetRow(
 }
 
 function drawEmptySetRow(
-	ctx: CanvasRenderingContext2D,
+	renderContext: ShareImageRenderContext,
 	x: number,
 	y: number,
-	width: number,
-	palette: ShareImagePalette
+	width: number
 ) {
+	const { ctx, palette } = renderContext;
 	roundedRect(ctx, x, y, width, TABLE_ROW_HEIGHT - 4, 12);
 	ctx.fillStyle = palette.panelSoft;
 	ctx.fill();
@@ -343,14 +340,14 @@ function drawWatermark(ctx: CanvasRenderingContext2D, height: number) {
 }
 
 function drawStatPill(
-	ctx: CanvasRenderingContext2D,
+	renderContext: ShareImageRenderContext,
 	point: Point,
 	label: string,
 	value: string,
 	valueColor: string,
-	palette: ShareImagePalette,
 	detail = ''
 ) {
+	const { ctx, palette } = renderContext;
 	roundedRect(ctx, point.x, point.y, STAT_PILL_WIDTH, 54, 12);
 	ctx.fillStyle = palette.panel;
 	ctx.fill();
