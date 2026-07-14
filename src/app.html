@@ -18,8 +18,48 @@
 		<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
 		<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 		<script>
-			// Apply the saved theme before CSS paints. Keep this key synchronized with accent-theme.ts.
+			// Apply saved theme variables before CSS paints. Keep these keys synchronized with accent-theme.ts.
 			try {
+				const customThemeVariables = [
+					'--theme-custom-accent',
+					'--theme-custom-accent-soft',
+					'--theme-custom-accent-subtle',
+					'--theme-custom-accent-shadow',
+					'--theme-custom-on-accent',
+					'--theme-custom-surface-canvas',
+					'--theme-custom-surface-canvas-top',
+					'--theme-custom-surface-canvas-bottom',
+					'--theme-custom-surface-app',
+					'--theme-custom-surface-overlay',
+					'--theme-custom-surface-raised',
+					'--theme-custom-surface-menu',
+					'--theme-custom-surface-dialog',
+					'--theme-custom-surface-soft',
+					'--theme-custom-surface-line-soft'
+				];
+				const savedCustomAccent = localStorage.getItem('tinytrain:custom-accent:v1');
+
+				if (savedCustomAccent) {
+					try {
+						const storedCustomAccent = JSON.parse(savedCustomAccent);
+						const customPalette = storedCustomAccent?.palette;
+						const isValidCustomPalette =
+							storedCustomAccent?.version === 1 &&
+							customPalette &&
+							customThemeVariables.every((variable) =>
+								/^#[0-9a-f]{6}$/i.test(customPalette[variable])
+							);
+
+						if (isValidCustomPalette) {
+							for (const variable of customThemeVariables) {
+								document.documentElement.style.setProperty(variable, customPalette[variable]);
+							}
+						}
+					} catch {
+						// A malformed custom value falls back to the stable default custom palette.
+					}
+				}
+
 				const savedAccentTheme = localStorage.getItem('tinytrain:accent-theme:v1');
 
 				if (savedAccentTheme) {

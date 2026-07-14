@@ -5,26 +5,32 @@ preserve the existing emerald appearance, but the UI no longer depends on Tailwi
 emerald palette. The Appearance settings picker switches the complete `--theme-*` stack by setting
 `data-accent-theme` on the root element, without rewriting individual components.
 
-`src/lib/accent-theme.ts` owns the selectable preset metadata, preference validation, persistence,
-cross-tab synchronization, and live application. `src/app.html` restores the saved preset before
-the first CSS paint so returning users do not see an emerald flash before their theme appears.
+`src/lib/accent-theme.ts` owns preset metadata, custom-palette generation, preference validation,
+local persistence, cross-tab synchronization, and live application. `src/app.html` restores the
+saved palette before the first CSS paint so returning users do not see an emerald flash.
 
 ## Available presets
 
 | Preset      | Main accent |
 | ----------- | ----------- |
 | Emerald     | `#6EE7B7`   |
-| Ocean Blue  | `#8AA3C1`   |
 | Lavender    | `#C4B5FD`   |
+| Ocean Blue  | `#8AA3C1`   |
+| Olive Brown | `#5B543A`   |
 | Rose        | `#FDA4AF`   |
 | Amber       | `#FCD34D`   |
 | Arctic      | `#67E8F9`   |
-| Olive Brown | `#5B543A`   |
+| Custom      | User chosen |
 
 Ocean Blue and Olive Brown use the product-specified `#8AA3C1` and `#5B543A` values exactly. Each
 preset also defines its own soft/subtle accent values, shadow, tinted dark surface stack, and a
 contrasting solid-button foreground. Emerald remains the fallback for missing, invalid, or
 unavailable browser storage.
+
+Custom accepts a six-digit color from the native browser picker. TinyTrain derives the complete
+surface stack and chooses black or white button content for contrast, then stores the versioned
+palette under `tinytrain:custom-accent:v1`. The selected theme ID remains under
+`tinytrain:accent-theme:v1`. Both are local browser preferences, not database or cloud-synced data.
 
 ## Theme tokens
 
@@ -137,7 +143,7 @@ updates rather than component-token changes.
 
 ## Adding a preset
 
-Add its user-facing metadata to `ACCENT_THEMES`, then add the matching
+For a fixed preset, add its user-facing metadata to `ACCENT_THEMES`, then add the matching
 `:root[data-accent-theme='…']` variable block and preview surface in `layout.css`. Override all
 `--theme-*` values together, including the surface stack. Never assume dark text is readable on
 every accent; set and test `--theme-on-accent` for the selected color. Keep semantic success and

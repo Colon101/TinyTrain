@@ -55,6 +55,23 @@
 		--theme-preset-amber-surface: #19150d;
 		--theme-preset-arctic-surface: #0d171b;
 		--theme-preset-olive-brown-surface: #17150f;
+		--theme-preset-custom-surface: var(--theme-custom-surface-overlay);
+
+		--theme-custom-accent: #a3a3a3;
+		--theme-custom-accent-soft: #cacaca;
+		--theme-custom-accent-subtle: #e5e5e5;
+		--theme-custom-accent-shadow: #2e2e2e;
+		--theme-custom-on-accent: #09090b;
+		--theme-custom-surface-canvas: #0c0f12;
+		--theme-custom-surface-canvas-top: #13181c;
+		--theme-custom-surface-canvas-bottom: #0a0c0e;
+		--theme-custom-surface-app: #0e1113;
+		--theme-custom-surface-overlay: #181e21;
+		--theme-custom-surface-raised: #1d2225;
+		--theme-custom-surface-menu: #191f23;
+		--theme-custom-surface-dialog: #13171a;
+		--theme-custom-surface-soft: #1e252a;
+		--theme-custom-surface-line-soft: #2c343a;
 
 		--semantic-success: #6ee7b7;
 		--semantic-success-soft: #a7f3d0;
@@ -182,6 +199,24 @@
 		--theme-surface-dialog: #12100b;
 		--theme-surface-soft: #1e1b13;
 		--theme-surface-line-soft: #302b1f;
+	}
+
+	:root[data-accent-theme='custom'] {
+		--theme-accent: var(--theme-custom-accent);
+		--theme-accent-soft: var(--theme-custom-accent-soft);
+		--theme-accent-subtle: var(--theme-custom-accent-subtle);
+		--theme-accent-shadow: var(--theme-custom-accent-shadow);
+		--theme-on-accent: var(--theme-custom-on-accent);
+		--theme-surface-canvas: var(--theme-custom-surface-canvas);
+		--theme-surface-canvas-top: var(--theme-custom-surface-canvas-top);
+		--theme-surface-canvas-bottom: var(--theme-custom-surface-canvas-bottom);
+		--theme-surface-app: var(--theme-custom-surface-app);
+		--theme-surface-overlay: var(--theme-custom-surface-overlay);
+		--theme-surface-raised: var(--theme-custom-surface-raised);
+		--theme-surface-menu: var(--theme-custom-surface-menu);
+		--theme-surface-dialog: var(--theme-custom-surface-dialog);
+		--theme-surface-soft: var(--theme-custom-surface-soft);
+		--theme-surface-line-soft: var(--theme-custom-surface-line-soft);
 	}
 
 	html {

@@ -2,7 +2,14 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ACCENT_THEMES, ACCENT_THEME_STORAGE_KEY } from './accent-theme';
+import {
+	ACCENT_THEMES,
+	ACCENT_THEME_STORAGE_KEY,
+	CUSTOM_ACCENT_STORAGE_KEY,
+	CUSTOM_THEME_VARIABLES,
+	DEFAULT_CUSTOM_ACCENT,
+	buildCustomAccentPalette
+} from './accent-theme';
 import { resolveShareImagePalette } from './features/sessions/session-share-image';
 
 const sourceRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -90,8 +97,12 @@ describe('accent theme contract', () => {
 
 		for (const theme of ACCENT_THEMES) {
 			const block = readThemeBlock(css, theme.id);
-			const accent = readHexVariable(block, '--theme-accent');
-			const foreground = readHexVariable(block, '--theme-on-accent');
+			const colorSource = theme.id === 'custom' ? readThemeBlock(css, 'emerald') : block;
+			const accentVariable = theme.id === 'custom' ? '--theme-custom-accent' : '--theme-accent';
+			const foregroundVariable =
+				theme.id === 'custom' ? '--theme-custom-on-accent' : '--theme-on-accent';
+			const accent = readHexVariable(colorSource, accentVariable);
+			const foreground = readHexVariable(colorSource, foregroundVariable);
 			const accentLuminance = getRelativeLuminance(accent);
 			const foregroundLuminance = getRelativeLuminance(foreground);
 			const contrast =
@@ -103,9 +114,26 @@ describe('accent theme contract', () => {
 		}
 	});
 
+	it('maps every custom theme value into the runtime contract', () => {
+		const css = readFileSync(tokenRegistryPath, 'utf8');
+		const defaultBlock = readThemeBlock(css, 'emerald');
+		const customBlock = readThemeBlock(css, 'custom');
+		const defaultPalette = buildCustomAccentPalette(DEFAULT_CUSTOM_ACCENT)!;
+
+		for (const customVariable of CUSTOM_THEME_VARIABLES) {
+			expect(customBlock).toContain(customVariable);
+			expect(readHexVariable(defaultBlock, customVariable).toUpperCase()).toBe(
+				defaultPalette[customVariable]
+			);
+		}
+	});
+
 	it('restores the same persisted preference key before the app paints', () => {
 		const appTemplate = readFileSync(appTemplatePath, 'utf8');
+		const customStorageRead = `const savedCustomAccent = localStorage.getItem('${CUSTOM_ACCENT_STORAGE_KEY}');`;
 		const storageRead = `const savedAccentTheme = localStorage.getItem('${ACCENT_THEME_STORAGE_KEY}');`;
+		const customVariableAssignment =
+			'document.documentElement.style.setProperty(variable, customPalette[variable]);';
 		const themeAssignment = 'document.documentElement.dataset.accentTheme = savedAccentTheme;';
 		const inlineScripts = [...appTemplate.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];
 		const bootstrapScripts = inlineScripts.filter((match) => match[1].includes(storageRead));
@@ -114,14 +142,22 @@ describe('accent theme contract', () => {
 
 		const [bootstrapMatch] = bootstrapScripts;
 		const bootstrapScript = bootstrapMatch[1];
+		const customReadIndex = bootstrapScript.indexOf(customStorageRead);
+		const customAssignmentIndex = bootstrapScript.indexOf(customVariableAssignment);
 		const readIndex = bootstrapScript.indexOf(storageRead);
 		const assignmentIndex = bootstrapScript.indexOf(themeAssignment);
 		const bootstrapEndIndex = bootstrapMatch.index! + bootstrapMatch[0].length;
 		const svelteHeadIndex = appTemplate.indexOf('%sveltekit.head%');
 		const svelteBodyIndex = appTemplate.indexOf('%sveltekit.body%');
 
+		expect(customReadIndex).toBeGreaterThanOrEqual(0);
+		expect(customAssignmentIndex).toBeGreaterThan(customReadIndex);
+		expect(readIndex).toBeGreaterThan(customAssignmentIndex);
 		expect(readIndex).toBeGreaterThanOrEqual(0);
 		expect(assignmentIndex).toBeGreaterThan(readIndex);
+		for (const variable of CUSTOM_THEME_VARIABLES) {
+			expect(bootstrapScript).toContain(`'${variable}'`);
+		}
 		expect(bootstrapEndIndex).toBeLessThan(svelteHeadIndex);
 		expect(svelteHeadIndex).toBeLessThan(svelteBodyIndex);
 	});
