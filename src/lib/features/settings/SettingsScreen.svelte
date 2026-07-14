@@ -562,9 +562,7 @@
 			<div class="min-w-0">
 				<p class="text-xs font-semibold tracking-[0.18em] text-zinc-500 uppercase">Appearance</p>
 				<h2 class="mt-1 text-lg font-semibold text-white">Appearance</h2>
-				<p class="mt-1 text-sm leading-5 text-zinc-400">
-					Personalize TinyTrain and choose how workout comparisons appear.
-				</p>
+				<p class="mt-1 text-sm leading-5 text-zinc-400">Personalize TinyTrain</p>
 			</div>
 		</div>
 

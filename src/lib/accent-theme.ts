@@ -5,44 +5,37 @@ export const ACCENT_THEMES = [
 	{
 		id: 'emerald',
 		name: 'Emerald',
-		hex: '#6EE7B7',
-		description: 'Fresh and focused'
+		hex: '#6EE7B7'
 	},
 	{
 		id: 'ocean-blue',
 		name: 'Ocean Blue',
-		hex: '#8AA3C1',
-		description: 'Calm and understated'
+		hex: '#8AA3C1'
 	},
 	{
 		id: 'lavender',
 		name: 'Lavender',
-		hex: '#C4B5FD',
-		description: 'Soft and reflective'
+		hex: '#C4B5FD'
 	},
 	{
 		id: 'rose',
 		name: 'Rose',
-		hex: '#FDA4AF',
-		description: 'Warm and expressive'
+		hex: '#FDA4AF'
 	},
 	{
 		id: 'amber',
 		name: 'Amber',
-		hex: '#FCD34D',
-		description: 'Bold and energetic'
+		hex: '#FCD34D'
 	},
 	{
 		id: 'arctic',
 		name: 'Arctic',
-		hex: '#67E8F9',
-		description: 'Cool and bright'
+		hex: '#67E8F9'
 	},
 	{
 		id: 'olive-brown',
 		name: 'Olive Brown',
-		hex: '#5B543A',
-		description: 'Earthy and grounded'
+		hex: '#5B543A'
 	}
 ] as const;
 

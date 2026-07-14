@@ -8,9 +8,6 @@
 	import Icon from '$lib/ui/Icon.svelte';
 
 	let preferenceErrorMessage = $state('');
-	let selectedTheme = $derived(
-		ACCENT_THEMES.find((theme) => theme.id === $accentThemeId) ?? ACCENT_THEMES[0]
-	);
 
 	function selectAccentTheme(themeId: AccentThemeId) {
 		preferenceErrorMessage = saveAccentTheme(themeId)
@@ -20,12 +17,7 @@
 </script>
 
 <fieldset class="grid gap-3">
-	<div class="grid gap-1">
-		<legend class="text-sm font-semibold text-white">Accent theme</legend>
-		<p class="text-xs leading-5 text-zinc-400">
-			Choose the color used for primary actions, selections, highlights, and ambient tints.
-		</p>
-	</div>
+	<legend class="text-sm font-semibold text-white">Accent theme</legend>
 
 	<div class="grid grid-cols-2 gap-2.5">
 		{#each ACCENT_THEMES as theme, index (theme.id)}
@@ -46,7 +38,7 @@
 					onchange={() => selectAccentTheme(theme.id)}
 				/>
 				<span
-					class={`grid min-h-32 gap-2.5 rounded-xl border p-3 transition duration-200 peer-focus-visible:ring-2 peer-focus-visible:ring-accent-soft peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-surface-app ${
+					class={`grid min-h-28 gap-2.5 rounded-xl border p-3 transition duration-200 peer-focus-visible:ring-2 peer-focus-visible:ring-accent-soft peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-surface-app ${
 						$accentThemeId === theme.id
 							? 'border-accent/70 bg-accent/10 shadow-lg shadow-accent-shadow/20'
 							: 'border-white/10 bg-black/20 hover:border-white/25 hover:bg-white/[0.04]'
@@ -61,9 +53,6 @@
 
 					<span class="min-w-0">
 						<strong class="block truncate text-sm font-semibold text-white">{theme.name}</strong>
-						<span class="mt-0.5 block truncate text-[10px] leading-4 text-zinc-500">
-							{theme.description}
-						</span>
 					</span>
 					{#if $accentThemeId === theme.id}
 						<span
@@ -78,11 +67,6 @@
 		{/each}
 	</div>
 
-	<p class="text-xs leading-5 text-zinc-500" aria-live="polite">
-		Current: <span class="font-semibold text-accent-soft">{selectedTheme.name}</span>
-		<span aria-hidden="true"> · </span>
-		<code class="font-mono text-[11px] text-zinc-400">{selectedTheme.hex}</code>
-	</p>
 	{#if preferenceErrorMessage}
 		<p class="text-xs leading-5 text-red-200" role="alert">{preferenceErrorMessage}</p>
 	{/if}

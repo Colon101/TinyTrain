@@ -11,15 +11,15 @@ the first CSS paint so returning users do not see an emerald flash before their 
 
 ## Available presets
 
-| Preset      | Main accent | Character            |
-| ----------- | ----------- | -------------------- |
-| Emerald     | `#6EE7B7`   | Fresh and focused    |
-| Ocean Blue  | `#8AA3C1`   | Calm and understated |
-| Lavender    | `#C4B5FD`   | Soft and reflective  |
-| Rose        | `#FDA4AF`   | Warm and expressive  |
-| Amber       | `#FCD34D`   | Bold and energetic   |
-| Arctic      | `#67E8F9`   | Cool and bright      |
-| Olive Brown | `#5B543A`   | Earthy and grounded  |
+| Preset      | Main accent |
+| ----------- | ----------- |
+| Emerald     | `#6EE7B7`   |
+| Ocean Blue  | `#8AA3C1`   |
+| Lavender    | `#C4B5FD`   |
+| Rose        | `#FDA4AF`   |
+| Amber       | `#FCD34D`   |
+| Arctic      | `#67E8F9`   |
+| Olive Brown | `#5B543A`   |
 
 Ocean Blue and Olive Brown use the product-specified `#8AA3C1` and `#5B543A` values exactly. Each
 preset also defines its own soft/subtle accent values, shadow, tinted dark surface stack, and a
