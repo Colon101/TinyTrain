@@ -501,7 +501,7 @@
 
 		<div class="flex items-center gap-2">
 			<button
-				class="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-200 transition hover:border-emerald-300/40 hover:bg-white/[0.08]"
+				class="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-200 transition hover:border-accent/40 hover:bg-white/[0.08]"
 				type="button"
 				title="Open calendar"
 				onclick={openDayPicker}
@@ -522,7 +522,7 @@
 	{:else if isLoading}
 		<section class="flex flex-1 flex-col justify-center">
 			<div class="h-1.5 w-24 overflow-hidden rounded-full bg-white/10">
-				<div class="h-full w-1/2 animate-pulse rounded-full bg-emerald-300"></div>
+				<div class="h-full w-1/2 animate-pulse rounded-full bg-accent"></div>
 			</div>
 			<h2 class="mt-5 text-2xl font-semibold text-white">Loading</h2>
 		</section>
@@ -547,7 +547,7 @@
 
 		<div class="mt-auto grid gap-3 pt-4">
 			<a
-				class="flex min-h-12 items-center justify-between rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950"
+				class="flex min-h-12 items-center justify-between rounded-lg bg-accent px-4 text-base font-bold text-on-accent"
 				href={resolve('/workouts')}
 			>
 				<span class="flex items-center gap-3">
@@ -561,7 +561,7 @@
 				href={resolve('/exercises')}
 			>
 				<span class="flex items-center gap-3">
-					<Icon name="activity" class="h-5 w-5 text-emerald-200" />
+					<Icon name="activity" class="h-5 w-5 text-accent-soft" />
 					Open exercises
 				</span>
 				<Icon name="arrow-right" class="h-4 w-4" />

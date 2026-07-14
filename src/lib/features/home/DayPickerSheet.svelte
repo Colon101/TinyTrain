@@ -36,7 +36,7 @@
 			return '';
 		}
 
-		return session.status === 'completed' ? 'bg-emerald-300' : 'bg-amber-300';
+		return session.status === 'completed' ? 'bg-accent' : 'bg-amber-300';
 	}
 
 	async function chooseDay(dayKey: string) {
@@ -70,7 +70,7 @@
 	></button>
 
 	<div
-		class="relative mx-auto flex max-h-full w-full max-w-[430px] flex-col rounded-lg border border-white/10 bg-[#0e1417]"
+		class="relative mx-auto flex max-h-full w-full max-w-[430px] flex-col rounded-lg border border-white/10 bg-surface-overlay"
 		role="dialog"
 		aria-modal="true"
 		aria-label="Choose a day"
@@ -80,7 +80,7 @@
 	>
 		<header class="flex items-center justify-between border-b border-white/10 px-4 py-4">
 			<div>
-				<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">Choose day</p>
+				<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">Choose day</p>
 				<h2 class="mt-2 text-xl font-semibold text-white">{formatMonthHeading(monthDate)}</h2>
 			</div>
 
@@ -106,7 +106,7 @@
 
 			<div class="flex items-center justify-between">
 				<button
-					class="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-200 transition hover:border-emerald-300/50 hover:bg-white/[0.08]"
+					class="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-200 transition hover:border-accent/50 hover:bg-white/[0.08]"
 					type="button"
 					title="Previous month"
 					onclick={onPreviousMonth}
@@ -115,7 +115,7 @@
 				</button>
 				<p class="text-sm font-medium text-zinc-300">{formatMonthHeading(monthDate)}</p>
 				<button
-					class="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-200 transition hover:border-emerald-300/50 hover:bg-white/[0.08]"
+					class="flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-zinc-200 transition hover:border-accent/50 hover:bg-white/[0.08]"
 					type="button"
 					title="Next month"
 					onclick={onNextMonth}
@@ -139,7 +139,7 @@
 							<button
 								class={`relative aspect-square rounded-lg border text-left transition ${
 									cell.dayKey === selectedDayKey
-										? 'border-emerald-300 bg-emerald-300/15 text-white'
+										? 'border-accent bg-accent/15 text-white'
 										: cell.isInMonth
 											? 'border-white/10 bg-white/[0.03] text-zinc-200 hover:bg-white/[0.06]'
 											: 'border-transparent bg-transparent text-zinc-700'
@@ -150,7 +150,7 @@
 							>
 								<span
 									class={`absolute top-2 left-2 text-sm font-medium ${
-										cell.isToday && cell.dayKey !== selectedDayKey ? 'text-emerald-200' : ''
+										cell.isToday && cell.dayKey !== selectedDayKey ? 'text-accent-soft' : ''
 									}`}
 								>
 									{cell.date.getDate()}

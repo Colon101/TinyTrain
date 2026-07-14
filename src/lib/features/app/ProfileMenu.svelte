@@ -158,10 +158,10 @@
 		aria-describedby="manual-sync-description"
 	>
 		<div
-			class="grid w-full max-w-sm gap-5 rounded-2xl border border-emerald-200/20 bg-zinc-950 p-6 text-center shadow-2xl shadow-emerald-950/30"
+			class="grid w-full max-w-sm gap-5 rounded-2xl border border-accent-soft/20 bg-surface-raised p-6 text-center shadow-2xl shadow-accent-shadow/30"
 		>
 			<div
-				class="mx-auto grid h-16 w-16 place-items-center rounded-full border border-emerald-200/25 bg-emerald-300/10 text-emerald-100"
+				class="mx-auto grid h-16 w-16 place-items-center rounded-full border border-accent-soft/25 bg-accent/10 text-accent-subtle"
 			>
 				<Icon name="loader-circle" class="h-8 w-8 animate-spin" />
 			</div>
@@ -181,7 +181,7 @@
 				aria-label={`Sync progress ${syncProgressPercent}%`}
 			>
 				<div
-					class="h-full rounded-full bg-emerald-300 transition-all duration-300"
+					class="h-full rounded-full bg-accent transition-all duration-300"
 					style={`width: ${syncProgressPercent}%`}
 				></div>
 			</div>
@@ -200,10 +200,10 @@
 
 {#if isManualSyncing && !isManualSyncOverlayOpen}
 	<div
-		class="fixed right-4 bottom-4 z-40 flex items-center gap-2 rounded-lg border border-emerald-200/20 bg-zinc-950 px-4 py-3 text-sm font-medium text-zinc-200 shadow-xl"
+		class="fixed right-4 bottom-4 z-40 flex items-center gap-2 rounded-lg border border-accent-soft/20 bg-surface-raised px-4 py-3 text-sm font-medium text-zinc-200 shadow-xl"
 		role="status"
 	>
-		<Icon name="loader-circle" class="h-4 w-4 animate-spin text-emerald-200" />
+		<Icon name="loader-circle" class="h-4 w-4 animate-spin text-accent-soft" />
 		<span>Sync is continuing in the background.</span>
 	</div>
 {/if}
@@ -219,7 +219,7 @@
 
 <div class="relative" bind:this={container}>
 	<button
-		class="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/6 text-sm font-semibold text-white transition hover:border-emerald-300/50 hover:bg-white/10"
+		class="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/6 text-sm font-semibold text-white transition hover:border-accent/50 hover:bg-white/10"
 		type="button"
 		title="Open account menu"
 		aria-expanded={isOpen}
@@ -230,7 +230,7 @@
 
 	{#if isOpen}
 		<div
-			class="absolute top-[calc(100%+0.75rem)] right-0 z-30 w-64 rounded-lg border border-white/10 bg-[#11171a] p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)]"
+			class="absolute top-[calc(100%+0.75rem)] right-0 z-30 w-64 rounded-lg border border-white/10 bg-surface-raised p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)]"
 		>
 			<div class="border-b border-white/10 px-3 py-3">
 				<p class="truncate text-sm font-semibold text-white">{displayName}</p>

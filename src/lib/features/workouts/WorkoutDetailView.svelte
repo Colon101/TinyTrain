@@ -54,7 +54,7 @@
 		</div>
 
 		<button
-			class="flex min-h-11 shrink-0 items-center gap-2 rounded-lg bg-emerald-300 px-4 text-sm font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
+			class="flex min-h-11 shrink-0 items-center gap-2 rounded-lg bg-accent px-4 text-sm font-bold text-on-accent disabled:bg-white/10 disabled:text-zinc-500"
 			type="button"
 			disabled={isSaving}
 			onclick={onOpenPicker}
@@ -65,7 +65,7 @@
 	</div>
 
 	<section class="py-5">
-		<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">Exercise order</p>
+		<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">Exercise order</p>
 
 		{#if workoutExercises.length > 0}
 			<div class="mt-4 grid gap-3">
@@ -123,7 +123,7 @@
 
 	{#if dragPreview && draggedWorkoutExercise}
 		<div
-			class="pointer-events-none fixed z-30 rounded-lg border border-emerald-300/40 bg-[#11171a] px-4 py-4 shadow-[0_20px_60px_rgba(0,0,0,0.45)]"
+			class="pointer-events-none fixed z-30 rounded-lg border border-accent/40 bg-surface-raised px-4 py-4 shadow-[0_20px_60px_rgba(0,0,0,0.45)]"
 			style={`left:${dragPreview.x}px; top:${dragPreview.y}px; width:${dragPreview.width}px;`}
 		>
 			<p class="line-clamp-2 text-base leading-5 font-semibold break-words text-white">

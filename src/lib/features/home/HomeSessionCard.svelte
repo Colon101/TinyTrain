@@ -23,7 +23,7 @@
 
 <article class="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-4">
 	{#if label}
-		<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">{label}</p>
+		<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">{label}</p>
 	{/if}
 
 	<div class={`flex items-start justify-between gap-4 ${label ? 'mt-2' : ''}`}>
@@ -63,7 +63,7 @@
 
 		{#if isPlanned && onStart}
 			<button
-				class="flex min-h-11 flex-1 items-center justify-center rounded-lg bg-emerald-300 px-4 text-sm font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
+				class="flex min-h-11 flex-1 items-center justify-center rounded-lg bg-accent px-4 text-sm font-bold text-on-accent disabled:bg-white/10 disabled:text-zinc-500"
 				type="button"
 				disabled={isBusy}
 				onclick={onStart}

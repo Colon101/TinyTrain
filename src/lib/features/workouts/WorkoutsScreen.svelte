@@ -879,7 +879,7 @@
 {#if isLoading}
 	<section class="flex flex-1 flex-col justify-center">
 		<div class="h-1.5 w-24 overflow-hidden rounded-full bg-white/10">
-			<div class="h-full w-1/2 animate-pulse rounded-full bg-emerald-300"></div>
+			<div class="h-full w-1/2 animate-pulse rounded-full bg-accent"></div>
 		</div>
 		<h1 class="mt-5 text-2xl font-semibold text-white">Loading workouts</h1>
 		<p class="mt-2 text-sm leading-6 text-zinc-400">Preparing your workout library.</p>

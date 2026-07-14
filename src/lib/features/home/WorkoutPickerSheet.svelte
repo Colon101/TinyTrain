@@ -18,7 +18,7 @@
 
 <div class="fixed inset-0 z-20 bg-black/60 px-4 py-5">
 	<div
-		class="mx-auto flex h-full w-full max-w-[430px] flex-col rounded-lg border border-white/10 bg-[#0e1417]"
+		class="mx-auto flex h-full w-full max-w-[430px] flex-col rounded-lg border border-white/10 bg-surface-overlay"
 		role="dialog"
 		aria-modal="true"
 		aria-labelledby="workout-picker-title"
@@ -27,7 +27,7 @@
 	>
 		<header class="flex items-center justify-between border-b border-white/10 px-4 py-4">
 			<div>
-				<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
+				<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">
 					Schedule workout
 				</p>
 				<h2 id="workout-picker-title" class="mt-2 text-xl font-semibold text-white">
@@ -49,7 +49,7 @@
 			<div class="grid gap-3">
 				{#each workouts as workout (workout.id)}
 					<button
-						class="flex min-h-14 items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-4 text-left text-white transition hover:border-emerald-300/50"
+						class="flex min-h-14 items-center justify-between rounded-lg border border-white/10 bg-white/[0.03] px-4 text-left text-white transition hover:border-accent/50"
 						type="button"
 						disabled={isSaving}
 						onclick={() => onPickWorkout(workout.id)}

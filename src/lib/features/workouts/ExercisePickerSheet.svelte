@@ -56,7 +56,7 @@
 
 <div class="fixed inset-0 z-20 bg-black/60 px-4 py-5">
 	<div
-		class="mx-auto flex h-full w-full max-w-[430px] flex-col rounded-lg border border-white/10 bg-[#0e1417]"
+		class="mx-auto flex h-full w-full max-w-[430px] flex-col rounded-lg border border-white/10 bg-surface-overlay"
 		role="dialog"
 		aria-modal="true"
 		aria-labelledby="exercise-picker-title"
@@ -65,7 +65,7 @@
 	>
 		<header class="flex items-center justify-between border-b border-white/10 px-4 py-4">
 			<div>
-				<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
+				<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">
 					{sheetEyebrow}
 				</p>
 				<h2 id="exercise-picker-title" class="mt-2 text-xl font-semibold text-white">
@@ -87,7 +87,7 @@
 				<span class="mb-2 block text-sm font-medium text-zinc-300">Search library</span>
 				<input
 					id="exercise-search"
-					class="min-h-12 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-base text-white outline-none placeholder:text-zinc-600 focus:border-emerald-300/60"
+					class="min-h-12 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-base text-white outline-none placeholder:text-zinc-600 focus:border-accent/60"
 					value={exerciseSearch}
 					autocomplete="off"
 					placeholder="Bench, pull-up, row..."
@@ -102,7 +102,7 @@
 							selectedExerciseIds.has(exercise.id)
 								? 'border-white/10 bg-white/[0.02] text-zinc-500'
 								: selectedPickerExerciseIdSet.has(exercise.id)
-									? 'border-emerald-300/50 bg-emerald-300/10 text-white'
+									? 'border-accent/50 bg-accent/10 text-white'
 									: 'border-white/10 bg-white/[0.03] text-white'
 						}`}
 						type="button"
@@ -121,7 +121,7 @@
 									<span> · {getExerciseMetadata(exercise)}</span>
 								{/if}
 								{#if isPreviouslyUsedExercise(exercise)}
-									<span class="text-emerald-200"> · Previously used</span>
+									<span class="text-accent-soft"> · Previously used</span>
 								{/if}
 							</p>
 						</div>
@@ -130,13 +130,13 @@
 							{#if selectedExerciseIds.has(exercise.id)}
 								<span class="text-xs font-medium text-zinc-500">Added</span>
 							{:else if getPickerExercisePosition(exercise.id)}
-								<span class="text-xs font-medium text-emerald-200">
+								<span class="text-xs font-medium text-accent-soft">
 									#{getPickerExercisePosition(exercise.id)}
 								</span>
 							{/if}
 
 							{#if selectedPickerExerciseIdSet.has(exercise.id)}
-								<Icon name="check" class="h-4 w-4 text-emerald-200" />
+								<Icon name="check" class="h-4 w-4 text-accent-soft" />
 							{/if}
 						</div>
 					</button>
@@ -151,14 +151,14 @@
 
 			{#if canCreateCustomExercise}
 				<form class="mt-5 border-t border-white/10 pt-5" onsubmit={onCreateExercise}>
-					<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
+					<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">
 						Create custom
 					</p>
 					<label class="mt-3 block" for="custom-picker-exercise-name">
 						<span class="mb-2 block text-sm font-medium text-zinc-300">Exercise name</span>
 						<input
 							id="custom-picker-exercise-name"
-							class="min-h-12 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-base text-white outline-none placeholder:text-zinc-600 focus:border-emerald-300/60"
+							class="min-h-12 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-base text-white outline-none placeholder:text-zinc-600 focus:border-accent/60"
 							value={newExerciseName}
 							autocomplete="off"
 							placeholder="Create a custom exercise"
@@ -171,7 +171,7 @@
 						<button
 							class={`min-h-11 rounded-lg px-3 text-sm font-semibold ${
 								!isNewExerciseUnilateral
-									? 'bg-emerald-300 text-zinc-950'
+									? 'bg-accent text-on-accent'
 									: 'border border-white/10 text-zinc-300'
 							}`}
 							type="button"
@@ -182,7 +182,7 @@
 						<button
 							class={`min-h-11 rounded-lg px-3 text-sm font-semibold ${
 								isNewExerciseUnilateral
-									? 'bg-emerald-300 text-zinc-950'
+									? 'bg-accent text-on-accent'
 									: 'border border-white/10 text-zinc-300'
 							}`}
 							type="button"
@@ -206,7 +206,7 @@
 
 		<div class="border-t border-white/10 px-4 py-4">
 			<button
-				class="flex min-h-12 w-full items-center justify-center rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
+				class="flex min-h-12 w-full items-center justify-center rounded-lg bg-accent px-4 text-base font-bold text-on-accent disabled:bg-white/10 disabled:text-zinc-500"
 				type="button"
 				disabled={isSaving || submitDisabled}
 				onclick={onAddSelected}

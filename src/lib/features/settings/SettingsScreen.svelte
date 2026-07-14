@@ -20,6 +20,7 @@
 		saveProgressIndicatorPosition,
 		type ProgressIndicatorPosition
 	} from '$lib/progress-indicator-preference';
+	import AccentThemePicker from '$lib/features/settings/AccentThemePicker.svelte';
 	import ExercisePickerSheet from '$lib/features/workouts/ExercisePickerSheet.svelte';
 	import Icon from '$lib/ui/Icon.svelte';
 
@@ -506,10 +507,10 @@
 		aria-labelledby="tracked-import-title"
 	>
 		<div
-			class="grid w-full max-w-sm gap-5 rounded-2xl border border-sky-200/20 bg-zinc-950 p-6 text-center shadow-2xl shadow-sky-950/30"
+			class="grid w-full max-w-sm gap-5 rounded-2xl border border-accent-soft/20 bg-surface-raised p-6 text-center shadow-2xl shadow-accent-shadow/30"
 		>
 			<div
-				class="mx-auto grid h-16 w-16 place-items-center rounded-full border border-sky-200/25 bg-sky-300/10 text-sky-100"
+				class="mx-auto grid h-16 w-16 place-items-center rounded-full border border-accent-soft/25 bg-accent/10 text-accent-subtle"
 			>
 				<Icon name="loader-circle" class="h-8 w-8 animate-spin" />
 			</div>
@@ -523,7 +524,7 @@
 				</p>
 			</div>
 			<div class="h-1.5 overflow-hidden rounded-full bg-white/10">
-				<div class="h-full w-1/2 animate-pulse rounded-full bg-sky-300"></div>
+				<div class="h-full w-1/2 animate-pulse rounded-full bg-accent"></div>
 			</div>
 		</div>
 	</div>
@@ -532,7 +533,7 @@
 <section class="flex flex-1 flex-col gap-5 px-1 pb-6">
 	<div class="flex items-start gap-4 pt-3">
 		<div
-			class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-emerald-300/25 bg-emerald-300/10 text-emerald-100"
+			class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-accent/25 bg-accent/10 text-accent-subtle"
 		>
 			<Icon name="settings" class="h-5 w-5" />
 		</div>
@@ -554,22 +555,24 @@
 	<section class="grid gap-4 rounded-lg border border-white/10 bg-white/[0.04] p-4">
 		<div class="flex items-start gap-3">
 			<div
-				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-300/25 bg-emerald-300/10 text-emerald-100"
+				class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-accent/25 bg-accent/10 text-accent-subtle"
 			>
 				<Icon name="sparkles" class="h-5 w-5" />
 			</div>
 			<div class="min-w-0">
 				<p class="text-xs font-semibold tracking-[0.18em] text-zinc-500 uppercase">Appearance</p>
-				<h2 class="mt-1 text-lg font-semibold text-white">Workout inputs</h2>
-				<p class="mt-1 text-sm leading-5 text-zinc-400">
-					Choose where changes from your previous session appear inside Weight, Reps, and RIR.
-				</p>
+				<h2 class="mt-1 text-lg font-semibold text-white">Appearance</h2>
+				<p class="mt-1 text-sm leading-5 text-zinc-400">Personalize TinyTrain</p>
 			</div>
 		</div>
 
+		<AccentThemePicker />
+
+		<div class="h-px bg-white/10"></div>
+
 		<fieldset class="grid gap-3">
 			<legend class="text-sm font-semibold text-white">Comparison indicator position</legend>
-			<p class="text-xs font-medium text-emerald-200">
+			<p class="text-xs font-medium text-accent-soft">
 				Current: {PROGRESS_INDICATOR_POSITIONS.find(
 					(position) => position.value === selectedProgressIndicatorPosition
 				)?.label ?? 'Bottom left'}
@@ -587,9 +590,9 @@
 							onchange={() => selectProgressIndicatorPosition(position.value)}
 						/>
 						<span
-							class={`grid min-h-24 gap-2 rounded-lg border p-2 transition peer-focus-visible:ring-2 peer-focus-visible:ring-emerald-200 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-[#080b0d] ${
+							class={`grid min-h-24 gap-2 rounded-lg border p-2 transition peer-focus-visible:ring-2 peer-focus-visible:ring-accent-soft peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-surface-app ${
 								selectedProgressIndicatorPosition === position.value
-									? 'border-emerald-300/60 bg-emerald-300/10'
+									? 'border-accent/60 bg-accent/10'
 									: 'border-white/10 bg-black/20 hover:border-white/20'
 							}`}
 						>
@@ -599,14 +602,14 @@
 								</span>
 								{#if selectedProgressIndicatorPosition === position.value}
 									<span
-										class="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-emerald-300 text-zinc-950"
+										class="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-accent text-on-accent"
 									>
 										<Icon name="check" class="h-2.5 w-2.5" />
 									</span>
 								{/if}
 							</span>
 							<span
-								class="relative block h-11 min-w-0 overflow-hidden rounded-md border-2 border-emerald-500 bg-white text-black"
+								class="relative block h-11 min-w-0 overflow-hidden rounded-md border-2 border-positive-border bg-white text-black"
 								aria-hidden="true"
 							>
 								<strong
@@ -615,7 +618,7 @@
 									10
 								</strong>
 								<span
-									class={`absolute z-10 max-w-[calc(100%-0.75rem)] overflow-hidden text-[9px] leading-none font-bold text-ellipsis whitespace-nowrap text-emerald-700 tabular-nums ${getPreviewDeltaPositionClass(position.value)}`}
+									class={`absolute z-10 max-w-[calc(100%-0.75rem)] overflow-hidden text-[9px] leading-none font-bold text-ellipsis whitespace-nowrap text-positive-on-light tabular-nums ${getPreviewDeltaPositionClass(position.value)}`}
 								>
 									+2
 								</span>
@@ -636,9 +639,9 @@
 
 	<div class="flex items-center gap-3 pt-1">
 		<div
-			class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-zinc-300"
+			class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-accent/25 bg-accent/10 text-accent-subtle"
 		>
-			<Icon name="database" class="h-4 w-4" />
+			<Icon name="database" class="h-5 w-5" />
 		</div>
 		<div>
 			<p class="text-xs font-semibold tracking-[0.18em] text-zinc-500 uppercase">Data and sync</p>
@@ -649,7 +652,7 @@
 	{#if isLoading}
 		<section class="flex flex-1 flex-col justify-center">
 			<div class="h-1.5 w-24 overflow-hidden rounded-full bg-white/10">
-				<div class="h-full w-1/2 animate-pulse rounded-full bg-emerald-300"></div>
+				<div class="h-full w-1/2 animate-pulse rounded-full bg-accent"></div>
 			</div>
 			<h2 class="mt-5 text-2xl font-semibold text-white">Loading</h2>
 		</section>
@@ -711,7 +714,7 @@
 		>
 			<div class="flex items-start gap-3">
 				<div
-					class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-300/25 bg-emerald-300/10 text-emerald-100"
+					class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-accent/25 bg-accent/10 text-accent-subtle"
 				>
 					<Icon name="history" class="h-5 w-5" />
 				</div>
@@ -809,7 +812,7 @@
 				{/if}
 
 				<button
-					class="flex min-h-[3.25rem] w-full min-w-0 items-center justify-center gap-3 rounded-lg bg-emerald-300 px-4 text-base font-bold whitespace-normal text-zinc-950 transition disabled:bg-zinc-700 disabled:text-zinc-400"
+					class="flex min-h-[3.25rem] w-full min-w-0 items-center justify-center gap-3 rounded-lg bg-accent px-4 text-base font-bold whitespace-normal text-on-accent transition disabled:bg-zinc-700 disabled:text-zinc-400"
 					type="button"
 					disabled={!canSubmitExerciseMerge}
 					onclick={mergeExercises}
@@ -825,7 +828,7 @@
 			</div>
 
 			{#if mergeStatusMessage}
-				<p class="text-center text-sm font-medium text-emerald-100">{mergeStatusMessage}</p>
+				<p class="text-center text-sm font-medium text-accent-subtle">{mergeStatusMessage}</p>
 			{/if}
 
 			{#if mergeResult}
@@ -867,7 +870,7 @@
 		<section class="grid gap-3 rounded-lg border border-white/10 bg-white/[0.04] p-4">
 			<div class="flex items-start gap-3">
 				<div
-					class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-emerald-300/25 bg-emerald-300/10 text-emerald-100"
+					class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-accent/25 bg-accent/10 text-accent-subtle"
 				>
 					<Icon name="download" class="h-5 w-5" />
 				</div>
@@ -894,7 +897,7 @@
 			</label>
 
 			{#if isPreviewingTracked}
-				<p class="text-sm font-medium text-sky-100">Reading zip and validating CSVs.</p>
+				<p class="text-sm font-medium text-accent-subtle">Reading zip and validating CSVs.</p>
 			{/if}
 
 			{#if trackedSummary}
@@ -945,7 +948,7 @@
 					</p>
 
 					{#if trackedSummary.exerciseLimbPriorities.length > 0}
-						<div class="grid gap-2 rounded-lg border border-sky-300/15 bg-sky-300/[0.06] p-3">
+						<div class="grid gap-2 rounded-lg border border-accent/15 bg-accent/[0.06] p-3">
 							<div>
 								<p class="text-sm font-semibold text-white">Side mapping for Tracked limb data</p>
 								<p class="mt-1 text-xs leading-5 text-zinc-400">
@@ -968,7 +971,7 @@
 												class={`rounded-md px-3 py-2 transition ${
 													(trackedLimbPriorities[exercise.normalizedName] ?? 'primary-right') ===
 													'primary-right'
-														? 'bg-sky-300 text-zinc-950'
+														? 'bg-accent text-on-accent'
 														: 'bg-white/10 text-zinc-300'
 												}`}
 												type="button"
@@ -981,7 +984,7 @@
 											<button
 												class={`rounded-md px-3 py-2 transition ${
 													trackedLimbPriorities[exercise.normalizedName] === 'primary-left'
-														? 'bg-sky-300 text-zinc-950'
+														? 'bg-accent text-on-accent'
 														: 'bg-white/10 text-zinc-300'
 												}`}
 												type="button"
@@ -1007,7 +1010,7 @@
 					{/if}
 
 					{#if trackedSummary.sessionsImported > 0 || trackedSummary.sessionsSkipped > 0}
-						<p class="text-xs leading-5 text-emerald-100">
+						<p class="text-xs leading-5 text-success-subtle">
 							Imported {formatNumber(trackedSummary.sessionsImported)} sessions and
 							{formatNumber(trackedSummary.sessionSetsImported)} set rows. Skipped
 							{formatNumber(trackedSummary.sessionsSkipped)} existing sessions.
@@ -1023,7 +1026,7 @@
 			{/if}
 
 			<button
-				class="flex min-h-[3.25rem] items-center justify-center gap-3 rounded-lg bg-sky-300 px-4 text-base font-bold text-zinc-950 transition disabled:bg-zinc-700 disabled:text-zinc-400"
+				class="flex min-h-[3.25rem] items-center justify-center gap-3 rounded-lg bg-accent px-4 text-base font-bold text-on-accent transition disabled:bg-zinc-700 disabled:text-zinc-400"
 				type="button"
 				disabled={!trackedImportApi ||
 					!trackedFile ||
@@ -1052,7 +1055,7 @@
 			</div>
 
 			<button
-				class="flex min-h-[3.25rem] items-center justify-center gap-3 rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950 transition disabled:bg-zinc-700 disabled:text-zinc-400"
+				class="flex min-h-[3.25rem] items-center justify-center gap-3 rounded-lg bg-accent px-4 text-base font-bold text-on-accent transition disabled:bg-zinc-700 disabled:text-zinc-400"
 				type="button"
 				disabled={!api || isDataOperationRunning}
 				onclick={uploadLocalDatabase}
@@ -1067,7 +1070,7 @@
 			</button>
 
 			{#if statusMessage}
-				<p class="text-center text-sm font-medium text-emerald-100">{statusMessage}</p>
+				<p class="text-center text-sm font-medium text-accent-subtle">{statusMessage}</p>
 			{/if}
 
 			{#if summary}

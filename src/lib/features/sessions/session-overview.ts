@@ -6,7 +6,7 @@ export function formatSetCellValue(value?: number) {
 
 export function getDeltaToneClass(state: 'improved' | 'regressed' | 'matched' | 'empty') {
 	if (state === 'improved') {
-		return 'text-emerald-300';
+		return 'text-positive';
 	}
 
 	if (state === 'regressed') {

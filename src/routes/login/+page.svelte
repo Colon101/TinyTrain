@@ -101,9 +101,9 @@
 </script>
 
 <main
-	class="mx-auto flex min-h-svh w-full max-w-[460px] flex-col justify-center bg-[#080b0d] px-4 py-8 text-zinc-100"
+	class="mx-auto flex min-h-svh w-full max-w-[460px] flex-col justify-center bg-surface-app px-4 py-8 text-zinc-100"
 >
-	<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">TinyTrain</p>
+	<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">TinyTrain</p>
 	<h1 class="mt-2 text-3xl font-semibold text-white">Sign in</h1>
 	<p class="mt-2 text-sm leading-6 text-zinc-400">Sign in to sync your workouts across devices.</p>
 
@@ -113,13 +113,13 @@
 
 	<div class="mt-6 space-y-3">
 		<section class="border-y border-white/10 py-4">
-			<p class="text-xs font-semibold tracking-[0.16em] text-emerald-200 uppercase">Cloud sync</p>
+			<p class="text-xs font-semibold tracking-[0.16em] text-accent-soft uppercase">Cloud sync</p>
 			<h2 class="mt-1 text-lg font-semibold text-white">Continue to TinyTrain</h2>
 			<p class="mt-1 text-sm leading-6 text-zinc-400">
 				Your workouts stay in sync and remain available offline on this device.
 			</p>
 			<button
-				class="mt-4 min-h-12 w-full rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
+				class="mt-4 min-h-12 w-full rounded-lg bg-accent px-4 text-base font-bold text-on-accent disabled:bg-white/10 disabled:text-zinc-500"
 				type="button"
 				disabled={isLoadingApi || Boolean(isBusy)}
 				onclick={signIn}

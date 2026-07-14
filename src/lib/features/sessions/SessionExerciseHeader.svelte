@@ -52,10 +52,10 @@
 	});
 </script>
 
-<div class="sticky top-0 z-10 bg-[#080b0d] pb-3">
+<div class="sticky top-0 z-10 bg-surface-app pb-3">
 	<div class="flex items-start justify-between gap-3">
 		<div class="min-w-0">
-			<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
+			<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">
 				Exercise {exerciseIndex + 1} / {totalExercises}
 			</p>
 			<h1 class="mt-1.5 line-clamp-2 text-2xl leading-tight font-semibold break-words text-white">
@@ -78,7 +78,7 @@
 
 			{#if isMenuOpen}
 				<div
-					class="absolute top-12 right-0 z-10 grid min-w-44 gap-2 rounded-lg border border-white/10 bg-[#0f1519] p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)]"
+					class="absolute top-12 right-0 z-10 grid min-w-44 gap-2 rounded-lg border border-white/10 bg-surface-menu p-2 shadow-[0_20px_60px_rgba(0,0,0,0.45)]"
 				>
 					<!-- eslint-disable svelte/no-navigation-without-resolve -->
 					<a
