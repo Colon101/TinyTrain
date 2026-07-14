@@ -11,16 +11,16 @@ the first CSS paint so returning users do not see an emerald flash before their 
 
 ## Available presets
 
-| Preset   | Main accent | Character            |
-| -------- | ----------- | -------------------- |
-| Emerald  | `#6EE7B7`   | Fresh and focused    |
-| Steel    | `#8AA3C1`   | Calm and understated |
-| Lavender | `#C4B5FD`   | Soft and reflective  |
-| Rose     | `#FDA4AF`   | Warm and expressive  |
-| Amber    | `#FCD34D`   | Bold and energetic   |
-| Arctic   | `#67E8F9`   | Cool and bright      |
+| Preset     | Main accent | Character            |
+| ---------- | ----------- | -------------------- |
+| Emerald    | `#6EE7B7`   | Fresh and focused    |
+| Ocean Blue | `#8AA3C1`   | Calm and understated |
+| Lavender   | `#C4B5FD`   | Soft and reflective  |
+| Rose       | `#FDA4AF`   | Warm and expressive  |
+| Amber      | `#FCD34D`   | Bold and energetic   |
+| Arctic     | `#67E8F9`   | Cool and bright      |
 
-Steel's main accent is the product-specified `#8AA3C1` exactly. Each preset also defines its own
+Ocean Blue's main accent is the product-specified `#8AA3C1` exactly. Each preset also defines its own
 soft/subtle accent values, shadow, and tinted dark surface stack. Emerald remains the fallback for
 missing, invalid, or unavailable browser storage.
 
@@ -143,7 +143,7 @@ positive values untouched unless a separate product setting is introduced for th
 
 `theme-contract.test.ts` verifies that every metadata entry has a matching CSS block, exact main
 accent, and WCAG AA contrast for text on the solid accent. `accent-theme.test.ts` protects preset
-validation and the product-specified Steel value.
+validation and the product-specified Ocean Blue value.
 
 QA a new theme against this screen matrix:
 

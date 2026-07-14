@@ -9,8 +9,8 @@ export const ACCENT_THEMES = [
 		description: 'Fresh and focused'
 	},
 	{
-		id: 'steel',
-		name: 'Steel',
+		id: 'ocean-blue',
+		name: 'Ocean Blue',
 		hex: '#8AA3C1',
 		description: 'Calm and understated'
 	},

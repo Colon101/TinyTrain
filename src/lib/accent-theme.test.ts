@@ -7,9 +7,9 @@ import {
 } from './accent-theme';
 
 describe('accent theme preference', () => {
-	it('includes the requested Steel preset exactly', () => {
-		expect(ACCENT_THEMES.find((theme) => theme.id === 'steel')).toMatchObject({
-			name: 'Steel',
+	it('includes the requested Ocean Blue preset exactly', () => {
+		expect(ACCENT_THEMES.find((theme) => theme.id === 'ocean-blue')).toMatchObject({
+			name: 'Ocean Blue',
 			// Keep this exact product-specified value synchronized with the CSS theme registry.
 			hex: '#8AA3C1'
 		});
@@ -17,7 +17,7 @@ describe('accent theme preference', () => {
 
 	it('accepts only registered theme identifiers', () => {
 		expect(isAccentThemeId('emerald')).toBe(true);
-		expect(isAccentThemeId('steel')).toBe(true);
+		expect(isAccentThemeId('ocean-blue')).toBe(true);
 		expect(isAccentThemeId('custom')).toBe(false);
 		expect(isAccentThemeId(null)).toBe(false);
 	});

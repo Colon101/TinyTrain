@@ -49,7 +49,7 @@
 		--theme-surface-soft: #121a20;
 		--theme-surface-line-soft: #1c252c;
 		--theme-preset-emerald-surface: #0e1417;
-		--theme-preset-steel-surface: #111720;
+		--theme-preset-ocean-blue-surface: #111720;
 		--theme-preset-lavender-surface: #161321;
 		--theme-preset-rose-surface: #1a1117;
 		--theme-preset-amber-surface: #19150d;
@@ -75,7 +75,7 @@
 		background: var(--theme-surface-canvas);
 	}
 
-	:root[data-accent-theme='steel'] {
+	:root[data-accent-theme='ocean-blue'] {
 		--theme-accent: #8aa3c1;
 		--theme-accent-soft: #b8c9db;
 		--theme-accent-subtle: #dfe7f0;
