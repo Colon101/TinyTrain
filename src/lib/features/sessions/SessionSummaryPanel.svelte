@@ -88,7 +88,7 @@
 
 	function getToneClass(tone: ProgressTone) {
 		if (tone === 'positive') {
-			return 'text-emerald-300';
+			return 'text-positive';
 		}
 
 		if (tone === 'negative') {
@@ -120,7 +120,7 @@
 
 	{#if overview.summary.status === 'planned' || canResume}
 		<button
-			class="mt-4 flex min-h-12 w-full items-center justify-center rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
+			class="mt-4 flex min-h-12 w-full items-center justify-center rounded-lg bg-accent px-4 text-base font-bold text-on-accent disabled:bg-white/10 disabled:text-zinc-500"
 			type="button"
 			disabled={isSaving}
 			onclick={onStartSession}

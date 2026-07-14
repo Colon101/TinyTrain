@@ -379,12 +379,12 @@
 </script>
 
 <main
-	class="relative mx-auto box-border flex h-svh max-h-svh w-full max-w-107.5 flex-col overflow-hidden bg-[#080b0d] px-4 py-4 text-zinc-100"
+	class="relative mx-auto box-border flex h-svh max-h-svh w-full max-w-107.5 flex-col overflow-hidden bg-surface-app px-4 py-4 text-zinc-100"
 >
 	{#if isCheckingAuth}
 		<section class="flex flex-1 flex-col justify-center">
 			<div class="h-1.5 w-24 overflow-hidden rounded-full bg-white/10">
-				<div class="h-full w-1/2 animate-pulse rounded-full bg-emerald-300"></div>
+				<div class="h-full w-1/2 animate-pulse rounded-full bg-accent"></div>
 			</div>
 			<h1 class="mt-5 text-2xl font-semibold text-white">
 				{isHandlingOAuthCallback ? 'Finishing sign-in' : 'Loading TinyTrain'}
@@ -398,7 +398,7 @@
 			<h1 class="text-3xl font-semibold text-white">Sign-in needs attention</h1>
 			<p class="mt-3 text-sm leading-6 text-red-200">{authError}</p>
 			<a
-				class="mt-6 flex min-h-12 items-center justify-center rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950"
+				class="mt-6 flex min-h-12 items-center justify-center rounded-lg bg-accent px-4 text-base font-bold text-on-accent"
 				href={resolve('/login')}
 			>
 				Back to login
@@ -414,7 +414,7 @@
 
 		{#if !isHomePage}
 			<header
-				class="absolute inset-x-0 top-0 z-20 flex min-w-0 items-center gap-2 border-b border-white/[0.07] bg-[#080b0d]/35 px-4 pt-3.5 pb-3 shadow-[0_18px_36px_rgba(0,0,0,0.22)] backdrop-blur-3xl [backdrop-filter:blur(28px)_saturate(1.35)]"
+				class="absolute inset-x-0 top-0 z-20 flex min-w-0 items-center gap-2 border-b border-white/[0.07] bg-surface-app/35 px-4 pt-3.5 pb-3 shadow-[0_18px_36px_rgba(0,0,0,0.22)] backdrop-blur-3xl [backdrop-filter:blur(28px)_saturate(1.35)]"
 			>
 				<div class="flex min-w-0 flex-1 items-center gap-2">
 					<button
@@ -437,12 +437,12 @@
 					{#if showSessionTimer}
 						{#if $sessionOverviewActions?.isEditMode && $sessionOverviewActions.canEditTime}
 							<button
-								class="inline-flex min-h-10 items-center gap-2 rounded-full border border-emerald-300/40 bg-emerald-300/10 px-3 text-xs font-semibold text-emerald-100"
+								class="inline-flex min-h-10 items-center gap-2 rounded-full border border-accent/40 bg-accent/10 px-3 text-xs font-semibold text-accent-subtle"
 								type="button"
 								aria-label="Edit session time"
 								onclick={$sessionOverviewActions.onOpenTimeEditor}
 							>
-								<Icon name="clock-3" class="h-3.5 w-3.5 text-emerald-200" />
+								<Icon name="clock-3" class="h-3.5 w-3.5 text-accent-soft" />
 								{formatDuration(
 									displayedSessionTimer?.startedAt,
 									displayedSessionTimer?.completedAt,
@@ -466,7 +466,7 @@
 						<div
 							class={`inline-flex min-h-10 items-center gap-2 rounded-full border border-white/10 bg-white/4 px-3 text-xs font-semibold ${
 								displayedSessionTimer.status === 'completed'
-									? 'text-emerald-200'
+									? 'text-success-soft'
 									: displayedSessionTimer.status === 'abandoned'
 										? 'text-red-200'
 										: 'text-zinc-200'
@@ -476,7 +476,7 @@
 								name={displayedSessionTimer.status === 'completed' ? 'check-circle' : 'activity'}
 								class={`h-3.5 w-3.5 ${
 									displayedSessionTimer.status === 'completed'
-										? 'text-emerald-300'
+										? 'text-success'
 										: displayedSessionTimer.status === 'abandoned'
 											? 'text-red-300'
 											: 'text-zinc-500'
@@ -494,7 +494,7 @@
 			<div class="pointer-events-none absolute top-20 right-4 z-30">
 				<div class="pointer-events-auto relative" bind:this={sessionActionsMenuContainer}>
 					<button
-						class="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-[#11171a]/35 text-sm font-semibold text-zinc-300 shadow-[0_12px_30px_rgba(0,0,0,0.28)] backdrop-blur-3xl [backdrop-filter:blur(24px)_saturate(1.35)] disabled:text-zinc-500"
+						class="flex h-11 w-11 items-center justify-center rounded-full border border-white/10 bg-surface-raised/35 text-sm font-semibold text-zinc-300 shadow-[0_12px_30px_rgba(0,0,0,0.28)] backdrop-blur-3xl [backdrop-filter:blur(24px)_saturate(1.35)] disabled:text-zinc-500"
 						type="button"
 						title="Open session menu"
 						aria-label="Open session menu"
@@ -517,19 +517,19 @@
 										$sessionOverviewActions.isSharingSession}
 									onclick={() => runSessionAction($sessionOverviewActions!.onShareSession)}
 								>
-									<Icon name="share-2" class="h-4 w-4 text-emerald-200" />
+									<Icon name="share-2" class="h-4 w-4 text-accent-soft" />
 									{$sessionOverviewActions.isSharingSession ? 'Rendering image' : 'Share session'}
 								</button>
 							{/if}
 
 							{#if $sessionOverviewActions.isEditMode}
 								<button
-									class="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-emerald-100 disabled:text-zinc-500"
+									class="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-accent-subtle disabled:text-zinc-500"
 									type="button"
 									disabled={$sessionOverviewActions.isSaving}
 									onclick={() => runSessionAction($sessionOverviewActions!.onSaveEditMode)}
 								>
-									<Icon name="check" class="h-4 w-4 text-emerald-200" />
+									<Icon name="check" class="h-4 w-4 text-accent-soft" />
 									{$sessionOverviewActions.hasUnsavedChanges ? 'Save changes' : 'Done editing'}
 								</button>
 								<button

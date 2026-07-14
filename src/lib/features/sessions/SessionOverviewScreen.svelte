@@ -1222,7 +1222,7 @@
 	{#if isLoading}
 		<section class="flex flex-1 flex-col justify-center">
 			<div class="h-1.5 w-24 overflow-hidden rounded-full bg-white/10">
-				<div class="h-full w-1/2 animate-pulse rounded-full bg-emerald-300"></div>
+				<div class="h-full w-1/2 animate-pulse rounded-full bg-accent"></div>
 			</div>
 			<h1 class="mt-5 text-2xl font-semibold text-white">Loading session</h1>
 			<p class="mt-2 text-sm leading-6 text-zinc-400">Gathering the session summary.</p>
@@ -1234,7 +1234,7 @@
 				This session is not available in local storage.
 			</p>
 			<a
-				class="mt-6 flex min-h-12 items-center justify-center rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950"
+				class="mt-6 flex min-h-12 items-center justify-center rounded-lg bg-accent px-4 text-base font-bold text-on-accent"
 				href={resolve('/')}
 			>
 				Back to home
@@ -1317,7 +1317,7 @@
 				onclick={closeTimeEditor}
 			></button>
 			<form
-				class="relative max-h-[calc(100svh-env(safe-area-inset-bottom)-1.5rem)] w-full overflow-y-auto overscroll-contain rounded-lg border border-white/10 bg-[#0b1013] shadow-[0_24px_80px_rgba(0,0,0,0.58)]"
+				class="relative max-h-[calc(100svh-env(safe-area-inset-bottom)-1.5rem)] w-full overflow-y-auto overscroll-contain rounded-lg border border-white/10 bg-surface-dialog shadow-[0_24px_80px_rgba(0,0,0,0.58)]"
 				onsubmit={applyTimeEditor}
 			>
 				<div class="flex justify-center pt-2">
@@ -1326,7 +1326,7 @@
 
 				<div class="flex items-start justify-between gap-3 px-4 pt-4">
 					<div class="min-w-0">
-						<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
+						<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">
 							Edit time
 						</p>
 						<h2
@@ -1353,7 +1353,7 @@
 							Start
 						</span>
 						<input
-							class="h-11 rounded-lg border border-white/10 bg-white/[0.04] px-3 text-right text-xl font-semibold text-white tabular-nums outline-none focus:border-emerald-300/60"
+							class="h-11 rounded-lg border border-white/10 bg-white/[0.04] px-3 text-right text-xl font-semibold text-white tabular-nums outline-none focus:border-accent/60"
 							type="time"
 							name="tinytrain-session-start-time"
 							autocomplete="off"
@@ -1372,7 +1372,7 @@
 						<button
 							class={`rounded-lg border px-3 py-3 text-left transition ${
 								timeEditorEndMode === 'recorded_end'
-									? 'border-emerald-300/60 bg-emerald-300/10'
+									? 'border-accent/60 bg-accent/10'
 									: 'border-white/10 bg-white/[0.03]'
 							}`}
 							type="button"
@@ -1388,7 +1388,7 @@
 						<button
 							class={`rounded-lg border px-3 py-3 text-left transition disabled:opacity-40 ${
 								timeEditorEndMode === 'last_activity'
-									? 'border-emerald-300/60 bg-emerald-300/10'
+									? 'border-accent/60 bg-accent/10'
 									: 'border-white/10 bg-white/[0.03]'
 							}`}
 							type="button"
@@ -1416,7 +1416,7 @@
 								Hours
 							</span>
 							<input
-								class="h-13 min-w-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-center text-2xl font-semibold text-white tabular-nums outline-none focus:border-emerald-300/60"
+								class="h-13 min-w-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-center text-2xl font-semibold text-white tabular-nums outline-none focus:border-accent/60"
 								type="number"
 								name="tinytrain-session-duration-hours"
 								autocomplete="off"
@@ -1433,7 +1433,7 @@
 								Min
 							</span>
 							<input
-								class="h-13 min-w-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-center text-2xl font-semibold text-white tabular-nums outline-none focus:border-emerald-300/60"
+								class="h-13 min-w-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-center text-2xl font-semibold text-white tabular-nums outline-none focus:border-accent/60"
 								type="number"
 								name="tinytrain-session-duration-minutes"
 								autocomplete="off"
@@ -1450,7 +1450,7 @@
 								Sec
 							</span>
 							<input
-								class="h-13 min-w-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-center text-2xl font-semibold text-white tabular-nums outline-none focus:border-emerald-300/60"
+								class="h-13 min-w-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 text-center text-2xl font-semibold text-white tabular-nums outline-none focus:border-accent/60"
 								type="number"
 								name="tinytrain-session-duration-seconds"
 								autocomplete="off"
@@ -1464,7 +1464,7 @@
 				</div>
 
 				<div
-					class="sticky bottom-0 grid grid-cols-[1fr_1.35fr] gap-2 border-t border-white/10 bg-[#0b1013]/95 px-4 pt-4 pb-4 backdrop-blur-xl"
+					class="sticky bottom-0 grid grid-cols-[1fr_1.35fr] gap-2 border-t border-white/10 bg-surface-dialog/95 px-4 pt-4 pb-4 backdrop-blur-xl"
 				>
 					<button
 						class="flex min-h-11 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] px-4 text-sm font-semibold text-zinc-200"
@@ -1474,7 +1474,7 @@
 						Cancel
 					</button>
 					<button
-						class="flex min-h-11 items-center justify-center gap-2 rounded-lg bg-emerald-300 px-4 text-sm font-bold text-zinc-950"
+						class="flex min-h-11 items-center justify-center gap-2 rounded-lg bg-accent px-4 text-sm font-bold text-on-accent"
 						type="submit"
 					>
 						<Icon name="check" class="h-4 w-4" />

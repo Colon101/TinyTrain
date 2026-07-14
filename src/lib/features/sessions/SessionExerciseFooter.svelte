@@ -26,7 +26,7 @@
 </script>
 
 <div
-	class="sticky bottom-0 z-10 mt-2 grid shrink-0 gap-2.5 border-t border-white/10 bg-[#080b0d] pt-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]"
+	class="sticky bottom-0 z-10 mt-2 grid shrink-0 gap-2.5 border-t border-white/10 bg-surface-app pt-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]"
 >
 	<div class="grid grid-cols-2 gap-2.5">
 		<button
@@ -38,7 +38,7 @@
 			Previous
 		</button>
 		<button
-			class="flex min-h-10 items-center justify-center rounded-lg bg-emerald-300 px-4 text-sm font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
+			class="flex min-h-10 items-center justify-center rounded-lg bg-accent px-4 text-sm font-bold text-on-accent disabled:bg-white/10 disabled:text-zinc-500"
 			type="button"
 			disabled={isSaving || !nextExercise}
 			onclick={onNextExercise}
@@ -59,7 +59,7 @@
 		</button>
 		{#if !isEditMode}
 			<button
-				class="flex min-h-10 items-center justify-center rounded-lg bg-emerald-300 px-4 text-sm font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
+				class="flex min-h-10 items-center justify-center rounded-lg bg-accent px-4 text-sm font-bold text-on-accent disabled:bg-white/10 disabled:text-zinc-500"
 				type="button"
 				disabled={isSaving}
 				onclick={onEndSession}

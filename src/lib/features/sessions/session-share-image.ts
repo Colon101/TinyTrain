@@ -13,6 +13,15 @@ type DrawnCell = {
 	tone: 'up' | 'down' | 'muted';
 };
 
+export type ShareImagePalette = {
+	accent: string;
+	positive: string;
+	page: string;
+	panel: string;
+	panelSoft: string;
+	lineSoft: string;
+};
+
 const IMAGE_WIDTH = 560;
 const OUTER_PADDING = 24;
 const HEADER_HEIGHT = 252;
@@ -24,15 +33,9 @@ const TABLE_ROW_HEIGHT = 40;
 const STAT_PILL_GAP = 14;
 const STAT_PILL_WIDTH = (IMAGE_WIDTH - OUTER_PADDING * 2 - STAT_PILL_GAP) / 2;
 const COLORS = {
-	page: '#070a0d',
-	panel: '#0f1519',
-	panelSoft: '#121a20',
-	line: '#27313a',
-	lineSoft: '#1c252c',
 	text: '#f4f4f5',
 	muted: '#a1a1aa',
 	subtle: '#71717a',
-	emerald: '#6ee7b7',
 	red: '#fca5a5',
 	amber: '#fcd34d'
 };
@@ -54,12 +57,13 @@ export async function renderSessionShareImage(
 	if (!ctx) {
 		throw new Error('Image rendering is not available in this browser.');
 	}
+	const palette = getShareImagePalette();
 
-	ctx.fillStyle = COLORS.page;
+	ctx.fillStyle = palette.page;
 	ctx.fillRect(0, 0, IMAGE_WIDTH, layoutHeight);
 
-	drawHeader(ctx, overview, nowMs, previousOverview);
-	drawExercises(ctx, overview);
+	drawHeader(ctx, overview, nowMs, previousOverview, palette);
+	drawExercises(ctx, overview, palette);
 	drawWatermark(ctx, layoutHeight);
 
 	const blob = await canvasToBlob(canvas);
@@ -117,7 +121,8 @@ function drawHeader(
 	ctx: CanvasRenderingContext2D,
 	overview: SessionOverview,
 	nowMs: number,
-	previousOverview: SessionOverview | null
+	previousOverview: SessionOverview | null,
+	palette: ShareImagePalette
 ) {
 	const { summary } = overview;
 	const statsY = OUTER_PADDING + 112;
@@ -129,7 +134,7 @@ function drawHeader(
 			: `${formatDayHeading(summary.dayKey)} at ${formatSessionTime(summary.startedAt)}`;
 
 	drawText(ctx, 'TinyTrain', { x: OUTER_PADDING, y: OUTER_PADDING }, '700 18px Inter, system-ui', {
-		color: COLORS.emerald
+		color: palette.accent
 	});
 	drawText(
 		ctx,
@@ -154,7 +159,8 @@ function drawHeader(
 		{ x: OUTER_PADDING, y: statsY },
 		'Volume',
 		formatVolume(currentVolume),
-		getVolumeTone(currentVolume, previousVolume),
+		getVolumeTone(currentVolume, previousVolume, palette.positive),
+		palette,
 		getVolumeComparisonLabel(currentVolume, previousVolume)
 	);
 	drawStatPill(
@@ -162,30 +168,37 @@ function drawHeader(
 		{ x: OUTER_PADDING + (STAT_PILL_WIDTH + STAT_PILL_GAP), y: statsY },
 		'Duration',
 		formatDuration(summary.startedAt, summary.completedAt, nowMs),
-		COLORS.text
+		COLORS.text,
+		palette
 	);
 	drawStatPill(
 		ctx,
 		{ x: OUTER_PADDING, y: statsY + 68 },
 		'Exercises',
 		String(summary.totalExercises),
-		COLORS.text
+		COLORS.text,
+		palette
 	);
 	drawStatPill(
 		ctx,
 		{ x: OUTER_PADDING + (STAT_PILL_WIDTH + STAT_PILL_GAP), y: statsY + 68 },
 		'Sets',
 		String(summary.totalSets),
-		COLORS.text
+		COLORS.text,
+		palette
 	);
 }
 
-function drawExercises(ctx: CanvasRenderingContext2D, overview: SessionOverview) {
+function drawExercises(
+	ctx: CanvasRenderingContext2D,
+	overview: SessionOverview,
+	palette: ShareImagePalette
+) {
 	let y = OUTER_PADDING + HEADER_HEIGHT;
 
 	for (const [index, sessionExercise] of overview.exercises.entries()) {
 		const height = getExerciseCardHeight(sessionExercise);
-		drawExerciseCard(ctx, sessionExercise, index + 1, y, height);
+		drawExerciseCard(ctx, sessionExercise, index + 1, y, height, palette);
 		y += height + EXERCISE_GAP;
 	}
 }
@@ -195,7 +208,8 @@ function drawExerciseCard(
 	sessionExercise: SessionExerciseOverview,
 	position: number,
 	y: number,
-	height: number
+	height: number,
+	palette: ShareImagePalette
 ) {
 	const x = OUTER_PADDING;
 	const width = IMAGE_WIDTH - OUTER_PADDING * 2;
@@ -203,9 +217,9 @@ function drawExerciseCard(
 	const tableY = y + CARD_PADDING + 38;
 
 	roundedRect(ctx, x, y, width, height, CARD_RADIUS);
-	ctx.fillStyle = COLORS.panel;
+	ctx.fillStyle = palette.panel;
 	ctx.fill();
-	ctx.strokeStyle = COLORS.lineSoft;
+	ctx.strokeStyle = palette.lineSoft;
 	ctx.lineWidth = 2;
 	ctx.stroke();
 
@@ -214,7 +228,7 @@ function drawExerciseCard(
 		String(position).padStart(2, '0'),
 		{ x: x + CARD_PADDING, y: y + CARD_PADDING + 1 },
 		'700 24px Inter, system-ui',
-		{ color: COLORS.emerald }
+		{ color: palette.accent }
 	);
 	drawText(
 		ctx,
@@ -227,7 +241,7 @@ function drawExerciseCard(
 	drawTableHeader(ctx, x + CARD_PADDING, tableY, width - CARD_PADDING * 2);
 
 	if (sets.length === 0) {
-		drawEmptySetRow(ctx, x + CARD_PADDING, tableY + 34, width - CARD_PADDING * 2);
+		drawEmptySetRow(ctx, x + CARD_PADDING, tableY + 34, width - CARD_PADDING * 2, palette);
 		return;
 	}
 
@@ -237,7 +251,8 @@ function drawExerciseCard(
 			set,
 			x + CARD_PADDING,
 			tableY + 34 + index * TABLE_ROW_HEIGHT,
-			width - CARD_PADDING * 2
+			width - CARD_PADDING * 2,
+			palette
 		);
 	});
 }
@@ -258,10 +273,11 @@ function drawSetRow(
 	set: SessionSetOverview,
 	x: number,
 	y: number,
-	width: number
+	width: number,
+	palette: ShareImagePalette
 ) {
 	roundedRect(ctx, x, y, width, TABLE_ROW_HEIGHT - 4, 12);
-	ctx.fillStyle = COLORS.panelSoft;
+	ctx.fillStyle = palette.panelSoft;
 	ctx.fill();
 
 	const columns = getColumns(x, width);
@@ -293,7 +309,7 @@ function drawSetRow(
 				{ x: cell.column.x, y: y + 24 },
 				'600 12px Inter, system-ui',
 				{
-					color: getDeltaTone(cell.value.tone),
+					color: getDeltaTone(cell.value.tone, palette.positive),
 					align: cell.column.align
 				}
 			);
@@ -301,9 +317,15 @@ function drawSetRow(
 	}
 }
 
-function drawEmptySetRow(ctx: CanvasRenderingContext2D, x: number, y: number, width: number) {
+function drawEmptySetRow(
+	ctx: CanvasRenderingContext2D,
+	x: number,
+	y: number,
+	width: number,
+	palette: ShareImagePalette
+) {
 	roundedRect(ctx, x, y, width, TABLE_ROW_HEIGHT - 4, 12);
-	ctx.fillStyle = COLORS.panelSoft;
+	ctx.fillStyle = palette.panelSoft;
 	ctx.fill();
 	drawText(ctx, 'No logged sets', { x: x + 18, y: y + 10 }, '700 16px Inter, system-ui', {
 		color: COLORS.subtle
@@ -326,12 +348,13 @@ function drawStatPill(
 	label: string,
 	value: string,
 	valueColor: string,
+	palette: ShareImagePalette,
 	detail = ''
 ) {
 	roundedRect(ctx, point.x, point.y, STAT_PILL_WIDTH, 54, 12);
-	ctx.fillStyle = COLORS.panel;
+	ctx.fillStyle = palette.panel;
 	ctx.fill();
-	ctx.strokeStyle = COLORS.lineSoft;
+	ctx.strokeStyle = palette.lineSoft;
 	ctx.lineWidth = 2;
 	ctx.stroke();
 
@@ -418,17 +441,21 @@ function getVolumeComparisonLabel(currentVolume: number, previousVolume: number 
 	return `${diff > 0 ? '+' : ''}${formatVolume(diff)}`;
 }
 
-function getVolumeTone(currentVolume: number, previousVolume: number | null) {
+function getVolumeTone(
+	currentVolume: number,
+	previousVolume: number | null,
+	positiveColor: string
+) {
 	if (previousVolume === null || currentVolume === previousVolume) {
 		return COLORS.text;
 	}
 
-	return currentVolume > previousVolume ? COLORS.emerald : COLORS.red;
+	return currentVolume > previousVolume ? positiveColor : COLORS.red;
 }
 
-function getDeltaTone(tone: DrawnCell['tone']) {
+function getDeltaTone(tone: DrawnCell['tone'], positiveColor: string) {
 	if (tone === 'up') {
-		return COLORS.emerald;
+		return positiveColor;
 	}
 
 	if (tone === 'down') {
@@ -436,6 +463,27 @@ function getDeltaTone(tone: DrawnCell['tone']) {
 	}
 
 	return COLORS.subtle;
+}
+
+export function resolveShareImagePalette(
+	getPropertyValue: (property: string) => string
+): ShareImagePalette {
+	const surfaceFallback = '#000000';
+
+	return {
+		accent: getPropertyValue('--theme-accent').trim() || COLORS.text,
+		positive: getPropertyValue('--semantic-positive').trim() || COLORS.text,
+		page: getPropertyValue('--theme-surface-canvas').trim() || surfaceFallback,
+		panel: getPropertyValue('--theme-surface-menu').trim() || surfaceFallback,
+		panelSoft: getPropertyValue('--theme-surface-soft').trim() || surfaceFallback,
+		lineSoft: getPropertyValue('--theme-surface-line-soft').trim() || surfaceFallback
+	};
+}
+
+function getShareImagePalette(): ShareImagePalette {
+	const rootStyle = getComputedStyle(document.documentElement);
+
+	return resolveShareImagePalette((property) => rootStyle.getPropertyValue(property));
 }
 
 function drawText(

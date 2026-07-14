@@ -41,7 +41,7 @@
 
 	function getDeltaToneClass(state: SessionFieldDelta['state']) {
 		if (state === 'improved') {
-			return 'text-emerald-700';
+			return 'text-positive-on-light';
 		}
 
 		if (state === 'regressed') {
@@ -53,7 +53,7 @@
 
 	function getFieldInputClass(state: SessionFieldDelta['state']) {
 		if (state === 'improved') {
-			return 'border-2 border-emerald-500 bg-white text-black';
+			return 'border-2 border-positive-border bg-white text-black';
 		}
 
 		if (state === 'regressed') {

@@ -158,7 +158,7 @@
 
 <section aria-label="Install TinyTrain">
 	<button
-		class="flex min-h-12 w-full items-center justify-center rounded-lg border border-emerald-300/40 px-4 text-base font-semibold text-emerald-100 transition hover:border-emerald-200 hover:bg-emerald-300/10 disabled:cursor-default disabled:border-zinc-700 disabled:text-zinc-500 disabled:hover:bg-transparent"
+		class="flex min-h-12 w-full items-center justify-center rounded-lg border border-accent/40 px-4 text-base font-semibold text-accent-subtle transition hover:border-accent-soft hover:bg-accent/10 disabled:cursor-default disabled:border-zinc-700 disabled:text-zinc-500 disabled:hover:bg-transparent"
 		type="button"
 		disabled={installStatus === 'installing' || installStatus === 'installed'}
 		onclick={addToHomeScreen}

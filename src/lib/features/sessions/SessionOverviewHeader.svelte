@@ -22,7 +22,7 @@
 <div class={isInProgress ? 'pb-3' : 'pb-5'}>
 	<div class="min-w-0 pr-12">
 		{#if isInProgress}
-			<p class="text-md pt-5 pb-3 font-semibold tracking-[0.18em] text-emerald-200 uppercase">
+			<p class="text-md pt-5 pb-3 font-semibold tracking-[0.18em] text-accent-soft uppercase">
 				Exercises
 			</p>
 		{:else}
@@ -42,10 +42,10 @@
 
 	<!-- {#if overview.previousSummary && overview.summary.status !== 'in_progress'}
 		<a
-			class="mt-4 block rounded-lg border border-white/10 bg-white/[0.03] px-4 py-4 transition hover:border-emerald-300/40 hover:bg-white/[0.05]"
+			class="mt-4 block rounded-lg border border-white/10 bg-white/[0.03] px-4 py-4 transition hover:border-accent/40 hover:bg-white/[0.05]"
 			href={`/sessions/${overview.previousSummary.id}`}
 		>
-			<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
+			<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">
 				Previous session
 			</p>
 			<p class="mt-2 text-sm font-semibold text-white">

@@ -222,7 +222,7 @@
 	{#if isLoading}
 		<section class="flex flex-1 flex-col justify-center">
 			<div class="h-1.5 w-24 overflow-hidden rounded-full bg-white/10">
-				<div class="h-full w-1/2 animate-pulse rounded-full bg-emerald-300"></div>
+				<div class="h-full w-1/2 animate-pulse rounded-full bg-accent"></div>
 			</div>
 			<h1 class="mt-5 text-2xl font-semibold text-white">Loading exercises</h1>
 			<p class="mt-2 text-sm leading-6 text-zinc-400">Collecting your custom exercise library.</p>
@@ -250,7 +250,7 @@
 		<section class="border-y border-white/10 py-5">
 			<div class="flex items-center justify-between gap-3">
 				<div>
-					<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">Mode</p>
+					<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">Mode</p>
 					<h2 class="mt-2 text-xl font-semibold text-white">
 						{selectedDetail.exercise.unilateral ? 'Unilateral' : 'Bilateral'}
 					</h2>
@@ -271,7 +271,7 @@
 				<button
 					class={`min-h-11 rounded-lg px-3 text-sm font-semibold ${
 						!selectedDetail.exercise.unilateral
-							? 'bg-emerald-300 text-zinc-950'
+							? 'bg-accent text-on-accent'
 							: 'border border-white/10 text-zinc-300'
 					}`}
 					type="button"
@@ -283,7 +283,7 @@
 				<button
 					class={`min-h-11 rounded-lg px-3 text-sm font-semibold ${
 						selectedDetail.exercise.unilateral
-							? 'bg-emerald-300 text-zinc-950'
+							? 'bg-accent text-on-accent'
 							: 'border border-white/10 text-zinc-300'
 					}`}
 					type="button"
@@ -322,7 +322,7 @@
 
 		{#if detailTab === 'summary'}
 			<section class="mt-5 border-y border-white/10 py-5">
-				<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
+				<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">
 					Reset events
 				</p>
 				{#if selectedDetail.resetEvents.length > 0}
@@ -343,7 +343,7 @@
 		{:else}
 			<section class="mt-5 border-y border-white/10 py-5">
 				<p
-					class="flex items-center gap-2 text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase"
+					class="flex items-center gap-2 text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase"
 				>
 					<Icon name="history" class="h-4 w-4" />
 					History
@@ -353,7 +353,7 @@
 					<div class="mt-4 grid gap-3">
 						{#each selectedDetail.history as entry (entry.sessionId)}
 							<a
-								class="block rounded-lg border border-white/10 bg-white/[0.03] px-4 py-4 transition hover:border-emerald-300/50"
+								class="block rounded-lg border border-white/10 bg-white/[0.03] px-4 py-4 transition hover:border-accent/50"
 								href={resolve('/(app)/sessions/[sessionId]', { sessionId: entry.sessionId })}
 							>
 								<div class="flex items-start justify-between gap-3">
@@ -385,7 +385,7 @@
 		{/if}
 	{:else}
 		<div class="pb-5">
-			<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">TinyTrain</p>
+			<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">TinyTrain</p>
 			<h1 class="mt-2 text-3xl font-semibold text-white">Exercises</h1>
 			<p class="mt-2 text-sm leading-6 text-zinc-400">
 				Review your performed movements and manage custom exercises.
@@ -397,7 +397,7 @@
 				<span class="mb-2 block text-sm font-medium text-zinc-300">Add custom exercise</span>
 				<input
 					id="custom-exercise-name"
-					class="min-h-12 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-base text-white outline-none placeholder:text-zinc-600 focus:border-emerald-300/60"
+					class="min-h-12 w-full rounded-lg border border-white/10 bg-white/[0.06] px-3 text-base text-white outline-none placeholder:text-zinc-600 focus:border-accent/60"
 					bind:value={draftName}
 					autocomplete="off"
 					placeholder="Cable squeeze row, ring curl..."
@@ -407,9 +407,7 @@
 			<div class="mt-3 grid grid-cols-2 gap-2">
 				<button
 					class={`min-h-11 rounded-lg px-3 text-sm font-semibold ${
-						!draftUnilateral
-							? 'bg-emerald-300 text-zinc-950'
-							: 'border border-white/10 text-zinc-300'
+						!draftUnilateral ? 'bg-accent text-on-accent' : 'border border-white/10 text-zinc-300'
 					}`}
 					type="button"
 					onclick={() => (draftUnilateral = false)}
@@ -418,9 +416,7 @@
 				</button>
 				<button
 					class={`min-h-11 rounded-lg px-3 text-sm font-semibold ${
-						draftUnilateral
-							? 'bg-emerald-300 text-zinc-950'
-							: 'border border-white/10 text-zinc-300'
+						draftUnilateral ? 'bg-accent text-on-accent' : 'border border-white/10 text-zinc-300'
 					}`}
 					type="button"
 					onclick={() => (draftUnilateral = true)}
@@ -430,7 +426,7 @@
 			</div>
 
 			<button
-				class="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
+				class="mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-lg bg-accent px-4 text-base font-bold text-on-accent disabled:bg-white/10 disabled:text-zinc-500"
 				type="submit"
 				disabled={isSaving || !draftName.trim()}
 			>
@@ -440,14 +436,14 @@
 		</form>
 
 		<section class="py-5">
-			<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">
+			<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">
 				Exercise history
 			</p>
 			{#if items.length > 0}
 				<div class="mt-4 grid gap-3">
 					{#each items as item (item.exercise.id)}
 						<button
-							class="flex min-h-16 w-full items-center justify-between gap-3 overflow-hidden rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-left transition hover:border-emerald-300/50"
+							class="flex min-h-16 w-full items-center justify-between gap-3 overflow-hidden rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3 text-left transition hover:border-accent/50"
 							type="button"
 							onclick={() => openExercise(item.exercise.id)}
 						>

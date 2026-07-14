@@ -45,7 +45,7 @@
 
 <section class={sectionClass}>
 	{#if !hideHeading}
-		<p class="text-xs font-semibold tracking-[0.18em] text-emerald-200 uppercase">Exercises</p>
+		<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">Exercises</p>
 	{/if}
 
 	{#if isEditable}

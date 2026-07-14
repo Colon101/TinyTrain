@@ -1,10 +1,63 @@
 @import 'tailwindcss';
+
+/*
+ * TinyTrain's interchangeable accent contract.
+ *
+ * A future theme picker only needs to update the --theme-* values below (or
+ * override them on :root). Components consume the semantic Tailwind aliases,
+ * never a concrete color palette. Success and positive-progress colors are
+ * deliberately separate so completed workouts and +weight deltas stay green.
+ */
+@theme inline {
+	--color-accent: var(--theme-accent);
+	--color-accent-soft: var(--theme-accent-soft);
+	--color-accent-subtle: var(--theme-accent-subtle);
+	--color-accent-shadow: var(--theme-accent-shadow);
+	--color-on-accent: var(--theme-on-accent);
+	--color-surface-app: var(--theme-surface-app);
+	--color-surface-overlay: var(--theme-surface-overlay);
+	--color-surface-raised: var(--theme-surface-raised);
+	--color-surface-menu: var(--theme-surface-menu);
+	--color-surface-dialog: var(--theme-surface-dialog);
+	--color-success: var(--semantic-success);
+	--color-success-soft: var(--semantic-success-soft);
+	--color-success-subtle: var(--semantic-success-subtle);
+	--color-positive: var(--semantic-positive);
+	--color-positive-border: var(--semantic-positive-border);
+	--color-positive-on-light: var(--semantic-positive-on-light);
+}
+
 @utility no-scrollbar {
 	@apply [scrollbar-width:none] [&::-webkit-scrollbar]:hidden;
 }
 @layer base {
 	:root {
+		--theme-accent: #6ee7b7;
+		--theme-accent-soft: #a7f3d0;
+		--theme-accent-subtle: #d1fae5;
+		--theme-accent-shadow: #022c22;
+		--theme-on-accent: #09090b;
+		--theme-accent-glow: rgb(52 211 153 / 0.14);
+		--theme-surface-canvas: #070a0d;
+		--theme-surface-canvas-top: #0b1014;
+		--theme-surface-canvas-bottom: #06080a;
+		--theme-surface-app: #080b0d;
+		--theme-surface-overlay: #0e1417;
+		--theme-surface-raised: #11171a;
+		--theme-surface-menu: #0f1519;
+		--theme-surface-dialog: #0b1013;
+		--theme-surface-soft: #121a20;
+		--theme-surface-line-soft: #1c252c;
+
+		--semantic-success: #6ee7b7;
+		--semantic-success-soft: #a7f3d0;
+		--semantic-success-subtle: #d1fae5;
+		--semantic-positive: #6ee7b7;
+		--semantic-positive-border: #10b981;
+		--semantic-positive-on-light: #047857;
+
 		color-scheme: dark;
+		accent-color: var(--theme-accent);
 		font-family:
 			Inter,
 			ui-sans-serif,
@@ -13,11 +66,11 @@
 			BlinkMacSystemFont,
 			'Segoe UI',
 			sans-serif;
-		background: #070a0d;
+		background: var(--theme-surface-canvas);
 	}
 
 	html {
-		background: #070a0d;
+		background: var(--theme-surface-canvas);
 	}
 
 	body {
@@ -25,8 +78,13 @@
 		min-height: 100svh;
 		margin: 0;
 		background:
-			radial-gradient(circle at 50% -10%, rgba(52, 211, 153, 0.14), transparent 34rem),
-			linear-gradient(180deg, #0b1014 0%, #070a0d 46%, #06080a 100%);
+			radial-gradient(circle at 50% -10%, var(--theme-accent-glow), transparent 34rem),
+			linear-gradient(
+				180deg,
+				var(--theme-surface-canvas-top) 0%,
+				var(--theme-surface-canvas) 46%,
+				var(--theme-surface-canvas-bottom) 100%
+			);
 		color: #f4f4f5;
 	}
 

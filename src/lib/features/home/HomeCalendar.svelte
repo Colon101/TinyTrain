@@ -33,7 +33,7 @@
 			return '';
 		}
 
-		return session.status === 'completed' ? 'bg-emerald-300' : 'bg-amber-300';
+		return session.status === 'completed' ? 'bg-success' : 'bg-amber-300';
 	}
 
 	function handlePointerDown(event: PointerEvent) {

@@ -941,7 +941,7 @@
 	{#if isLoading}
 		<section class="flex flex-1 flex-col justify-center">
 			<div class="h-1.5 w-24 overflow-hidden rounded-full bg-white/10">
-				<div class="h-full w-1/2 animate-pulse rounded-full bg-emerald-300"></div>
+				<div class="h-full w-1/2 animate-pulse rounded-full bg-accent"></div>
 			</div>
 			<h1 class="mt-5 text-2xl font-semibold text-white">Loading exercise</h1>
 		</section>
@@ -952,7 +952,7 @@
 				This exercise is not available in the current session.
 			</p>
 			<a
-				class="mt-6 flex min-h-12 items-center justify-center rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950"
+				class="mt-6 flex min-h-12 items-center justify-center rounded-lg bg-accent px-4 text-base font-bold text-on-accent"
 				href={resolve('/(app)/sessions/[sessionId]', { sessionId })}
 			>
 				Back to session
@@ -967,7 +967,7 @@
 
 			<div class="mt-6 grid gap-3">
 				<button
-					class="flex min-h-12 items-center justify-center rounded-lg bg-emerald-300 px-4 text-base font-bold text-zinc-950 disabled:bg-white/10 disabled:text-zinc-500"
+					class="flex min-h-12 items-center justify-center rounded-lg bg-accent px-4 text-base font-bold text-on-accent disabled:bg-white/10 disabled:text-zinc-500"
 					type="button"
 					disabled={isSaving || overview.summary.status !== 'planned'}
 					onclick={handleStartSession}
