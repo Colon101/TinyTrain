@@ -196,11 +196,11 @@
 					void dbApi.hydrateVisibleScope({ type: 'session', sessionId }).catch(() => undefined);
 				}
 			} catch (error) {
-				if (!loadLifetime.isDisposed()) {
+				if (!loadLifetime.isDisposed() && getAuthOwnedStateIdentity() === mountedOwnerIdentity) {
 					errorMessage = getErrorMessage(error);
 				}
 			} finally {
-				if (!loadLifetime.isDisposed()) {
+				if (!loadLifetime.isDisposed() && getAuthOwnedStateIdentity() === mountedOwnerIdentity) {
 					isLoading = false;
 				}
 			}
@@ -350,11 +350,11 @@
 
 				await afterSuccess?.();
 			} catch (error) {
-				if (!loadLifetime.isDisposed()) {
+				if (!loadLifetime.isDisposed() && getAuthOwnedStateIdentity() === mutationOwnerIdentity) {
 					errorMessage = getErrorMessage(error);
 				}
 			} finally {
-				if (!loadLifetime.isDisposed()) {
+				if (!loadLifetime.isDisposed() && getAuthOwnedStateIdentity() === mutationOwnerIdentity) {
 					isSaving = false;
 				}
 			}

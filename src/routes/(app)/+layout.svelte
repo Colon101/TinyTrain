@@ -3,6 +3,7 @@
 	import { beforeNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
+	import { getAuthOwnedStateIdentity } from '$lib/auth-owned-state';
 	import type { SessionOverview } from '$lib/db';
 	import ProfileMenu from '$lib/features/app/ProfileMenu.svelte';
 	import {
@@ -183,12 +184,14 @@
 
 	$effect(() => {
 		const sessionId = sessionMatch?.[1];
+		const ownerId = currentUser.userId;
+		const ownerIdentity = getAuthOwnedStateIdentity();
 		let disposed = false;
 		let timerSubscription: ReturnType<typeof startLatestValueSubscription> | null = null;
 
 		sessionTimer = null;
 
-		if (!sessionId || isCheckingAuth || Boolean(authError)) {
+		if (!sessionId || !ownerId || isCheckingAuth || Boolean(authError)) {
 			return;
 		}
 
@@ -198,7 +201,7 @@
 			try {
 				const api = (await import('$lib/db')) as DatabaseApi;
 
-				if (disposed) {
+				if (disposed || getAuthOwnedStateIdentity() !== ownerIdentity) {
 					return;
 				}
 
@@ -210,6 +213,7 @@
 							{ debounceMs: 250 }
 						),
 					load: () => api.getSessionTimerSummary(activeSessionId),
+					isCurrent: () => getAuthOwnedStateIdentity() === ownerIdentity,
 					apply: (timer) => {
 						sessionTimer = timer;
 
@@ -226,7 +230,7 @@
 					.hydrateVisibleScope({ type: 'session', sessionId: activeSessionId })
 					.catch(() => undefined);
 			} catch {
-				if (!disposed) {
+				if (!disposed && getAuthOwnedStateIdentity() === ownerIdentity) {
 					sessionTimer = null;
 				}
 			}

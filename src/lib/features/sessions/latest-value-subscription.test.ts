@@ -57,4 +57,23 @@ describe('latest value subscription', () => {
 		expect(unsubscribe).toHaveBeenCalledOnce();
 		expect(apply).not.toHaveBeenCalled();
 	});
+
+	it('does not publish after its external owner becomes stale', async () => {
+		const pendingRead = deferred<string>();
+		const apply = vi.fn();
+		let ownsValue = true;
+		const controller = startLatestValueSubscription({
+			subscribe: () => ({ unsubscribe: vi.fn() }),
+			load: () => pendingRead.promise,
+			apply,
+			isCurrent: () => ownsValue
+		});
+
+		ownsValue = false;
+		pendingRead.resolve('previous-owner');
+		await Promise.resolve();
+
+		expect(apply).not.toHaveBeenCalled();
+		controller.dispose();
+	});
 });

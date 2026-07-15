@@ -7,13 +7,15 @@ type LatestValueSubscriptionOptions<T> = {
 	load: () => Promise<T>;
 	apply: (value: T) => void;
 	onError?: (error: unknown) => void;
+	isCurrent?: () => boolean;
 };
 
 export function startLatestValueSubscription<T>({
 	subscribe,
 	load,
 	apply,
-	onError
+	onError,
+	isCurrent = () => true
 }: LatestValueSubscriptionOptions<T>) {
 	let disposed = false;
 	let loadGeneration = 0;
@@ -24,11 +26,11 @@ export function startLatestValueSubscription<T>({
 		try {
 			const value = await load();
 
-			if (!disposed && generation === loadGeneration) {
+			if (!disposed && generation === loadGeneration && isCurrent()) {
 				apply(value);
 			}
 		} catch (error) {
-			if (!disposed && generation === loadGeneration) {
+			if (!disposed && generation === loadGeneration && isCurrent()) {
 				onError?.(error);
 			}
 		}
