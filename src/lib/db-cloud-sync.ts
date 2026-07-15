@@ -9,6 +9,7 @@ import type {
 	WorkoutExercise,
 	WorkoutSession
 } from './db/models';
+import { chooseSessionSetConflict } from './db/session-set-conflict';
 
 type QueryResult<T> = {
 	toArray(): Promise<T[]>;
@@ -346,7 +347,18 @@ function chooseReconciledRow<T extends SyncableRow>(
 		return { row: localRow, winner: 'local' };
 	}
 
-	if (tableName === 'session_sets' || tableName === 'workout_sessions') {
+	if (tableName === 'session_sets') {
+		const choice = chooseSessionSetConflict(
+			localRow as unknown as SessionSet,
+			remoteRow as unknown as SessionSet
+		);
+
+		return choice.winner === 'first'
+			? { row: localRow, winner: 'local' }
+			: { row: remoteRow, winner: 'remote' };
+	}
+
+	if (tableName === 'workout_sessions') {
 		const localTimestamp = getRowTimestamp(localRow);
 		const remoteTimestamp = getRowTimestamp(remoteRow);
 		const localIsNewer = localTimestamp > remoteTimestamp;

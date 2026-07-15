@@ -22,6 +22,7 @@ import type {
 	WorkoutExercise,
 	WorkoutSession
 } from './db/models';
+import { sessionSetConflictHandler } from './rxdb-conflicts';
 
 type SyncedRow = {
 	id: string;
@@ -381,7 +382,10 @@ export async function getTinyTrainRxDatabase(userId: string): Promise<TinyTrainR
 				}
 			},
 			sessionExercises: { schema: schemas.sessionExercises },
-			sessionSets: { schema: schemas.sessionSets },
+			sessionSets: {
+				schema: schemas.sessionSets,
+				conflictHandler: sessionSetConflictHandler
+			},
 			exerciseResetEvents: { schema: schemas.exerciseResetEvents }
 		});
 
