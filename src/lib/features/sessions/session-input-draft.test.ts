@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setAuthOwnedStateIdentity } from '$lib/auth-owned-state';
 import type { SessionOverview, SessionSetOverview, SessionStatus } from '../../db/models';
 import {
 	applySessionInputDraft,
@@ -11,6 +12,14 @@ import {
 } from './session-input-draft';
 
 vi.mock('$app/environment', () => ({ browser: true }));
+
+beforeEach(() => {
+	setAuthOwnedStateIdentity('user-1', true);
+});
+
+afterEach(() => {
+	setAuthOwnedStateIdentity(null, false);
+});
 
 const timestamp = '2026-07-11T10:00:00.000Z';
 
@@ -190,14 +199,17 @@ describe('session input draft storage', () => {
 	});
 
 	it('discards persisted sets containing non-string input fields', () => {
+		const intentAt = Date.parse(timestamp);
 		const storedDraft = {
 			sessionId: 'session-1',
 			sets: {
 				'valid-set': { weightInput: '102.5', weightInputBase: '100' },
+				'valid-intent-set': { repsInput: '10', repsInputIntentAt: intentAt },
 				'invalid-input-set': { repsInput: 8 },
-				'invalid-base-set': { rirInput: '2', rirInputBase: null }
+				'invalid-base-set': { rirInput: '2', rirInputBase: null },
+				'invalid-intent-set': { weightInput: '105', weightInputIntentAt: 'later' }
 			},
-			updatedAt: Date.parse(timestamp)
+			updatedAt: intentAt
 		};
 		vi.stubGlobal('localStorage', {
 			getItem: vi.fn(() => JSON.stringify(storedDraft))
@@ -206,9 +218,10 @@ describe('session input draft storage', () => {
 		expect(readSessionInputDraft('session-1')).toEqual({
 			sessionId: 'session-1',
 			sets: {
-				'valid-set': { weightInput: '102.5', weightInputBase: '100' }
+				'valid-set': { weightInput: '102.5', weightInputBase: '100' },
+				'valid-intent-set': { repsInput: '10', repsInputIntentAt: intentAt }
 			},
-			updatedAt: Date.parse(timestamp)
+			updatedAt: intentAt
 		});
 	});
 
@@ -225,7 +238,7 @@ describe('session input draft storage', () => {
 		vi.stubGlobal('window', { dispatchEvent: vi.fn() });
 		const draft = buildDraft({ weightInput: '102.5' });
 
-		expect(() => writeSessionInputDraft(draft)).not.toThrow();
+		expect(writeSessionInputDraft(draft)).toBe(false);
 		expect(() => clearSessionInputDraft('session-1')).not.toThrow();
 	});
 
@@ -241,7 +254,7 @@ describe('session input draft storage', () => {
 		});
 		const draft = buildDraft({ weightInput: '102.5' });
 
-		expect(() => writeSessionInputDraft(draft)).not.toThrow();
+		expect(writeSessionInputDraft(draft)).toBe(true);
 		expect(() => clearSessionInputDraft('session-1')).not.toThrow();
 		expect(localStorage.setItem).toHaveBeenCalledWith(
 			getSessionInputDraftKey('session-1'),

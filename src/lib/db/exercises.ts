@@ -15,10 +15,10 @@ import type {
 	SessionSet,
 	WorkoutSession
 } from './models';
-import { db, requireLoggedInUser } from './runtime';
+import { db, requireLoggedInUser, type AppDatabase } from './runtime';
 import {
 	compareOptionalRecency,
-	compareSessionSetRows,
+	filterSessionSetsForSessionExercises,
 	createId,
 	dedupeExercises,
 	displayName,
@@ -28,6 +28,8 @@ import {
 	isDefined,
 	normalizeName,
 	pickPreferredExercise,
+	projectUniqueSessionExercises,
+	reconcileSessionSetOrderCollisions,
 	timestamp,
 	toDayKey,
 	toValidDate,
@@ -84,8 +86,16 @@ export function buildLatestResetAtByExerciseId(resetEvents: ExerciseResetEvent[]
 	return latestResetAtByExerciseId;
 }
 
-export async function listEquivalentExerciseIds(exerciseId: string) {
-	const exercise = await getExercise(exerciseId);
+export type ExerciseHistoryDatabase = Pick<
+	AppDatabase,
+	'exercises' | 'sessionExercises' | 'workoutSessions' | 'sessionSets'
+>;
+
+export async function listEquivalentExerciseIds(
+	exerciseId: string,
+	database: Pick<AppDatabase, 'exercises'> = db
+) {
+	const exercise = await getExercise(exerciseId, database);
 
 	if (!exercise) {
 		return [exerciseId];
@@ -97,7 +107,7 @@ export async function listEquivalentExerciseIds(exerciseId: string) {
 		return [exerciseId];
 	}
 
-	const matchingExercises = await db.exercises
+	const matchingExercises = await database.exercises
 		.where('normalizedName')
 		.equals(normalizedName)
 		.toArray();
@@ -109,21 +119,22 @@ export async function listEquivalentExerciseIds(exerciseId: string) {
 
 export async function listHistoricalSessionExerciseMatches(
 	exerciseId: string,
-	options: { sessionExercises?: SessionExercise[] } = {}
+	options: { sessionExercises?: SessionExercise[]; database?: ExerciseHistoryDatabase } = {}
 ): Promise<HistoricalSessionExerciseMatch[]> {
-	const exercise = await getExercise(exerciseId);
-	const equivalentExerciseIds = await listEquivalentExerciseIds(exerciseId);
+	const database = options.database ?? db;
+	const exercise = await getExercise(exerciseId, database);
+	const equivalentExerciseIds = await listEquivalentExerciseIds(exerciseId, database);
 	const normalizedName = exercise ? normalizeName(exercise.normalizedName || exercise.name) : '';
 	const [idMatchedSessionExercises, nameMatchedSessionExercises] = await Promise.all([
 		equivalentExerciseIds.length === 0
 			? Promise.resolve([])
 			: equivalentExerciseIds.length === 1
-				? db.sessionExercises.where('exerciseId').equals(equivalentExerciseIds[0]).toArray()
-				: db.sessionExercises.where('exerciseId').anyOf(equivalentExerciseIds).toArray(),
+				? database.sessionExercises.where('exerciseId').equals(equivalentExerciseIds[0]).toArray()
+				: database.sessionExercises.where('exerciseId').anyOf(equivalentExerciseIds).toArray(),
 		normalizedName
 			? (options.sessionExercises
 					? Promise.resolve(options.sessionExercises)
-					: db.sessionExercises.toArray()
+					: database.sessionExercises.toArray()
 				).then((rows) =>
 					rows.filter(
 						(sessionExercise) =>
@@ -132,14 +143,14 @@ export async function listHistoricalSessionExerciseMatches(
 				)
 			: Promise.resolve([])
 	]);
-	const sessionExercises = [
+	const sessionExercises = projectUniqueSessionExercises([
 		...new Map(
 			[...idMatchedSessionExercises, ...nameMatchedSessionExercises].map((sessionExercise) => [
 				sessionExercise.id,
 				sessionExercise
 			])
 		).values()
-	];
+	]);
 
 	if (sessionExercises.length === 0) {
 		return [];
@@ -148,14 +159,15 @@ export async function listHistoricalSessionExerciseMatches(
 	const sessionIds = [
 		...new Set(sessionExercises.map((sessionExercise) => sessionExercise.sessionId))
 	];
-	const [sessions, sessionSets] = await Promise.all([
-		db.workoutSessions.bulkGet(sessionIds),
-		db.sessionSets
+	const [sessions, storedSessionSets] = await Promise.all([
+		database.workoutSessions.bulkGet(sessionIds),
+		database.sessionSets
 			.where('sessionExerciseId')
 			.anyOf(sessionExercises.map((sessionExercise) => sessionExercise.id))
 			.toArray()
 			.then((rows) => rows.map(withSessionSetDefaults))
 	]);
+	const sessionSets = filterSessionSetsForSessionExercises(storedSessionSets, sessionExercises);
 	const sessionById = new Map(sessions.filter(isDefined).map((session) => [session.id, session]));
 	const setsBySessionExerciseId = new Map<string, SessionSet[]>();
 
@@ -168,8 +180,8 @@ export async function listHistoricalSessionExerciseMatches(
 	return sessionExercises
 		.flatMap((sessionExercise) => {
 			const session = sessionById.get(sessionExercise.sessionId);
-			const sets = (setsBySessionExerciseId.get(sessionExercise.id) ?? []).sort(
-				compareSessionSetRows
+			const sets = reconcileSessionSetOrderCollisions(
+				setsBySessionExerciseId.get(sessionExercise.id) ?? []
 			);
 
 			if (!session || session.status === 'planned' || !hasPerformedSetValues(sets)) {
@@ -247,17 +259,24 @@ export async function listExercises() {
 }
 
 export async function getPerformedSessionExerciseIdSet(sessionExercises: SessionExercise[]) {
-	if (sessionExercises.length === 0) {
+	const visibleSessionExercises = projectUniqueSessionExercises(sessionExercises);
+
+	if (visibleSessionExercises.length === 0) {
 		return new Set<string>();
 	}
 
-	const sessionSets = await db.sessionSets
+	const storedSessionSets = await db.sessionSets
 		.where('sessionExerciseId')
-		.anyOf(sessionExercises.map((sessionExercise) => sessionExercise.id))
+		.anyOf(visibleSessionExercises.map((sessionExercise) => sessionExercise.id))
 		.toArray();
 	const hasPerformedValuesBySessionExerciseId = new Set<string>();
 
-	for (const sessionSet of sessionSets.map(withSessionSetDefaults)) {
+	const sessionSets = filterSessionSetsForSessionExercises(
+		storedSessionSets.map(withSessionSetDefaults),
+		visibleSessionExercises
+	);
+
+	for (const sessionSet of sessionSets) {
 		if (hasAnySetValue(sessionSet)) {
 			hasPerformedValuesBySessionExerciseId.add(sessionSet.sessionExerciseId);
 		}
@@ -509,14 +528,17 @@ export async function listExerciseItems(): Promise<ExerciseListItem[]> {
 		);
 }
 
-export async function getExercise(exerciseId: string) {
+export async function getExercise(
+	exerciseId: string,
+	database: Pick<AppDatabase, 'exercises'> = db
+) {
 	const baselineExercise = BASELINE_EXERCISE_BY_ID.get(exerciseId);
 
 	if (baselineExercise) {
 		return baselineExercise;
 	}
 
-	const exercise = await db.exercises.get(exerciseId);
+	const exercise = await database.exercises.get(exerciseId);
 
 	return exercise ? withExerciseDefaults(exercise) : null;
 }
@@ -531,29 +553,36 @@ export async function createExercise(name: string, unilateral = false) {
 		throw new Error('Exercise name is required.');
 	}
 
-	const existingExercise = pickPreferredExercise(
-		await db.exercises.where('normalizedName').equals(normalizedName).toArray()
-	);
+	return db.transaction<Exercise>('rw', db.exercises, async () => {
+		const existingExercise = pickPreferredExercise(
+			await db.exercises.where('normalizedName').equals(normalizedName).toArray()
+		);
 
-	if (existingExercise) {
-		if (existingExercise.archived) {
-			const updatedAt = timestamp();
-			await db.exercises.update(existingExercise.id, {
-				archived: false,
-				unilateral,
-				updatedAt
-			});
+		if (existingExercise) {
+			if (existingExercise.archived) {
+				const updatedAt = timestamp();
+				await db.exercises.update(existingExercise.id, {
+					archived: false,
+					unilateral,
+					updatedAt
+				});
 
-			return withExerciseDefaults({ ...existingExercise, archived: false, unilateral, updatedAt });
+				return withExerciseDefaults({
+					...existingExercise,
+					archived: false,
+					unilateral,
+					updatedAt
+				});
+			}
+
+			return withExerciseDefaults(existingExercise);
 		}
 
-		return withExerciseDefaults(existingExercise);
-	}
+		const exercise = createExerciseRow(cleanName, unilateral, inferExerciseSource(normalizedName));
+		await db.exercises.add(exercise);
 
-	const exercise = createExerciseRow(cleanName, unilateral, inferExerciseSource(normalizedName));
-	await db.exercises.add(exercise);
-
-	return exercise;
+		return exercise;
+	});
 }
 
 export async function createCustomExercise(name: string, unilateral = false) {
@@ -566,34 +595,41 @@ export async function createCustomExercise(name: string, unilateral = false) {
 		throw new Error('Exercise name is required.');
 	}
 
-	const matchingExercises = (
-		await db.exercises.where('normalizedName').equals(normalizedName).toArray()
-	).map(withExerciseDefaults);
-	const existingExercise = pickPreferredExercise(matchingExercises);
+	return db.transaction<Exercise>('rw', db.exercises, async () => {
+		const matchingExercises = (
+			await db.exercises.where('normalizedName').equals(normalizedName).toArray()
+		).map(withExerciseDefaults);
+		const existingExercise = pickPreferredExercise(matchingExercises);
 
-	if (matchingExercises.some((exercise) => exercise.source === 'baseline')) {
-		throw new Error('That name already belongs to a built-in exercise.');
-	}
-
-	if (existingExercise) {
-		if (existingExercise.archived) {
-			const updatedAt = timestamp();
-			await db.exercises.update(existingExercise.id, {
-				archived: false,
-				unilateral,
-				updatedAt
-			});
-
-			return withExerciseDefaults({ ...existingExercise, archived: false, unilateral, updatedAt });
+		if (matchingExercises.some((exercise) => exercise.source === 'baseline')) {
+			throw new Error('That name already belongs to a built-in exercise.');
 		}
 
-		return withExerciseDefaults(existingExercise);
-	}
+		if (existingExercise) {
+			if (existingExercise.archived) {
+				const updatedAt = timestamp();
+				await db.exercises.update(existingExercise.id, {
+					archived: false,
+					unilateral,
+					updatedAt
+				});
 
-	const exercise = createExerciseRow(cleanName, unilateral, 'custom');
-	await db.exercises.add(exercise);
+				return withExerciseDefaults({
+					...existingExercise,
+					archived: false,
+					unilateral,
+					updatedAt
+				});
+			}
 
-	return exercise;
+			return withExerciseDefaults(existingExercise);
+		}
+
+		const exercise = createExerciseRow(cleanName, unilateral, 'custom');
+		await db.exercises.add(exercise);
+
+		return exercise;
+	});
 }
 
 export async function setExerciseUnilateral(exerciseId: string, unilateral: boolean) {
@@ -603,38 +639,52 @@ export async function setExerciseUnilateral(exerciseId: string, unilateral: bool
 		throw new Error('Built-in exercises are shared and cannot be edited.');
 	}
 
-	const exercise = await db.exercises.get(exerciseId);
+	return db.transaction<Exercise>('rw', db.exercises, async () => {
+		const exercise = await db.exercises.get(exerciseId);
 
-	if (!exercise) {
-		throw new Error('Exercise not found.');
-	}
+		if (!exercise) {
+			throw new Error('Exercise not found.');
+		}
 
-	const updatedAt = timestamp();
-	await db.exercises.update(exerciseId, { unilateral, updatedAt });
+		const updatedAt = timestamp();
+		await db.exercises.update(exerciseId, { unilateral, updatedAt });
 
-	return withExerciseDefaults({ ...exercise, unilateral, updatedAt });
+		return withExerciseDefaults({ ...exercise, unilateral, updatedAt });
+	});
 }
 
 export async function recordExerciseReset(exerciseId: string) {
 	requireLoggedInUser();
 
-	const exercise = await getExercise(exerciseId);
+	return db.transaction<ExerciseResetEvent>(
+		'rw',
+		db.exercises,
+		db.exerciseResetEvents,
+		async () => {
+			const storedExercise = BASELINE_EXERCISE_BY_ID.has(exerciseId)
+				? undefined
+				: await db.exercises.get(exerciseId);
+			const exercise =
+				BASELINE_EXERCISE_BY_ID.get(exerciseId) ??
+				(storedExercise ? withExerciseDefaults(storedExercise) : null);
 
-	if (!exercise) {
-		throw new Error('Exercise not found.');
-	}
+			if (!exercise) {
+				throw new Error('Exercise not found.');
+			}
 
-	const now = timestamp();
-	const resetEvent: ExerciseResetEvent = {
-		id: createId(),
-		exerciseId,
-		resetAt: now,
-		createdAt: now
-	};
+			const now = timestamp();
+			const resetEvent: ExerciseResetEvent = {
+				id: createId(),
+				exerciseId,
+				resetAt: now,
+				createdAt: now
+			};
 
-	await db.exerciseResetEvents.add(resetEvent);
+			await db.exerciseResetEvents.add(resetEvent);
 
-	return resetEvent;
+			return resetEvent;
+		}
+	);
 }
 
 export async function listExerciseResetEvents(exerciseId: string) {
@@ -645,7 +695,7 @@ export async function listExerciseResetEvents(exerciseId: string) {
 
 export async function listExerciseHistory(
 	exerciseId: string,
-	options: { sessionExercises?: SessionExercise[] } = {}
+	options: { sessionExercises?: SessionExercise[]; database?: ExerciseHistoryDatabase } = {}
 ): Promise<ExerciseHistoryEntry[]> {
 	return (await listHistoricalSessionExerciseMatches(exerciseId, options)).map(
 		({ session, sessionExercise, sets }) => ({

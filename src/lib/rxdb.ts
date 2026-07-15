@@ -22,7 +22,11 @@ import type {
 	WorkoutExercise,
 	WorkoutSession
 } from './db/models';
-import { sessionSetConflictHandler } from './rxdb-conflicts';
+import {
+	sessionExerciseConflictHandler,
+	sessionSetConflictHandler,
+	workoutSessionConflictHandler
+} from './rxdb-conflicts';
 
 type SyncedRow = {
 	id: string;
@@ -377,11 +381,15 @@ export async function getTinyTrainRxDatabase(userId: string): Promise<TinyTrainR
 			workoutExercises: { schema: schemas.workoutExercises },
 			workoutSessions: {
 				schema: schemas.workoutSessions,
+				conflictHandler: workoutSessionConflictHandler,
 				migrationStrategies: {
 					1: (oldDoc: RxDocumentData<SupabaseWorkoutSession>) => oldDoc
 				}
 			},
-			sessionExercises: { schema: schemas.sessionExercises },
+			sessionExercises: {
+				schema: schemas.sessionExercises,
+				conflictHandler: sessionExerciseConflictHandler
+			},
 			sessionSets: {
 				schema: schemas.sessionSets,
 				conflictHandler: sessionSetConflictHandler

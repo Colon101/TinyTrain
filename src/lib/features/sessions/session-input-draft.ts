@@ -5,31 +5,41 @@ import type {
 	SessionSetOverview
 } from '$lib/db';
 import {
+	clearSessionInputDraftFieldIfVersion,
 	clearSessionInputDraft,
 	createEmptySessionInputDraft,
 	getSessionInputDraftKey,
+	isSessionInputDraftStorageKey,
 	isSessionInputDraftSet,
+	migrateLegacySessionInputDraftForCurrentUser,
 	readSessionInputDraft,
 	SESSION_INPUT_DRAFT_CHANGE_EVENT,
+	writeSessionInputDraftField,
 	writeSessionInputDraft,
 	type SessionInputDraft,
 	type SessionInputDraftSet,
 	type SessionInputFieldBaseKey,
+	type SessionInputFieldIntentAtKey,
 	type SessionInputFieldKey
 } from '$lib/db/session-drafts';
 
 export {
 	clearSessionInputDraft,
+	clearSessionInputDraftFieldIfVersion,
 	createEmptySessionInputDraft,
 	getSessionInputDraftKey,
+	migrateLegacySessionInputDraftForCurrentUser,
+	isSessionInputDraftStorageKey,
 	readSessionInputDraft,
 	SESSION_INPUT_DRAFT_CHANGE_EVENT,
+	writeSessionInputDraftField,
 	writeSessionInputDraft
 };
 export type {
 	SessionInputDraft,
 	SessionInputDraftSet,
 	SessionInputFieldBaseKey,
+	SessionInputFieldIntentAtKey,
 	SessionInputFieldKey
 };
 type ApplySessionInputDraftOptions = {
@@ -42,6 +52,12 @@ export function getSessionInputFieldKey(field: SessionInputField): SessionInputF
 
 export function getSessionInputFieldBaseKey(field: SessionInputField): SessionInputFieldBaseKey {
 	return `${getSessionInputFieldKey(field)}Base`;
+}
+
+export function getSessionInputFieldIntentAtKey(
+	field: SessionInputField
+): SessionInputFieldIntentAtKey {
+	return `${getSessionInputFieldKey(field)}IntentAt`;
 }
 
 export function parseSessionInputValue(rawValue: string) {

@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { setAuthOwnedStateIdentity } from '$lib/auth-owned-state';
 import {
 	getSupabaseAuthSnapshot,
 	getSupabaseUser,
@@ -20,8 +21,10 @@ import {
 	type SyncProgress
 } from '../db-cloud-sync';
 import {
+	filterSessionSetsForSessionExercises,
 	hasAnySetValue,
 	hasInputValue,
+	projectUniqueSessionExercises,
 	summarizeSession,
 	withExerciseDefaults,
 	withSessionSetDefaults
@@ -37,6 +40,11 @@ import type {
 	WorkoutExercise,
 	WorkoutSession
 } from './models';
+import {
+	projectSessionChildren,
+	repairScheduledSessionDay,
+	repairScheduledSessionDays
+} from './sessions/schedule-integrity';
 
 export {
 	SESSION_INACTIVITY_ABANDON_MS,
@@ -115,6 +123,7 @@ export type WhereClause<T> = {
 export type DataTable<T extends { id: string }> = {
 	toArray(): Promise<T[]>;
 	get(id: string): Promise<T | undefined>;
+	getSyncState(id: string): Promise<{ row?: T; deleted: boolean } | undefined>;
 	bulkGet(ids: string[]): Promise<(T | undefined)[]>;
 	add(doc: T): Promise<string>;
 	bulkAdd(docs: T[]): Promise<string[]>;
@@ -144,12 +153,16 @@ const recentBackfillDays = 90;
 
 let rxDataDb: RxDexieLikeDatabase | null = null;
 let activeSupabaseUserId: string | null = null;
+// A requested identity changes immediately, while the published identity may remain available
+// until an admitted transaction drains. Keep both generations so stale work cannot confuse them.
+let activeRuntimeGeneration: number | null = null;
 let requestedSupabaseUserId: string | null = null;
 let runtimeGeneration = 0;
 let dbOpenPromise: Promise<typeof db> | null = null;
 let authBridgeStarted = false;
 let supabaseBackendActivationAttempt: RuntimeActivationAttempt | null = null;
 let closedDatabaseRecoveryAttempt: RuntimeRecoveryAttempt | null = null;
+let authenticatedOperationRecoveryAttempt: AuthenticatedOperationRecoveryAttempt | null = null;
 let rxChangeSubscription: SubscriptionLike | null = null;
 let rxRuntimePromise: Promise<{
 	adapter: typeof import('../rxdb-dexie-adapter');
@@ -157,6 +170,7 @@ let rxRuntimePromise: Promise<{
 }> | null = null;
 let lastStaleSessionCleanupKey: string | null = null;
 let backgroundSyncAttempt: RuntimeIdentity | null = null;
+const activeRuntimeLeases = new Map<number, { count: number; drainWaiters: Set<() => void> }>();
 const databaseChangeSubscribers = new Set<{
 	tables: Set<DatabaseTableKey>;
 	callback: DatabaseChangeSubscriber;
@@ -182,26 +196,38 @@ type RuntimeRecoveryAttempt = RuntimeIdentity & {
 	promise: Promise<boolean>;
 };
 
+type AuthenticatedOperationRecoveryAttempt = RuntimeIdentity & {
+	promise: Promise<AppDatabase | null>;
+};
+
 function isCurrentRuntimeRequest(identity: RuntimeIdentity) {
 	return requestedSupabaseUserId === identity.userId && runtimeGeneration === identity.generation;
 }
 
 function isActiveRuntimeIdentity(identity: RuntimeIdentity) {
-	return isCurrentRuntimeRequest(identity) && activeSupabaseUserId === identity.userId;
+	return (
+		isCurrentRuntimeRequest(identity) &&
+		activeSupabaseUserId === identity.userId &&
+		activeRuntimeGeneration === identity.generation
+	);
 }
 
 function getActiveRuntimeContext(): ActiveRuntimeContext | null {
-	if (!activeSupabaseUserId || !rxDataDb) {
+	const context = getPublishedRuntimeContext();
+
+	return context && isCurrentRuntimeRequest(context) ? context : null;
+}
+
+function getPublishedRuntimeContext(): ActiveRuntimeContext | null {
+	if (!activeSupabaseUserId || activeRuntimeGeneration === null || !rxDataDb) {
 		return null;
 	}
 
-	const context = {
+	return {
 		userId: activeSupabaseUserId,
-		generation: runtimeGeneration,
+		generation: activeRuntimeGeneration,
 		database: rxDataDb as unknown as AppDatabase
 	};
-
-	return isCurrentRuntimeRequest(context) ? context : null;
 }
 
 function isActiveRuntimeContext(context: ActiveRuntimeContext) {
@@ -211,8 +237,79 @@ function isActiveRuntimeContext(context: ActiveRuntimeContext) {
 	);
 }
 
+function isPublishedRuntimeIdentity(identity: RuntimeIdentity) {
+	return (
+		activeSupabaseUserId === identity.userId && activeRuntimeGeneration === identity.generation
+	);
+}
+
+function acquireRuntimeLease(identity: RuntimeIdentity) {
+	const state = activeRuntimeLeases.get(identity.generation) ?? {
+		count: 0,
+		drainWaiters: new Set<() => void>()
+	};
+
+	state.count += 1;
+	activeRuntimeLeases.set(identity.generation, state);
+
+	return () => {
+		const currentState = activeRuntimeLeases.get(identity.generation);
+
+		if (!currentState) {
+			return;
+		}
+
+		currentState.count -= 1;
+		if (currentState.count > 0) {
+			return;
+		}
+
+		activeRuntimeLeases.delete(identity.generation);
+		for (const resolve of currentState.drainWaiters) {
+			resolve();
+		}
+	};
+}
+
+function waitForRuntimeLeases(identity: RuntimeIdentity | null) {
+	if (!identity) {
+		return null;
+	}
+
+	const state = activeRuntimeLeases.get(identity.generation);
+	if (!state || state.count === 0) {
+		return null;
+	}
+
+	return new Promise<void>((resolve) => {
+		state.drainWaiters.add(resolve);
+	});
+}
+
+async function runWithRuntimeIdentityLease<T>(
+	context: ActiveRuntimeContext,
+	_tableName: RxDataTableKey,
+	operation: () => Promise<T>
+) {
+	if (!isActiveRuntimeIdentity(context)) {
+		throw new Error('The authenticated local database changed before the operation could start.');
+	}
+
+	const releaseLease = acquireRuntimeLease(context);
+
+	try {
+		return await operation();
+	} finally {
+		releaseLease();
+	}
+}
+
 function isActiveSupabaseUser(userId: string) {
-	return activeSupabaseUserId === userId && requestedSupabaseUserId === userId;
+	return (
+		activeSupabaseUserId === userId &&
+		requestedSupabaseUserId === userId &&
+		activeRuntimeGeneration === runtimeGeneration
+	);
 }
 
 function setSyncStateForUser(userId: string, state: SyncStateLike) {
@@ -365,9 +462,11 @@ export function startAuthBridge() {
 	authBridgeStarted = true;
 	void initializeSupabaseAuth();
 	subscribeToSupabaseAuth((snapshot) => {
+		setAuthOwnedStateIdentity(snapshot.user?.id ?? null, !snapshot.isLoading);
+
 		if (!snapshot.user) {
 			if (!snapshot.isLoading) {
-				clearSupabaseRuntimeState();
+				void clearSupabaseRuntimeState();
 			}
 
 			activeUser.set(toSupabaseCloudUser());
@@ -399,24 +498,36 @@ export function startAuthBridge() {
 	});
 }
 
-export function clearSupabaseRuntimeState() {
-	const previousUserId = activeSupabaseUserId;
+export async function clearSupabaseRuntimeState() {
+	const previousContext = getPublishedRuntimeContext();
+	const clearGeneration = runtimeGeneration + 1;
 
-	runtimeGeneration += 1;
+	runtimeGeneration = clearGeneration;
 	requestedSupabaseUserId = null;
 	lastStaleSessionCleanupKey = null;
 	backgroundSyncAttempt = null;
-	activeSupabaseUserId = null;
-	rxDataDb = null;
 	dbOpenPromise = null;
 	activeSyncState.set({ phase: 'initial', status: 'not-started' });
 
-	if (!previousUserId) {
+	const leaseDrain = waitForRuntimeLeases(previousContext);
+	if (leaseDrain) {
+		await leaseDrain;
+	}
+
+	if (runtimeGeneration !== clearGeneration || requestedSupabaseUserId !== null) {
+		return;
+	}
+
+	activeSupabaseUserId = null;
+	activeRuntimeGeneration = null;
+	rxDataDb = null;
+
+	if (!previousContext) {
 		return;
 	}
 
 	void getRxRuntime()
-		.then(({ rxdb }) => rxdb.stopSupabaseReplication(previousUserId))
+		.then(({ rxdb }) => rxdb.stopSupabaseReplication(previousContext.userId))
 		.catch((error) => {
 			console.warn('Supabase replication shutdown failed.', error);
 		});
@@ -445,6 +556,7 @@ async function openSupabaseRuntimeForRequest(identity: RuntimeIdentity) {
 	}
 
 	activeSupabaseUserId = identity.userId;
+	activeRuntimeGeneration = identity.generation;
 	activeSyncState.set({ phase: 'pulling', status: 'syncing' });
 	rxDataDb = database;
 	rxChangeSubscription ??= adapter.subscribeToRxDexieChanges((tableName) => {
@@ -483,30 +595,51 @@ async function activateSupabaseBackend(userId: string) {
 		return currentAttempt.promise;
 	}
 
-	if (activeSupabaseUserId === userId && requestedSupabaseUserId === userId && rxDataDb) {
+	if (
+		activeSupabaseUserId === userId &&
+		requestedSupabaseUserId === userId &&
+		activeRuntimeGeneration === runtimeGeneration &&
+		rxDataDb
+	) {
 		return;
 	}
 
-	const previousUserId = activeSupabaseUserId;
+	const previousContext = getPublishedRuntimeContext();
 	const identity = { userId, generation: runtimeGeneration + 1 };
 
 	runtimeGeneration = identity.generation;
 	requestedSupabaseUserId = userId;
-	activeSupabaseUserId = null;
-	rxDataDb = null;
 	dbOpenPromise = null;
 	backgroundSyncAttempt = null;
 	activeSyncState.set({ phase: 'initial', status: 'not-started' });
 
-	if (previousUserId && previousUserId !== userId) {
-		void getRxRuntime()
-			.then(({ rxdb }) => rxdb.stopSupabaseReplication(previousUserId))
-			.catch((error) => {
-				console.warn('Supabase replication shutdown failed.', error);
-			});
-	}
+	const promise = (async () => {
+		// Transactions are serialized by the adapter's user-scoped Web Lock. Direct calls and query
+		// terminals take the same runtime-generation lease, so the published adapter cannot change
+		// while any operation is queued or in flight.
+		const leaseDrain = waitForRuntimeLeases(previousContext);
+		if (leaseDrain) {
+			await leaseDrain;
+		}
 
-	const promise = openSupabaseRuntimeForRequest(identity).finally(() => {
+		if (!isCurrentRuntimeRequest(identity)) {
+			return;
+		}
+
+		activeSupabaseUserId = null;
+		activeRuntimeGeneration = null;
+		rxDataDb = null;
+
+		if (previousContext && previousContext.userId !== userId) {
+			void getRxRuntime()
+				.then(({ rxdb }) => rxdb.stopSupabaseReplication(previousContext.userId))
+				.catch((error) => {
+					console.warn('Supabase replication shutdown failed.', error);
+				});
+		}
+
+		await openSupabaseRuntimeForRequest(identity);
+	})().finally(() => {
 		if (supabaseBackendActivationAttempt?.generation === identity.generation) {
 			supabaseBackendActivationAttempt = null;
 		}
@@ -522,7 +655,7 @@ export async function selectBackend() {
 	const currentAuthUser = getSupabaseAuthSnapshot().user;
 
 	if (!currentAuthUser) {
-		clearSupabaseRuntimeState();
+		await clearSupabaseRuntimeState();
 		activeUser.set(toSupabaseCloudUser());
 		return;
 	}
@@ -557,6 +690,362 @@ export type AppDatabase = {
 
 export type RxDataTableKey = Exclude<keyof RxDexieLikeDatabase, 'transaction'>;
 
+export type AuthenticatedOperationDatabase = Pick<AppDatabase, RxDataTableKey | 'transaction'>;
+
+export type AuthenticatedDatabaseOperation = Readonly<{
+	userId: string;
+	generation: number;
+	database: AuthenticatedOperationDatabase;
+}>;
+
+type AuthenticatedDatabaseOperationState = RuntimeIdentity & {
+	database: AppDatabase;
+	active: boolean;
+	tableFacades: Map<RxDataTableKey, DataTable<{ id: string }>>;
+};
+
+const rxDataTableKeys = new Set<RxDataTableKey>([
+	'exercises',
+	'workouts',
+	'workoutExercises',
+	'workoutSessions',
+	'sessionExercises',
+	'sessionSets',
+	'exerciseResetEvents'
+]);
+const dataTableMethodKeys = new Set<keyof DataTable<{ id: string }>>([
+	'toArray',
+	'get',
+	'getSyncState',
+	'bulkGet',
+	'add',
+	'bulkAdd',
+	'put',
+	'bulkPut',
+	'update',
+	'delete',
+	'bulkDelete',
+	'where'
+]);
+const whereClauseMethodKeys = new Set<keyof WhereClause<{ id: string }>>([
+	'equals',
+	'anyOf',
+	'between'
+]);
+const queryResultMethodKeys = new Set<keyof QueryResult<{ id: string }>>([
+	'toArray',
+	'first',
+	'sortBy'
+]);
+const authenticatedOperationDataTableMetadata = new WeakMap<
+	object,
+	{ state: AuthenticatedDatabaseOperationState; tableName: RxDataTableKey }
+>();
+
+function assertAuthenticatedOperationActive(state: AuthenticatedDatabaseOperationState) {
+	if (!state.active) {
+		throw new Error('The authenticated database operation has already finished.');
+	}
+}
+
+async function recoverAuthenticatedOperationDatabase(state: AuthenticatedDatabaseOperationState) {
+	if (!isPublishedRuntimeIdentity(state)) {
+		return false;
+	}
+
+	let attempt = authenticatedOperationRecoveryAttempt;
+
+	if (!attempt || attempt.userId !== state.userId || attempt.generation !== state.generation) {
+		const identity = { userId: state.userId, generation: state.generation };
+		const promise = (async () => {
+			const { adapter } = await getRxRuntime();
+			const database = await adapter.reopenRxDexieLikeDatabase(identity.userId);
+
+			if (!isPublishedRuntimeIdentity(identity)) {
+				return null;
+			}
+
+			rxDataDb = database;
+
+			if (isCurrentRuntimeRequest(identity)) {
+				dbOpenPromise = Promise.resolve(db);
+				backgroundSyncAttempt = null;
+				activeUser.set(toSupabaseCloudUser());
+				startProgressiveSync(identity.userId, identity.generation);
+			}
+
+			return database as unknown as AppDatabase;
+		})().finally(() => {
+			if (authenticatedOperationRecoveryAttempt?.generation === identity.generation) {
+				authenticatedOperationRecoveryAttempt = null;
+			}
+		});
+
+		attempt = { ...identity, promise };
+		authenticatedOperationRecoveryAttempt = attempt;
+	}
+
+	const database = await attempt.promise;
+
+	if (!database || !isPublishedRuntimeIdentity(state)) {
+		return false;
+	}
+
+	state.database = database;
+	return true;
+}
+
+async function runAuthenticatedOperationDatabaseCall<T>(
+	state: AuthenticatedDatabaseOperationState,
+	operation: (database: AppDatabase) => Promise<T>
+) {
+	assertAuthenticatedOperationActive(state);
+	const releaseLease = acquireRuntimeLease(state);
+
+	try {
+		try {
+			return await operation(state.database);
+		} catch (error) {
+			if (!isClosedDatabaseError(error) || !(await recoverAuthenticatedOperationDatabase(state))) {
+				throw error;
+			}
+		}
+
+		return operation(state.database);
+	} finally {
+		releaseLease();
+	}
+}
+
+function createAuthenticatedOperationQueryResult<T>(
+	state: AuthenticatedDatabaseOperationState,
+	buildQueryResult: (database: AppDatabase) => QueryResult<T>
+): QueryResult<T> {
+	return new Proxy(
+		{},
+		{
+			get(_target, prop) {
+				if (
+					typeof prop !== 'string' ||
+					!queryResultMethodKeys.has(prop as keyof QueryResult<{ id: string }>)
+				) {
+					return undefined;
+				}
+
+				return (...args: unknown[]) =>
+					runAuthenticatedOperationDatabaseCall(state, async (database) => {
+						const queryResult = buildQueryResult(database);
+						const value = queryResult[prop as keyof QueryResult<T>];
+
+						if (typeof value !== 'function') {
+							throw new Error('Unsupported authenticated database query operation.');
+						}
+
+						return (value as (...methodArgs: unknown[]) => Promise<unknown>).apply(
+							queryResult,
+							args
+						);
+					});
+			}
+		}
+	) as QueryResult<T>;
+}
+
+function createAuthenticatedOperationWhereClause<T extends { id: string }>(
+	state: AuthenticatedDatabaseOperationState,
+	tableName: RxDataTableKey,
+	field: string
+): WhereClause<T> {
+	return new Proxy(
+		{},
+		{
+			get(_target, prop) {
+				if (
+					typeof prop !== 'string' ||
+					!whereClauseMethodKeys.has(prop as keyof WhereClause<{ id: string }>)
+				) {
+					return undefined;
+				}
+
+				return (...args: unknown[]) => {
+					assertAuthenticatedOperationActive(state);
+
+					return createAuthenticatedOperationQueryResult(state, (database) => {
+						const table = database[tableName] as unknown as DataTable<T>;
+						const whereClause = table.where(field);
+						const value = whereClause[prop as keyof WhereClause<T>];
+
+						if (typeof value !== 'function') {
+							throw new Error('Unsupported authenticated database where operation.');
+						}
+
+						return (value as (...methodArgs: unknown[]) => QueryResult<T>).apply(whereClause, args);
+					});
+				};
+			}
+		}
+	) as WhereClause<T>;
+}
+
+function createAuthenticatedOperationDataTable<T extends { id: string }>(
+	state: AuthenticatedDatabaseOperationState,
+	tableName: RxDataTableKey
+): DataTable<T> {
+	const table = new Proxy(
+		{},
+		{
+			get(_target, prop) {
+				if (
+					typeof prop !== 'string' ||
+					!dataTableMethodKeys.has(prop as keyof DataTable<{ id: string }>)
+				) {
+					return undefined;
+				}
+
+				if (prop === 'where') {
+					return (field: string) => {
+						assertAuthenticatedOperationActive(state);
+						return createAuthenticatedOperationWhereClause<T>(state, tableName, field);
+					};
+				}
+
+				return (...args: unknown[]) =>
+					runAuthenticatedOperationDatabaseCall(state, async (database) => {
+						const currentTable = database[tableName] as unknown as DataTable<T>;
+						const value = currentTable[prop as keyof DataTable<T>];
+
+						if (typeof value !== 'function') {
+							throw new Error('Unsupported authenticated database table operation.');
+						}
+
+						return (value as (...methodArgs: unknown[]) => Promise<unknown>).apply(
+							currentTable,
+							args
+						);
+					});
+			}
+		}
+	) as DataTable<T>;
+
+	authenticatedOperationDataTableMetadata.set(table, { state, tableName });
+	return table;
+}
+
+function resolveAuthenticatedOperationTransactionArgument(
+	state: AuthenticatedDatabaseOperationState,
+	argument: unknown
+): unknown {
+	if (Array.isArray(argument)) {
+		return argument.map((item) => resolveAuthenticatedOperationTransactionArgument(state, item));
+	}
+
+	if (argument && (typeof argument === 'object' || typeof argument === 'function')) {
+		const metadata = authenticatedOperationDataTableMetadata.get(argument as object);
+
+		if (!metadata || metadata.state !== state) {
+			throw new Error('Authenticated transactions can only use tables from their operation.');
+		}
+
+		return state.database[metadata.tableName];
+	}
+
+	return argument;
+}
+
+async function runAuthenticatedOperationTransaction<T>(
+	state: AuthenticatedDatabaseOperationState,
+	mode: string,
+	...args: unknown[]
+) {
+	assertAuthenticatedOperationActive(state);
+	const callback = args.at(-1);
+
+	if (typeof callback !== 'function') {
+		return undefined as T;
+	}
+
+	const releaseLease = acquireRuntimeLease(state);
+
+	try {
+		const transactionArgs = args
+			.slice(0, -1)
+			.map((argument) => resolveAuthenticatedOperationTransactionArgument(state, argument));
+
+		return await state.database.transaction<T>(mode, ...transactionArgs, () =>
+			(callback as () => Promise<T> | T)()
+		);
+	} finally {
+		releaseLease();
+	}
+}
+
+function createAuthenticatedOperationDatabase(
+	state: AuthenticatedDatabaseOperationState
+): AuthenticatedOperationDatabase {
+	return new Proxy(
+		{},
+		{
+			get(_target, prop) {
+				if (prop === 'then') {
+					return undefined;
+				}
+
+				assertAuthenticatedOperationActive(state);
+
+				if (prop === 'transaction') {
+					return (mode: string, ...args: unknown[]) =>
+						runAuthenticatedOperationTransaction(state, mode, ...args);
+				}
+
+				if (typeof prop !== 'string' || !rxDataTableKeys.has(prop as RxDataTableKey)) {
+					return undefined;
+				}
+
+				const tableName = prop as RxDataTableKey;
+				let table = state.tableFacades.get(tableName);
+
+				if (!table) {
+					table = createAuthenticatedOperationDataTable(state, tableName);
+					state.tableFacades.set(tableName, table);
+				}
+
+				return table;
+			}
+		}
+	) as AuthenticatedOperationDatabase;
+}
+
+export async function runAuthenticatedDatabaseOperation<T>(
+	callback: (operation: AuthenticatedDatabaseOperation) => Promise<T> | T
+): Promise<T> {
+	const context = getActiveRuntimeContext();
+
+	if (!context) {
+		throw new Error('The authenticated local database changed before the operation could start.');
+	}
+
+	const state: AuthenticatedDatabaseOperationState = {
+		userId: context.userId,
+		generation: context.generation,
+		database: context.database,
+		active: true,
+		tableFacades: new Map()
+	};
+	const releaseLease = acquireRuntimeLease(context);
+	const operation = Object.freeze({
+		userId: context.userId,
+		generation: context.generation,
+		database: createAuthenticatedOperationDatabase(state)
+	});
+
+	try {
+		return await callback(operation);
+	} finally {
+		state.active = false;
+		releaseLease();
+	}
+}
+
 export function getRxDataTable(tableName: RxDataTableKey) {
 	if (!rxDataDb) {
 		throw new Error('The local database is still loading.');
@@ -581,6 +1070,8 @@ export async function runRecoveringDatabaseOperation<T>(
 }
 
 export function createRecoveringQueryResult<T>(
+	context: ActiveRuntimeContext,
+	tableName: RxDataTableKey,
 	queryResult: QueryResult<T>,
 	rebuildQueryResult: () => QueryResult<T>
 ): QueryResult<T> {
@@ -593,23 +1084,27 @@ export function createRecoveringQueryResult<T>(
 			}
 
 			return (...args: unknown[]) =>
-				runRecoveringDatabaseOperation(
-					() => (value as (...methodArgs: unknown[]) => Promise<unknown>).apply(target, args),
-					() => {
-						const nextQueryResult = rebuildQueryResult();
-						const nextValue = nextQueryResult[prop as keyof QueryResult<T>];
+				runWithRuntimeIdentityLease(context, tableName, () =>
+					runRecoveringDatabaseOperation(
+						() => (value as (...methodArgs: unknown[]) => Promise<unknown>).apply(target, args),
+						() => {
+							const nextQueryResult = rebuildQueryResult();
+							const nextValue = nextQueryResult[prop as keyof QueryResult<T>];
 
-						return (nextValue as (...methodArgs: unknown[]) => Promise<unknown>).apply(
-							nextQueryResult,
-							args
-						);
-					}
+							return (nextValue as (...methodArgs: unknown[]) => Promise<unknown>).apply(
+								nextQueryResult,
+								args
+							);
+						}
+					)
 				);
 		}
 	}) as QueryResult<T>;
 }
 
 export function createRecoveringWhereClause<T>(
+	context: ActiveRuntimeContext,
+	tableName: RxDataTableKey,
 	whereClause: WhereClause<T>,
 	rebuildWhereClause: () => WhereClause<T>
 ): WhereClause<T> {
@@ -627,7 +1122,7 @@ export function createRecoveringWhereClause<T>(
 					args
 				);
 
-				return createRecoveringQueryResult(queryResult, () => {
+				return createRecoveringQueryResult(context, tableName, queryResult, () => {
 					const nextWhereClause = rebuildWhereClause();
 					const nextValue = nextWhereClause[prop as keyof WhereClause<T>];
 
@@ -642,10 +1137,11 @@ export function createRecoveringWhereClause<T>(
 }
 
 export function createRecoveringDataTable<T extends { id: string }>(
+	context: ActiveRuntimeContext,
 	tableName: RxDataTableKey,
 	table: DataTable<T>
 ): DataTable<T> {
-	return new Proxy(table, {
+	const recoveringTable = new Proxy(table, {
 		get(target, prop) {
 			const value = target[prop as keyof DataTable<T>];
 
@@ -653,7 +1149,7 @@ export function createRecoveringDataTable<T extends { id: string }>(
 				return (field: string) => {
 					const whereClause = target.where(field);
 
-					return createRecoveringWhereClause(whereClause, () =>
+					return createRecoveringWhereClause(context, tableName, whereClause, () =>
 						(getRxDataTable(tableName) as unknown as DataTable<T>).where(field)
 					);
 				};
@@ -664,20 +1160,50 @@ export function createRecoveringDataTable<T extends { id: string }>(
 			}
 
 			return (...args: unknown[]) =>
-				runRecoveringDatabaseOperation(
-					() => (value as (...methodArgs: unknown[]) => Promise<unknown>).apply(target, args),
-					() => {
-						const nextTable = getRxDataTable(tableName) as unknown as DataTable<T>;
-						const nextValue = nextTable[prop as keyof DataTable<T>];
+				runWithRuntimeIdentityLease(context, tableName, () =>
+					runRecoveringDatabaseOperation(
+						() => (value as (...methodArgs: unknown[]) => Promise<unknown>).apply(target, args),
+						() => {
+							const nextTable = getRxDataTable(tableName) as unknown as DataTable<T>;
+							const nextValue = nextTable[prop as keyof DataTable<T>];
 
-						return (nextValue as (...methodArgs: unknown[]) => Promise<unknown>).apply(
-							nextTable,
-							args
-						);
-					}
+							return (nextValue as (...methodArgs: unknown[]) => Promise<unknown>).apply(
+								nextTable,
+								args
+							);
+						}
+					)
 				);
 		}
 	}) as DataTable<T>;
+	return recoveringTable;
+}
+
+async function runRuntimeTransaction<T>(mode: string, ...args: unknown[]): Promise<T> {
+	const context = getActiveRuntimeContext();
+
+	if (!context) {
+		throw new Error('The authenticated local database changed before the transaction could start.');
+	}
+
+	const callback = args.at(-1);
+	if (typeof callback !== 'function') {
+		return undefined as T;
+	}
+
+	const releaseLease = acquireRuntimeLease(context);
+	// Acquire the identity lease before entering the adapter queue. A backend switch requested
+	// while this callback is waiting on the user-scoped Web Lock must wait for it too.
+	const transactionArgs = [...args.slice(0, -1), () => (callback as () => Promise<T> | T)()];
+
+	try {
+		return await (context.database as unknown as RxDexieLikeDatabase).transaction<T>(
+			mode,
+			...transactionArgs
+		);
+	} finally {
+		releaseLease();
+	}
 }
 
 export const db = new Proxy(
@@ -688,14 +1214,17 @@ export const db = new Proxy(
 				return cloudCompat;
 			}
 
-			if (prop === 'transaction' && rxDataDb) {
-				return rxDataDb.transaction.bind(rxDataDb);
+			if (prop === 'transaction') {
+				return runRuntimeTransaction;
 			}
 
-			if (rxDataDb && typeof prop === 'string' && prop in rxDataDb) {
+			const context = getPublishedRuntimeContext();
+
+			if (context && typeof prop === 'string' && prop in context.database) {
 				return createRecoveringDataTable(
+					context,
 					prop as RxDataTableKey,
-					rxDataDb[prop as RxDataTableKey] as unknown as DataTable<{ id: string }>
+					context.database[prop as RxDataTableKey] as unknown as DataTable<{ id: string }>
 				);
 			}
 
@@ -822,7 +1351,7 @@ export async function runWithClosedDatabaseRetry<T>(operation: () => Promise<T>)
 export async function logoutFromCloud() {
 	await ensureDbOpen();
 	await logoutFromSupabase();
-	clearSupabaseRuntimeState();
+	await clearSupabaseRuntimeState();
 	activeUser.set(toSupabaseCloudUser());
 }
 
@@ -844,6 +1373,7 @@ export async function syncNow(options: SyncNowOptions = {}) {
 			'richest',
 			{ onProgress: options.onProgress }
 		);
+		await repairScheduledSessionDays(context.database, context.userId);
 		const { rxdb } = await getRxRuntime();
 
 		if (isActiveRuntimeContext(context)) {
@@ -876,7 +1406,11 @@ function getCloudSyncDeps(context: ActiveRuntimeContext | null = null) {
 	return {
 		db: context?.database ?? db,
 		getActiveSupabaseUserId: () =>
-			context ? (isActiveRuntimeContext(context) ? context.userId : null) : activeSupabaseUserId,
+			context
+				? isActiveRuntimeContext(context)
+					? context.userId
+					: null
+				: (getActiveRuntimeContext()?.userId ?? null),
 		markSupabaseCacheHydrated,
 		markRecentBackfillComplete,
 		withExerciseDefaults,
@@ -906,12 +1440,19 @@ export async function reconcileSupabaseDatabase(
 	mode: DatabaseUploadMode,
 	options: SyncNowOptions = {}
 ): Promise<DatabaseUploadSummary> {
-	return dbCloudSync.reconcileSupabaseDatabase(
+	const context = getActiveRuntimeContext();
+	const summary = await dbCloudSync.reconcileSupabaseDatabase(
 		getCloudSyncDeps(getActiveRuntimeContext()),
 		userId,
 		mode,
 		options
 	);
+
+	if (context?.userId === userId && isActiveRuntimeContext(context)) {
+		await repairScheduledSessionDays(context.database, context.userId);
+	}
+
+	return summary;
 }
 
 export async function putMergedRemoteRow<T extends SyncableRow>(
@@ -1008,6 +1549,12 @@ export function startProgressiveSync(userId: string, generation = runtimeGenerat
 			await rxdb.awaitSupabaseInSync(userId, { timeoutMs: 15000 });
 
 			if (isActiveRuntimeIdentity(attempt)) {
+				const context = getActiveRuntimeContext();
+
+				if (context) {
+					await repairScheduledSessionDays(context.database, context.userId);
+				}
+
 				markSupabaseCacheHydrated(userId);
 				setSyncStateForUser(userId, { phase: 'in-sync', status: 'synced' });
 			}
@@ -1064,6 +1611,7 @@ export async function uploadLocalDatabaseToCloud() {
 			context.userId,
 			'local-preferred'
 		);
+		await repairScheduledSessionDays(context.database, context.userId);
 		if (isActiveRuntimeContext(context)) {
 			setSyncStateForUser(context.userId, { phase: 'in-sync', status: 'synced' });
 		}
@@ -1090,6 +1638,11 @@ export async function getLocalDatabaseStats(): Promise<LocalDatabaseStats> {
 		db.sessionExercises.toArray(),
 		db.sessionSets.toArray()
 	]);
+	const visibleSessionExercises = projectUniqueSessionExercises(sessionExercises);
+	const matchingSessionSets = filterSessionSetsForSessionExercises(
+		sessionSets,
+		visibleSessionExercises
+	);
 	const completedSessions = sessions.filter((session) => session.status === 'completed');
 	const lastWorkout = [...completedSessions].sort(
 		(first, second) => getRowTimestamp(second) - getRowTimestamp(first)
@@ -1099,9 +1652,9 @@ export async function getLocalDatabaseStats(): Promise<LocalDatabaseStats> {
 		workouts: workouts.length,
 		customExercises: exercises.filter(shouldSyncExercise).length,
 		previousWorkouts: completedSessions.length,
-		sessionExercises: sessionExercises.length,
-		sessionSets: sessionSets.length,
-		filledSessionSets: sessionSets.filter(hasAnySetValue).length,
+		sessionExercises: visibleSessionExercises.length,
+		sessionSets: matchingSessionSets.length,
+		filledSessionSets: matchingSessionSets.filter(hasAnySetValue).length,
 		lastWorkoutAt: lastWorkout?.completedAt ?? lastWorkout?.startedAt ?? lastWorkout?.createdAt
 	};
 }
@@ -1236,6 +1789,11 @@ export async function hydrateVisibleScope(scope: HydrateVisibleScopeInput) {
 
 	if (scope.type === 'session') {
 		await hydrateSessionForContext(scope.sessionId, context);
+		const session = await context.database.workoutSessions.get(scope.sessionId);
+
+		if (session) {
+			await repairScheduledSessionDay(context.database, context.userId, session.dayKey);
+		}
 		return;
 	}
 
@@ -1255,6 +1813,21 @@ export async function hydrateVisibleScope(scope: HydrateVisibleScopeInput) {
 			context.database.workoutSessions,
 			sessions
 		);
+
+		for (const dayKey of [...new Set(sessions.map((session) => session.dayKey))]) {
+			const daySessions = await context.database.workoutSessions
+				.where('dayKey')
+				.equals(dayKey)
+				.toArray();
+
+			if (daySessions.length > 1) {
+				await Promise.all(
+					daySessions.map((session) => hydrateSessionForContext(session.id, context))
+				);
+			}
+
+			await repairScheduledSessionDay(context.database, context.userId, dayKey);
+		}
 		return;
 	}
 
@@ -1271,6 +1844,7 @@ export async function hydrateVisibleScope(scope: HydrateVisibleScopeInput) {
 			sessions
 		);
 		await Promise.all(sessions.map((session) => hydrateSessionForContext(session.id, context)));
+		await repairScheduledSessionDay(context.database, context.userId, scope.dayKey);
 		return;
 	}
 
@@ -1312,23 +1886,47 @@ export async function hydrateVisibleScope(scope: HydrateVisibleScopeInput) {
 }
 
 export async function getSessionTimerSummary(sessionId: string) {
+	const expectedUserId = getActiveCloudUser().userId;
 	await ensureDbOpen();
+	return runAuthenticatedDatabaseOperation(async (operation) => {
+		if (!expectedUserId || operation.userId !== expectedUserId) {
+			throw new Error('The signed-in user changed before the session timer could be loaded.');
+		}
 
-	const session = await db.workoutSessions.get(sessionId);
+		const session = await operation.database.workoutSessions.get(sessionId);
 
-	if (!session) {
-		return null;
-	}
+		if (!session) {
+			return null;
+		}
 
-	return summarizeSession(
-		session,
-		await db.sessionExercises.where('sessionId').equals(sessionId).toArray(),
-		[]
-	);
+		const storedSessionExercises = await operation.database.sessionExercises
+			.where('sessionId')
+			.equals(sessionId)
+			.toArray();
+		const sessionExerciseIds = storedSessionExercises.map(({ id }) => id);
+		const storedSessionSets =
+			sessionExerciseIds.length === 0
+				? []
+				: await operation.database.sessionSets
+						.where('sessionExerciseId')
+						.anyOf(sessionExerciseIds)
+						.toArray();
+		const projection = projectSessionChildren({
+			session,
+			sessionExercises: storedSessionExercises,
+			sessionSets: storedSessionSets
+		});
+
+		return summarizeSession(
+			session,
+			projection.visibleSessionExercises,
+			projection.visibleSessionSets
+		);
+	});
 }
 
 export function requireLoggedInUser() {
-	if (!activeSupabaseUserId) {
+	if (!getActiveRuntimeContext()) {
 		throw new Error('Sign in with Google to save workouts.');
 	}
 }

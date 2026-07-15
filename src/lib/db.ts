@@ -39,7 +39,12 @@ export {
 	recordExerciseReset,
 	setExerciseUnilateral
 } from './db/exercises';
-export { listExerciseMergeOptions, mergeExerciseHistory } from './db/exercise-merge';
+export {
+	ExerciseMergeCompensationError,
+	listExerciseMergeOptions,
+	mergeExerciseHistory,
+	repairExerciseMergeCompensation
+} from './db/exercise-merge';
 export {
 	addExerciseToWorkout,
 	addExercisesToWorkout,

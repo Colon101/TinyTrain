@@ -1,5 +1,5 @@
 import type { Workout, WorkoutExercise, WorkoutExerciseWithExercise } from './models';
-import { db, requireLoggedInUser } from './runtime';
+import { db, requireLoggedInUser, type AppDatabase } from './runtime';
 import {
 	compareOptionalRecency,
 	createId,
@@ -7,6 +7,7 @@ import {
 	getWorkoutSessionRecencyTimestamp,
 	isDefined,
 	normalizeName,
+	reconcileSessionExerciseOrderCollisions,
 	timestamp,
 	withExerciseDefaults
 } from './shared';
@@ -88,12 +89,15 @@ export async function createWorkout(name: string) {
 	});
 }
 
-export async function listWorkoutExercises(workoutId: string) {
-	const workoutExerciseRows = await db.workoutExercises
+export async function listWorkoutExercises(
+	workoutId: string,
+	database: Pick<AppDatabase, 'workoutExercises' | 'exercises'> = db
+) {
+	const workoutExerciseRows = await database.workoutExercises
 		.where('workoutId')
 		.equals(workoutId)
 		.sortBy('order');
-	const exercises = await db.exercises.bulkGet(
+	const exercises = await database.exercises.bulkGet(
 		workoutExerciseRows.map((workoutExercise) => workoutExercise.exerciseId)
 	);
 	const exerciseById = new Map(
@@ -183,10 +187,11 @@ export async function syncWorkoutExercisesFromSession(sessionId: string, now = t
 		return;
 	}
 
-	const [sessionExercises, workoutExercises] = await Promise.all([
+	const [rawSessionExercises, workoutExercises] = await Promise.all([
 		db.sessionExercises.where('sessionId').equals(sessionId).sortBy('order'),
 		db.workoutExercises.where('workoutId').equals(session.workoutId).toArray()
 	]);
+	const sessionExercises = reconcileSessionExerciseOrderCollisions(rawSessionExercises);
 	const workoutExerciseByExerciseId = new Map(
 		workoutExercises.map((workoutExercise) => [workoutExercise.exerciseId, workoutExercise])
 	);

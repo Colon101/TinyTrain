@@ -20,14 +20,15 @@
 	} = $props();
 
 	let nowMs = $state(Date.now());
+	let daySessions = $derived(overview?.sessions ?? (overview?.session ? [overview.session] : []));
 	let shouldTick = $derived(
 		Boolean(
-			(overview?.session?.status === 'in_progress' && !overview.session.completedAt) ||
+			daySessions.some((session) => session.status === 'in_progress' && !session.completedAt) ||
 			(currentSession?.status === 'in_progress' && !currentSession.completedAt)
 		)
 	);
 	let showPinnedCurrentSession = $derived(
-		Boolean(currentSession && currentSession.id !== overview?.session?.id)
+		Boolean(currentSession && !daySessions.some((session) => session.id === currentSession?.id))
 	);
 
 	$effect(() => {
@@ -60,15 +61,22 @@
 		</div>
 	{/if}
 
-	{#if overview?.session}
-		{@const session = overview.session}
-		<HomeSessionCard
-			{session}
-			label={showPinnedCurrentSession ? 'Selected day' : ''}
-			{nowMs}
-			{isBusy}
-			onStart={() => onStartSession(session.id)}
-		/>
+	{#if daySessions.length > 0}
+		{#each daySessions as session, index (session.id)}
+			<div class:mt-3={index > 0}>
+				<HomeSessionCard
+					{session}
+					label={daySessions.length > 1
+						? `Same-day session ${index + 1} of ${daySessions.length}`
+						: showPinnedCurrentSession
+							? 'Selected day'
+							: ''}
+					{nowMs}
+					{isBusy}
+					onStart={() => onStartSession(session.id)}
+				/>
+			</div>
+		{/each}
 	{:else if isTodaySelected}
 		<div class="rounded-lg border border-dashed border-white/10 px-4 py-5">
 			<p class="text-sm font-medium text-zinc-300">No workout scheduled for today.</p>

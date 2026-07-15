@@ -3,7 +3,7 @@
 	import type { ProgressIndicatorPosition } from '$lib/progress-indicator-preference';
 
 	const setInputBaseClass =
-		'h-11 w-full rounded-md border px-2 py-0 text-center text-[1.0625rem] leading-none font-semibold outline-none placeholder:text-zinc-500';
+		'h-11 w-full rounded-md border px-2 py-0 text-center text-[1.0625rem] leading-none font-semibold outline-none placeholder:text-zinc-500 disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-500 disabled:opacity-75';
 	const deltaIndicatorBaseClass =
 		'pointer-events-none absolute z-10 max-w-[calc(100%-1rem)] overflow-hidden text-[9px] leading-none font-semibold whitespace-nowrap text-ellipsis tabular-nums';
 
@@ -17,6 +17,7 @@
 		previousValue,
 		delta,
 		indicatorPosition,
+		disabled = false,
 		onInput,
 		onKeydown
 	}: {
@@ -29,6 +30,7 @@
 		previousValue?: number;
 		delta: SessionFieldDelta;
 		indicatorPosition: ProgressIndicatorPosition;
+		disabled?: boolean;
 		onInput: (event: Event) => void;
 		onKeydown: (event: KeyboardEvent) => void;
 	} = $props();
@@ -110,6 +112,7 @@
 		aria-describedby={delta.label ? deltaDescriptionId : undefined}
 		{value}
 		placeholder={formatPlaceholder(previousValue)}
+		{disabled}
 		oninput={onInput}
 		onkeydown={onKeydown}
 	/>

@@ -8,11 +8,16 @@
 	import {
 		SESSION_EDIT_DISCARD_MESSAGE,
 		clearSessionEditDraft,
+		migrateLegacySessionEditDraftForCurrentUser,
 		readSessionEditDraft,
 		sessionOverviewActions
 	} from '$lib/features/sessions/session-overview-actions';
 	import type { SessionEditDraft } from '$lib/features/sessions/session-overview-actions';
 	import { formatDuration, formatSessionStatus } from '$lib/features/sessions/session-format';
+	import {
+		startLatestValueSubscription,
+		type LatestValueSubscription
+	} from '$lib/features/sessions/latest-value-subscription';
 	import type { CloudUser } from '$lib/features/app/user';
 	import GlobalSessionInactivityMonitor from '$lib/features/sessions/GlobalSessionInactivityMonitor.svelte';
 	import Icon from '$lib/ui/Icon.svelte';
@@ -181,8 +186,8 @@
 
 	$effect(() => {
 		const sessionId = sessionMatch?.[1];
-		let cancelled = false;
-		let subscription: SubscriptionLike | null = null;
+		let disposed = false;
+		let timerSubscription: LatestValueSubscription | null = null;
 
 		sessionTimer = null;
 
@@ -196,38 +201,44 @@
 			try {
 				const api = (await import('$lib/db')) as DatabaseApi;
 
-				async function loadTimer() {
-					const timer = await api.getSessionTimerSummary(activeSessionId);
-
-					if (!cancelled) {
-						sessionTimer = timer;
-					}
+				if (disposed) {
+					return;
 				}
 
-				await loadTimer();
+				timerSubscription = startLatestValueSubscription({
+					subscribe: (onChange) =>
+						api.subscribeToDatabaseChanges(
+							['workoutSessions', 'sessionExercises', 'sessionSets'],
+							onChange,
+							{ debounceMs: 250 }
+						),
+					load: () => api.getSessionTimerSummary(activeSessionId),
+					apply: (timer) => {
+						sessionTimer = timer;
+
+						if (timer) {
+							migrateLegacySessionEditDraftForCurrentUser(activeSessionId);
+							sessionEditDraft = isSessionEditRoute ? readSessionEditDraft(activeSessionId) : null;
+						}
+					},
+					onError: () => {
+						sessionTimer = null;
+					}
+				});
 				void api
 					.hydrateVisibleScope({ type: 'session', sessionId: activeSessionId })
 					.catch(() => undefined);
-
-				if (!cancelled) {
-					subscription = api.subscribeToDatabaseChanges(
-						['workoutSessions', 'sessionExercises', 'sessionSets'],
-						() => {
-							void loadTimer();
-						},
-						{ debounceMs: 250 }
-					);
-				}
 			} catch {
-				if (!cancelled) {
+				if (!disposed) {
 					sessionTimer = null;
 				}
 			}
 		})();
 
 		return () => {
-			cancelled = true;
-			subscription?.unsubscribe();
+			disposed = true;
+			timerSubscription?.dispose();
+			timerSubscription = null;
 		};
 	});
 

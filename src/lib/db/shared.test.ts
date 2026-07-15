@@ -13,6 +13,8 @@ import {
 	getLastSessionSetActivityAt,
 	getSessionActivityAt,
 	normalizeName,
+	reconcileSessionExerciseOrderCollisions,
+	reconcileSessionSetOrderCollisions,
 	summarizeExerciseProgress,
 	summarizeSession,
 	toParsedInputValue,
@@ -86,6 +88,78 @@ function historyEntry(
 describe('persisted name normalization', () => {
 	it('uses locale-independent lowercase keys', () => {
 		expect(normalizeName('  I   PRESS  ')).toBe('i press');
+	});
+});
+
+describe('distributed child ordering', () => {
+	it('converges exercise collisions on both replicas without defeating a later reorder', () => {
+		const first = sessionExercise({ id: 'exercise-z', order: 2 });
+		const second = sessionExercise({ id: 'exercise-a', order: 2 });
+		const leading = sessionExercise({ id: 'exercise-leading', order: 1 });
+		const firstReplica = reconcileSessionExerciseOrderCollisions([leading, first, second]);
+		const secondReplica = reconcileSessionExerciseOrderCollisions([second, first, leading]);
+
+		expect(firstReplica.map(({ id, order }) => [id, order])).toEqual([
+			['exercise-leading', 1],
+			['exercise-a', 2],
+			['exercise-z', 3]
+		]);
+		expect(secondReplica).toEqual(firstReplica);
+		expect(first.order).toBe(2);
+		expect(second.order).toBe(2);
+
+		const afterUserReorder = reconcileSessionExerciseOrderCollisions([
+			leading,
+			{ ...first, order: 2 },
+			{ ...second, order: 3 }
+		]);
+		expect(afterUserReorder.map((row) => row.id)).toEqual([
+			'exercise-leading',
+			'exercise-z',
+			'exercise-a'
+		]);
+	});
+
+	it('converges colliding unilateral set pairs and preserves a later explicit order', () => {
+		const leading = sessionSet({ id: 'leading:bilateral', order: 1 });
+		const firstPair = [
+			sessionSet({ id: 'pair-z:right', order: 2, side: 'right' }),
+			sessionSet({ id: 'pair-z:left', order: 2, side: 'left' })
+		];
+		const secondPair = [
+			sessionSet({ id: 'pair-a:right', order: 2, side: 'right' }),
+			sessionSet({ id: 'pair-a:left', order: 2, side: 'left' })
+		];
+		const firstReplica = reconcileSessionSetOrderCollisions([leading, ...firstPair, ...secondPair]);
+		const secondReplica = reconcileSessionSetOrderCollisions([
+			...secondPair.toReversed(),
+			...firstPair.toReversed(),
+			leading
+		]);
+
+		expect(firstReplica.map(({ id, order }) => [id, order])).toEqual([
+			['leading:bilateral', 1],
+			['pair-a:right', 2],
+			['pair-a:left', 2],
+			['pair-z:right', 3],
+			['pair-z:left', 3]
+		]);
+		expect(secondReplica).toEqual(firstReplica);
+		expect(firstPair.every((row) => row.order === 2)).toBe(true);
+		expect(secondPair.every((row) => row.order === 2)).toBe(true);
+
+		const afterUserReorder = reconcileSessionSetOrderCollisions([
+			leading,
+			...firstPair.map((row) => ({ ...row, order: 2 })),
+			...secondPair.map((row) => ({ ...row, order: 3 }))
+		]);
+		expect(afterUserReorder.map((row) => row.id)).toEqual([
+			'leading:bilateral',
+			'pair-z:right',
+			'pair-z:left',
+			'pair-a:right',
+			'pair-a:left'
+		]);
 	});
 });
 
@@ -171,7 +245,10 @@ describe('session activity and summaries', () => {
 
 		const summary = summarizeSession(
 			session({ dayKey: '', updatedAt: atMinute(5) }),
-			[sessionExercise(), sessionExercise({ id: 'second-exercise', order: 2 })],
+			[
+				sessionExercise(),
+				sessionExercise({ id: 'second-exercise', exerciseId: 'second-exercise', order: 2 })
+			],
 			sets
 		);
 

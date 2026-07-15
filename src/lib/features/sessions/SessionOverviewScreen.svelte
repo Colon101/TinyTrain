@@ -1,14 +1,16 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
 	import { resolve } from '$app/paths';
-	import { goto } from '$app/navigation';
+	import { beforeNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onDestroy, onMount, untrack } from 'svelte';
 	import type {
 		Exercise,
 		ExerciseUsagePreference,
 		SessionExerciseOverview,
-		SessionOverview
+		SessionOverview,
+		SessionStructuralEditExpectation,
+		SessionDestructiveEditExpectation
 	} from '$lib/db';
 	import ExercisePickerSheet from '$lib/features/workouts/ExercisePickerSheet.svelte';
 	import {
@@ -25,13 +27,21 @@
 		SESSION_EDIT_DISCARD_MESSAGE,
 		clearSessionEditDraft,
 		clearSessionOverviewActions,
+		migrateLegacySessionEditDraftForCurrentUser,
 		readSessionEditDraft,
 		setSessionOverviewActions
 	} from './session-overview-actions';
 	import { writeSessionEditDraft } from './session-overview-actions';
 	import { formatDayHeading, formatDuration } from './session-format';
 	import { hasLoggedValues } from './session-overview';
-	import { applySessionInputDraft } from './session-input-draft';
+	import { createSessionDraftOverlayController } from './session-draft-overlay-controller';
+	import { migrateLegacySessionInputDraftForCurrentUser } from './session-input-draft';
+	import { createSessionMutationFence } from './session-mutation-fence';
+	import {
+		createSessionNavigationOwnershipCoordinator,
+		type SessionStructuralMutationLease
+	} from './session-navigation-ownership';
+	import { createSessionScreenLoadLifetime } from './session-screen-load-lifetime';
 	import { shareOrDownloadSessionImage } from './session-share-image';
 	import { readSessionDataCache, writeSessionDataCache } from './session-data-cache';
 
@@ -58,17 +68,23 @@
 
 	const DRAG_SCROLL_EDGE_PX = 96;
 	const DRAG_SCROLL_MAX_STEP_PX = 18;
+	const runMutationSingleFlight = createSessionMutationFence();
+	const navigationOwnership = createSessionNavigationOwnershipCoordinator<string>();
 
 	let { sessionId }: { sessionId: string } = $props();
-	const cachedSessionData = untrack(() => readSessionDataCache(sessionId));
+	const controllerSessionId = untrack(() => sessionId);
+	const cachedSessionData = untrack(() => readSessionDataCache(controllerSessionId));
 	const cachedExercisePickerData = untrack(() => readExercisePickerCache());
+	const draftOverlayController = createSessionDraftOverlayController({
+		sessionId: controllerSessionId,
+		includeCompleted: isCompletedEditRoute()
+	});
+	const cachedDraftOverlay = untrack(() =>
+		draftOverlayController.setBaseline(cachedSessionData?.overview ?? null)
+	);
 
 	let api = $state<DatabaseApi | null>(null);
-	let overview = $state<SessionOverview | null>(
-		applySessionInputDraft(cachedSessionData?.overview ?? null, undefined, {
-			includeCompleted: isCompletedEditRoute()
-		})
-	);
+	let overview = $state<SessionOverview | null>(cachedDraftOverlay.overview);
 	let exercises = $state<Exercise[]>(
 		cachedSessionData?.exercises ?? cachedExercisePickerData?.exercises ?? []
 	);
@@ -86,6 +102,8 @@
 	let isTimeEditorOpen = $state(false);
 	let draftStartedAt = $state('');
 	let draftCompletedAt = $state('');
+	let baseStartedAt = $state('');
+	let baseCompletedAt = $state('');
 	let timeEditorStartTime = $state('');
 	let timeEditorDurationHours = $state('0');
 	let timeEditorDurationMinutes = $state('0');
@@ -98,7 +116,9 @@
 	let selectedPickerExerciseIds = $state<string[]>([]);
 	let newExerciseName = $state('');
 	let isNewExerciseUnilateral = $state(false);
-	let loadDataGeneration = 0;
+	const loadLifetime = createSessionScreenLoadLifetime();
+	let isOwnedSessionNavigation = false;
+	let isNavigationUnloadFenceRegistered = false;
 	let openExerciseMenuId = $state('');
 	let draggedSessionExerciseId = $state('');
 	let dragStartSessionExerciseIds = $state<string[]>([]);
@@ -140,8 +160,7 @@
 		Boolean(
 			overview &&
 			isEditMode &&
-			(draftStartedAt !== (overview.summary.startedAt ?? '') ||
-				draftCompletedAt !== (overview.summary.completedAt ?? ''))
+			(draftStartedAt !== baseStartedAt || draftCompletedAt !== baseCompletedAt)
 		)
 	);
 	let timerSummaryEndMs = $derived(
@@ -176,6 +195,37 @@
 	let hiddenPickerExerciseCount = $derived(
 		Math.max(filteredExercises.length - visiblePickerExercises.length, 0)
 	);
+
+	function preventOwnedWorkUnload(event: BeforeUnloadEvent) {
+		event.preventDefault();
+		event.returnValue = '';
+	}
+
+	function syncNavigationUnloadFence() {
+		const shouldBlockUnload = navigationOwnership.shouldBlockUnload();
+
+		if (shouldBlockUnload && !isNavigationUnloadFenceRegistered) {
+			window.addEventListener('beforeunload', preventOwnedWorkUnload);
+			isNavigationUnloadFenceRegistered = true;
+			return;
+		}
+
+		if (!shouldBlockUnload && isNavigationUnloadFenceRegistered) {
+			window.removeEventListener('beforeunload', preventOwnedWorkUnload);
+			isNavigationUnloadFenceRegistered = false;
+		}
+	}
+
+	function getStructuralEditExpectation(): SessionStructuralEditExpectation | null {
+		if (!overview) {
+			return null;
+		}
+
+		return {
+			status: overview.summary.status,
+			allowCompleted: overview.summary.status === 'completed' && isEditMode
+		};
+	}
 	let hasExactExerciseMatch = $derived(
 		Boolean(cleanExerciseSearch) &&
 			exercises.some((exercise) => exercise.normalizedName === normalizedExerciseSearch)
@@ -199,8 +249,15 @@
 	);
 
 	onMount(() => {
-		let disposed = false;
 		let databaseSubscription: { unsubscribe(): void } | null = null;
+		const unsubscribeDraftOverlay = draftOverlayController.subscribe((snapshot) => {
+			if (!loadLifetime.isDisposed()) {
+				overview = snapshot.overview;
+			}
+		});
+		const unsubscribeNavigationOwnership = navigationOwnership.subscribe(() => {
+			syncNavigationUnloadFence();
+		});
 
 		function handlePointerDown(event: PointerEvent) {
 			const target = event.target as Element | null;
@@ -216,7 +273,7 @@
 			try {
 				const dbApi = await import('$lib/db');
 
-				if (disposed) {
+				if (loadLifetime.isDisposed()) {
 					return;
 				}
 
@@ -231,19 +288,44 @@
 				await loadData();
 				void dbApi.hydrateVisibleScope({ type: 'session', sessionId }).catch(() => undefined);
 			} catch (error) {
-				errorMessage = getErrorMessage(error);
+				if (!loadLifetime.isDisposed()) {
+					errorMessage = getErrorMessage(error);
+				}
 			} finally {
-				isLoading = false;
+				if (!loadLifetime.isDisposed()) {
+					isLoading = false;
+				}
 			}
 		})();
 
 		return () => {
-			disposed = true;
+			loadLifetime.dispose();
+			unsubscribeDraftOverlay();
+			draftOverlayController.dispose();
+			unsubscribeNavigationOwnership();
+			navigationOwnership.dispose();
+			window.removeEventListener('beforeunload', preventOwnedWorkUnload);
+			isNavigationUnloadFenceRegistered = false;
 			databaseSubscription?.unsubscribe();
 			window.removeEventListener('pointerdown', handlePointerDown, { capture: true });
 			stopDragAutoScroll();
 			stopDragPreviewMove();
 		};
+	});
+
+	beforeNavigate((navigation) => {
+		const targetUrl = navigation.to?.url;
+
+		if (isOwnedSessionNavigation || navigation.willUnload || !targetUrl) {
+			return;
+		}
+
+		if (!navigationOwnership.shouldBlockUnload()) {
+			navigationOwnership.markRouteChanged();
+			return;
+		}
+
+		navigation.cancel();
 	});
 
 	$effect(() => {
@@ -279,42 +361,55 @@
 	}
 
 	async function loadData() {
-		const generation = ++loadDataGeneration;
+		if (loadLifetime.isDisposed()) {
+			return;
+		}
+
+		const generation = loadLifetime.beginLoad();
+		const draftOwnerScope = draftOverlayController.getOwnerScope();
 		const dbApi = requireApi();
 		void dbApi.cleanupStaleSessions();
 		const nextOverview = await dbApi.runWithClosedDatabaseRetry(() =>
 			dbApi.getEditableSession(sessionId)
 		);
 
-		if (generation !== loadDataGeneration) {
+		if (
+			!loadLifetime.isCurrent(generation) ||
+			!draftOverlayController.isCurrentOwnerScope(draftOwnerScope)
+		) {
 			return;
 		}
 
-		const nextOverviewWithDraft = applySessionInputDraft(nextOverview, undefined, {
-			includeCompleted: isCompletedEditRoute()
-		});
+		if (nextOverview) {
+			migrateLegacySessionInputDraftForCurrentUser(sessionId);
+			migrateLegacySessionEditDraftForCurrentUser(sessionId);
+		}
 
-		overview = nextOverviewWithDraft;
+		draftOverlayController.setIncludeCompleted(isCompletedEditRoute());
+		const nextDraftOverlay = draftOverlayController.setBaseline(nextOverview, draftOwnerScope);
+		overview = nextDraftOverlay.overview;
 		writeSessionDataCache(sessionId, {
-			overview: nextOverviewWithDraft,
+			overview: nextDraftOverlay.baseline,
 			exercises,
 			exerciseUsagePreferences
 		});
 		nowMs = Date.now();
 		openExerciseMenuId = '';
 		void loadExercisePickerData(generation).catch((error) => {
-			errorMessage = getErrorMessage(error);
+			if (loadLifetime.isCurrent(generation)) {
+				errorMessage = getErrorMessage(error);
+			}
 		});
 	}
 
-	async function loadExercisePickerData(generation = loadDataGeneration) {
+	async function loadExercisePickerData(generation = loadLifetime.getGeneration()) {
 		const dbApi = requireApi();
 		const [nextExercises, nextExerciseUsagePreferences] = await Promise.all([
 			dbApi.listExercises(),
 			dbApi.listExerciseUsagePreferences()
 		]);
 
-		if (generation !== loadDataGeneration) {
+		if (!loadLifetime.isCurrent(generation)) {
 			return;
 		}
 
@@ -322,24 +417,58 @@
 		exerciseUsagePreferences = nextExerciseUsagePreferences;
 		writeExercisePickerCache(nextExercises, nextExerciseUsagePreferences);
 		writeSessionDataCache(sessionId, {
-			overview,
+			overview: draftOverlayController.getSnapshot().baseline,
 			exercises: nextExercises,
 			exerciseUsagePreferences: nextExerciseUsagePreferences
 		});
 	}
 
-	async function runMutation(action: () => Promise<void>) {
-		isSaving = true;
-		errorMessage = '';
-
-		try {
-			await action();
-			await loadData();
-		} catch (error) {
-			errorMessage = getErrorMessage(error);
-		} finally {
-			isSaving = false;
+	async function runMutation(
+		action: (lease: SessionStructuralMutationLease) => Promise<void>,
+		options: { prepare?: () => Promise<boolean> | boolean } = {}
+	) {
+		if (loadLifetime.isDisposed()) {
+			return;
 		}
+
+		await runMutationSingleFlight(async () => {
+			const lease = navigationOwnership.beginStructuralMutation();
+
+			if (!lease) {
+				return;
+			}
+
+			isSaving = true;
+			errorMessage = '';
+
+			try {
+				if (options.prepare) {
+					const prepared = await options.prepare();
+
+					if (loadLifetime.isDisposed() || !prepared) {
+						return;
+					}
+				}
+
+				await action(lease);
+
+				if (loadLifetime.isDisposed()) {
+					return;
+				}
+
+				await loadData();
+			} catch (error) {
+				if (!loadLifetime.isDisposed()) {
+					errorMessage = getErrorMessage(error);
+				}
+			} finally {
+				lease.release();
+
+				if (!loadLifetime.isDisposed()) {
+					isSaving = false;
+				}
+			}
+		});
 	}
 
 	function writeStoredEditDraft() {
@@ -349,7 +478,9 @@
 
 		writeSessionEditDraft(sessionId, {
 			startedAt: draftStartedAt,
-			completedAt: draftCompletedAt
+			completedAt: draftCompletedAt,
+			baseStartedAt,
+			baseCompletedAt
 		});
 	}
 
@@ -367,15 +498,25 @@
 		return editMode ? `${basePath}?edit=1` : basePath;
 	}
 
-	async function syncEditUrl(editMode: boolean) {
+	async function syncEditUrl(editMode: boolean, lease?: SessionStructuralMutationLease) {
 		const nextPath = getSessionOverviewPath(editMode);
 
 		if (`${page.url.pathname}${page.url.search}` === nextPath) {
 			return;
 		}
 
-		// eslint-disable-next-line svelte/no-navigation-without-resolve
-		await goto(nextPath, { replaceState: true, keepFocus: true, noScroll: true });
+		if (lease && !lease.canRedirect()) {
+			return;
+		}
+
+		isOwnedSessionNavigation = Boolean(lease);
+
+		try {
+			// eslint-disable-next-line svelte/no-navigation-without-resolve
+			await goto(nextPath, { replaceState: true, keepFocus: true, noScroll: true });
+		} finally {
+			isOwnedSessionNavigation = false;
+		}
 	}
 
 	function getDurationSeconds(startedAt?: string | null, completedAt?: string | null) {
@@ -418,8 +559,10 @@
 
 		draftStartedAt = storedDraft?.startedAt ?? overview.summary.startedAt ?? '';
 		draftCompletedAt = storedDraft?.completedAt ?? overview.summary.completedAt ?? '';
-		overview = applySessionInputDraft(overview, undefined, { includeCompleted: true });
+		baseStartedAt = storedDraft?.baseStartedAt ?? overview.summary.startedAt ?? '';
+		baseCompletedAt = storedDraft?.baseCompletedAt ?? overview.summary.completedAt ?? '';
 		isEditMode = true;
+		overview = draftOverlayController.setIncludeCompleted(true).overview;
 		openExerciseMenuId = '';
 		void syncEditUrl(true);
 	}
@@ -428,7 +571,9 @@
 		try {
 			await loadData();
 		} catch (error) {
-			errorMessage = getErrorMessage(error);
+			if (!loadLifetime.isDisposed()) {
+				errorMessage = getErrorMessage(error);
+			}
 		}
 	}
 
@@ -538,6 +683,11 @@
 		}
 
 		await syncEditUrl(false);
+
+		if (loadLifetime.isDisposed()) {
+			return;
+		}
+
 		clearStoredEditDraft();
 		isEditMode = false;
 		isTimeEditorOpen = false;
@@ -551,6 +701,11 @@
 
 		if (!hasUnsavedTimeChanges) {
 			await syncEditUrl(false);
+
+			if (loadLifetime.isDisposed()) {
+				return;
+			}
+
 			clearStoredEditDraft();
 			isEditMode = false;
 			isTimeEditorOpen = false;
@@ -561,11 +716,30 @@
 		const summaryId = overview.summary.id;
 		const nextStartedAt = draftStartedAt;
 		const nextCompletedAt = draftCompletedAt || undefined;
+		const baseTiming = {
+			startedAt: baseStartedAt || undefined,
+			completedAt: baseCompletedAt || undefined
+		};
 
-		void runMutation(async () => {
-			await requireApi().updateWorkoutSessionTiming(summaryId, nextStartedAt, nextCompletedAt);
+		void runMutation(async (lease) => {
+			await requireApi().updateWorkoutSessionTiming(
+				summaryId,
+				nextStartedAt,
+				nextCompletedAt,
+				baseTiming
+			);
+
+			if (loadLifetime.isDisposed() || !lease.canRedirect()) {
+				return;
+			}
+
 			clearStoredEditDraft();
-			await syncEditUrl(false);
+			await syncEditUrl(false, lease);
+
+			if (loadLifetime.isDisposed() || !lease.canRedirect()) {
+				return;
+			}
+
 			isEditMode = false;
 			isTimeEditorOpen = false;
 		});
@@ -666,7 +840,11 @@
 		return null;
 	}
 
-	async function applyPickedExercises(exerciseIds: string[]) {
+	async function applyPickedExercises(
+		exerciseIds: string[],
+		expectation: SessionStructuralEditExpectation,
+		destructiveExpectation?: SessionDestructiveEditExpectation
+	) {
 		if (!overview || exerciseIds.length === 0) {
 			return;
 		}
@@ -678,20 +856,67 @@
 				return;
 			}
 
-			await dbApi.replaceSessionExercise(targetSessionExerciseId, exerciseIds[0]);
+			await dbApi.replaceSessionExercise(
+				targetSessionExerciseId,
+				exerciseIds[0],
+				expectation,
+				destructiveExpectation
+			);
+
+			if (loadLifetime.isDisposed()) {
+				return;
+			}
+
 			closeExercisePicker();
 			return;
 		}
 
-		await dbApi.addExercisesToSession(overview.summary.id, exerciseIds);
+		await dbApi.addExercisesToSession(overview.summary.id, exerciseIds, expectation);
+
+		if (loadLifetime.isDisposed()) {
+			return;
+		}
 
 		closeExercisePicker();
 	}
 
 	function handleAddSelected() {
-		void runMutation(async () => {
-			await applyPickedExercises(selectedPickerExerciseIds);
-		});
+		const expectation = getStructuralEditExpectation();
+		const isSwap = pickerMode === 'swap';
+		const destructiveExpectationPromise =
+			isSwap && targetSessionExerciseId
+				? requireApi().captureSessionExerciseDestructiveEditExpectation(targetSessionExerciseId, {
+						activeSetsOnly: true
+					})
+				: null;
+		let destructiveExpectation: SessionDestructiveEditExpectation | undefined;
+
+		if (!expectation) {
+			return;
+		}
+
+		void runMutation(
+			async () => {
+				await applyPickedExercises(selectedPickerExerciseIds, expectation, destructiveExpectation);
+			},
+			{
+				prepare: isSwap
+					? async () => {
+							if (!destructiveExpectationPromise) {
+								return false;
+							}
+
+							destructiveExpectation = await destructiveExpectationPromise;
+
+							if (loadLifetime.isDisposed()) {
+								return false;
+							}
+
+							return true;
+						}
+					: undefined
+			}
+		);
 	}
 
 	function handleCreateExercise(event: SubmitEvent) {
@@ -702,11 +927,48 @@
 		if (!exerciseName) {
 			return;
 		}
+		const expectation = getStructuralEditExpectation();
+		const isSwap = pickerMode === 'swap';
+		const destructiveExpectationPromise =
+			isSwap && targetSessionExerciseId
+				? requireApi().captureSessionExerciseDestructiveEditExpectation(targetSessionExerciseId, {
+						activeSetsOnly: true
+					})
+				: null;
+		let destructiveExpectation: SessionDestructiveEditExpectation | undefined;
 
-		void runMutation(async () => {
-			const exercise = await requireApi().createExercise(exerciseName, isNewExerciseUnilateral);
-			await applyPickedExercises([exercise.id]);
-		});
+		if (!expectation) {
+			return;
+		}
+
+		void runMutation(
+			async () => {
+				const exercise = await requireApi().createExercise(exerciseName, isNewExerciseUnilateral);
+
+				if (loadLifetime.isDisposed()) {
+					return;
+				}
+
+				await applyPickedExercises([exercise.id], expectation, destructiveExpectation);
+			},
+			{
+				prepare: isSwap
+					? async () => {
+							if (!destructiveExpectationPromise) {
+								return false;
+							}
+
+							destructiveExpectation = await destructiveExpectationPromise;
+
+							if (loadLifetime.isDisposed()) {
+								return false;
+							}
+
+							return true;
+						}
+					: undefined
+			}
+		);
 	}
 
 	function handleStartSession() {
@@ -725,6 +987,12 @@
 		if (!overview) {
 			return;
 		}
+		const summaryId = overview.summary.id;
+		const summaryDayKey = overview.summary.dayKey;
+		const deleteExpectation = {
+			status: overview.summary.status,
+			updatedAt: overview.summary.updatedAt
+		};
 
 		const confirmed = window.confirm(
 			`Delete ${overview.summary.workoutNameSnapshot} from ${formatDayHeading(overview.summary.dayKey)}?`
@@ -734,18 +1002,26 @@
 			return;
 		}
 
-		const summaryId = overview.summary.id;
-		const summaryDayKey = overview.summary.dayKey;
+		void runMutation(async (lease) => {
+			await requireApi().deleteWorkoutSession(summaryId, deleteExpectation);
 
-		void runMutation(async () => {
-			await requireApi().deleteWorkoutSession(summaryId);
+			if (loadLifetime.isDisposed() || !lease.canRedirect()) {
+				return;
+			}
+
 			const todayDayKey = new Date().toLocaleDateString('sv-SE');
 			const homePath =
 				summaryDayKey === todayDayKey ? '/' : `/?date=${encodeURIComponent(summaryDayKey)}`;
-			// eslint-disable-next-line svelte/no-navigation-without-resolve
-			await goto(homePath === '/' ? resolve('/') : `${resolve('/')}${homePath.slice(1)}`, {
-				replaceState: true
-			});
+			isOwnedSessionNavigation = true;
+
+			try {
+				// eslint-disable-next-line svelte/no-navigation-without-resolve
+				await goto(homePath === '/' ? resolve('/') : `${resolve('/')}${homePath.slice(1)}`, {
+					replaceState: true
+				});
+			} finally {
+				isOwnedSessionNavigation = false;
+			}
 		});
 	}
 
@@ -754,19 +1030,27 @@
 			return;
 		}
 
-		const confirmed = window.confirm(
-			`Reset all logged values in ${overview.summary.workoutNameSnapshot}?`
-		);
-
-		if (!confirmed) {
-			return;
-		}
-
 		const summaryId = overview.summary.id;
+		const workoutName = overview.summary.workoutNameSnapshot;
+		const destructiveExpectationPromise = requireApi().captureSessionResetExpectation(summaryId);
+		let destructiveExpectation: SessionDestructiveEditExpectation | undefined;
 
-		void runMutation(async () => {
-			await requireApi().resetSessionInputs(summaryId);
-		});
+		void runMutation(
+			async () => {
+				await requireApi().resetSessionInputs(summaryId, destructiveExpectation);
+			},
+			{
+				prepare: async () => {
+					destructiveExpectation = await destructiveExpectationPromise;
+
+					if (loadLifetime.isDisposed()) {
+						return false;
+					}
+
+					return window.confirm(`Reset all logged values in ${workoutName}?`);
+				}
+			}
+		);
 	}
 
 	function handleEndSession() {
@@ -800,15 +1084,25 @@
 				? await requireApi().getEditableSession(overview.previousSummary.id)
 				: null;
 
+			if (loadLifetime.isDisposed()) {
+				return;
+			}
+
 			await shareOrDownloadSessionImage(overview, nowMs, previousOverview);
 		} catch (error) {
+			if (loadLifetime.isDisposed()) {
+				return;
+			}
+
 			if (error instanceof DOMException && error.name === 'AbortError') {
 				return;
 			}
 
 			errorMessage = getErrorMessage(error);
 		} finally {
-			isSharingSession = false;
+			if (!loadLifetime.isDisposed()) {
+				isSharingSession = false;
+			}
 		}
 	}
 
@@ -823,18 +1117,40 @@
 			return;
 		}
 
-		if (
-			hasLoggedValues(sessionExercise) &&
-			!window.confirm(
-				`Remove ${sessionExercise.exerciseNameSnapshot} and discard its logged values?`
-			)
-		) {
+		const expectation = getStructuralEditExpectation();
+		const destructiveExpectationPromise =
+			requireApi().captureSessionExerciseDestructiveEditExpectation(sessionExerciseId);
+		let destructiveExpectation: SessionDestructiveEditExpectation | undefined;
+
+		if (!expectation) {
 			return;
 		}
 
-		void runMutation(async () => {
-			await requireApi().removeSessionExercise(sessionExerciseId);
-		});
+		void runMutation(
+			async () => {
+				await requireApi().removeSessionExercise(
+					sessionExerciseId,
+					expectation,
+					destructiveExpectation
+				);
+			},
+			{
+				prepare: async () => {
+					destructiveExpectation = await destructiveExpectationPromise;
+
+					if (loadLifetime.isDisposed()) {
+						return false;
+					}
+
+					return (
+						!hasLoggedValues(sessionExercise) ||
+						window.confirm(
+							`Remove ${sessionExercise.exerciseNameSnapshot} and discard its logged values?`
+						)
+					);
+				}
+			}
+		);
 	}
 
 	function getSessionExerciseIds() {
@@ -842,28 +1158,31 @@
 	}
 
 	function orderSessionExercises(nextIds: string[]) {
-		if (!overview) {
-			return;
+		const baseline = draftOverlayController.getSnapshot().baseline;
+
+		if (!baseline) {
+			return null;
 		}
 
 		const sessionExerciseById = new Map(
-			overview.exercises.map((sessionExercise) => [sessionExercise.id, sessionExercise])
+			baseline.exercises.map((sessionExercise) => [sessionExercise.id, sessionExercise])
 		);
 
-		const nextOverview = {
-			...overview,
+		const nextBaseline = {
+			...baseline,
 			exercises: nextIds
 				.map((id) => sessionExerciseById.get(id))
 				.filter((sessionExercise): sessionExercise is SessionExerciseOverview =>
 					Boolean(sessionExercise)
 				)
 		};
-		overview = nextOverview;
+		overview = draftOverlayController.setBaseline(nextBaseline).overview;
 		writeSessionDataCache(sessionId, {
-			overview: nextOverview,
+			overview: nextBaseline,
 			exercises,
 			exerciseUsagePreferences
 		});
+		return nextBaseline;
 	}
 
 	function cacheDragDropTargets(excludedSessionExerciseId: string) {
@@ -976,11 +1295,7 @@
 		}
 	}
 
-	function resetDrag(restoreOriginalOrder = false) {
-		if (restoreOriginalOrder && dragStartSessionExerciseIds.length > 0) {
-			orderSessionExercises(dragStartSessionExerciseIds);
-		}
-
+	function resetDrag() {
 		stopDragAutoScroll();
 		stopDragPreviewMove();
 
@@ -1134,18 +1449,30 @@
 		}
 
 		const summaryId = overview.summary.id;
-		const overviewBeforeReorder = overview;
-		orderSessionExercises(finalSessionExerciseIds);
-		const optimisticOverview = overview;
+		const baselineBeforeReorder = draftOverlayController.getSnapshot().baseline;
+		const expectation = getStructuralEditExpectation();
+
+		if (!expectation || !baselineBeforeReorder) {
+			return;
+		}
 
 		void runMutation(async () => {
+			const optimisticBaseline = orderSessionExercises(finalSessionExerciseIds);
+
+			if (!optimisticBaseline) {
+				return;
+			}
+
 			try {
-				await requireApi().reorderSessionExercises(summaryId, finalSessionExerciseIds);
+				await requireApi().reorderSessionExercises(summaryId, finalSessionExerciseIds, expectation);
 			} catch (error) {
-				if (overview === optimisticOverview) {
-					overview = overviewBeforeReorder;
+				if (
+					!loadLifetime.isDisposed() &&
+					draftOverlayController.getSnapshot().baseline === optimisticBaseline
+				) {
+					overview = draftOverlayController.setBaseline(baselineBeforeReorder).overview;
 					writeSessionDataCache(sessionId, {
-						overview: overviewBeforeReorder,
+						overview: baselineBeforeReorder,
 						exercises,
 						exerciseUsagePreferences
 					});
@@ -1163,7 +1490,7 @@
 			target.releasePointerCapture(event.pointerId);
 		}
 
-		resetDrag(true);
+		resetDrag();
 	}
 
 	$effect(() => {

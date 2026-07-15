@@ -11,13 +11,13 @@
 /// <reference types="../.svelte-kit/ambient.d.ts" />
 
 import { build, files, version } from '$service-worker';
+import { APP_SHELL, getCachedResponse, getDeploymentCacheName } from './service-worker-cache';
 
 // This gives `self` the correct types
 const self = globalThis.self as unknown as ServiceWorkerGlobalScope;
 
 // Create a unique cache name for this deployment
-const CACHE = `cache-${version}`;
-const APP_SHELL = '/';
+const CACHE = getDeploymentCacheName(version);
 const DEPLOYMENT_MANIFEST = '/deployment.json';
 const DEV = import.meta.env.DEV;
 const LOG_PREFIX = '[TinyTrain service worker]';
@@ -81,21 +81,6 @@ async function fetchFresh(request: Request | string) {
 	}
 
 	return response;
-}
-
-async function getCachedResponse(
-	cache: Cache,
-	request: Request,
-	url: URL,
-	options: { appShellFallback?: boolean } = {}
-) {
-	return (
-		(await cache.match(request)) ??
-		(await cache.match(url.pathname)) ??
-		(options.appShellFallback && request.mode === 'navigate'
-			? await cache.match(APP_SHELL)
-			: undefined)
-	);
 }
 
 async function readDeploymentId(response: Response | undefined) {
@@ -337,7 +322,7 @@ self.addEventListener('fetch', (event) => {
 			} catch (err) {
 				if (isCacheableSameOrigin) {
 					const response = await getCachedResponse(cache, event.request, url, {
-						appShellFallback: true
+						useAppShellForNavigation: true
 					});
 
 					if (response) {
@@ -361,7 +346,9 @@ self.addEventListener('fetch', (event) => {
 			return fetchFresh(event.request);
 		}
 
-		const cached = await getCachedResponse(cache, event.request, url);
+		const cached = await getCachedResponse(cache, event.request, url, {
+			useAppShellForNavigation: true
+		});
 
 		if (cached) {
 			event.waitUntil(hasVerifiedCurrentDeployment(cache).catch(() => true));
@@ -375,7 +362,7 @@ self.addEventListener('fetch', (event) => {
 			return response;
 		} catch (err) {
 			const response = await getCachedResponse(cache, event.request, url, {
-				appShellFallback: true
+				useAppShellForNavigation: true
 			});
 
 			if (response) {

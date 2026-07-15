@@ -231,6 +231,63 @@ export function getSessionSetSideOrder(side: SessionSetSide) {
 	}
 }
 
+function compareStableStrings(first: string, second: string) {
+	return first === second ? 0 : first < second ? -1 : 1;
+}
+
+export function compareSessionExerciseRows(
+	first: Pick<SessionExercise, 'id' | 'order'>,
+	second: Pick<SessionExercise, 'id' | 'order'>
+) {
+	return first.order - second.order || compareStableStrings(first.id, second.id);
+}
+
+/**
+ * Produces a stable, gap-free view without writing synthetic order changes back to storage.
+ * Persisted order remains the user's primary intent; IDs only resolve concurrent equal positions.
+ */
+export function reconcileSessionExerciseOrderCollisions<T extends SessionExercise>(
+	sessionExercises: readonly T[]
+): T[] {
+	return [...sessionExercises].sort(compareSessionExerciseRows).map((sessionExercise, index) => ({
+		...sessionExercise,
+		order: index + 1
+	}));
+}
+
+function compareSessionExerciseMembershipRecency(
+	first: Pick<SessionExercise, 'id' | 'createdAt' | 'updatedAt'>,
+	second: Pick<SessionExercise, 'id' | 'createdAt' | 'updatedAt'>
+) {
+	return (
+		compareStableStrings(first.createdAt, second.createdAt) ||
+		compareStableStrings(first.updatedAt, second.updatedAt) ||
+		compareStableStrings(first.id, second.id)
+	);
+}
+
+/**
+ * Defensive read projection for the product's one-exercise-per-session invariant. A later
+ * remove/re-add wins over an older membership by creation time; same-base malformed duplicates use
+ * updated time and finally id so every replica presents the same parent independent of read order.
+ */
+export function projectUniqueSessionExercises<T extends SessionExercise>(
+	sessionExercises: readonly T[]
+): T[] {
+	const preferredByMembership = new Map<string, T>();
+
+	for (const sessionExercise of sessionExercises) {
+		const membershipKey = `${sessionExercise.sessionId}\u0000${sessionExercise.exerciseId}`;
+		const preferred = preferredByMembership.get(membershipKey);
+
+		if (!preferred || compareSessionExerciseMembershipRecency(sessionExercise, preferred) > 0) {
+			preferredByMembership.set(membershipKey, sessionExercise);
+		}
+	}
+
+	return [...preferredByMembership.values()].sort(compareSessionExerciseRows);
+}
+
 export function compareSessionSetRows(
 	first: Pick<SessionSet, 'id' | 'order' | 'side'>,
 	second: Pick<SessionSet, 'id' | 'order' | 'side'>
@@ -242,7 +299,138 @@ export function compareSessionSetRows(
 	return (
 		getSessionSetSideOrder(normalizeSessionSetSide(first.side)) -
 			getSessionSetSideOrder(normalizeSessionSetSide(second.side)) ||
-		first.id.localeCompare(second.id)
+		compareStableStrings(first.id, second.id)
+	);
+}
+
+/**
+ * Concurrent replacements can leave seed rows from both branches in local storage because their
+ * ids intentionally include the replacement exercise. Only the rows belonging to the conflict-
+ * resolved parent are part of the visible/logical session graph.
+ */
+export function sessionSetMatchesSessionExercise(
+	sessionSet: Pick<SessionSet, 'sessionExerciseId' | 'exerciseId'>,
+	sessionExercise: Pick<SessionExercise, 'id' | 'exerciseId'>
+) {
+	return (
+		sessionSet.sessionExerciseId === sessionExercise.id &&
+		sessionSet.exerciseId === sessionExercise.exerciseId
+	);
+}
+
+export function filterSessionSetsForSessionExercises<T extends SessionSet>(
+	sessionSets: readonly T[],
+	sessionExercises: readonly Pick<SessionExercise, 'id' | 'exerciseId'>[]
+) {
+	const sessionExerciseById = new Map(
+		sessionExercises.map((sessionExercise) => [sessionExercise.id, sessionExercise])
+	);
+
+	return sessionSets.filter((sessionSet) => {
+		const sessionExercise = sessionExerciseById.get(sessionSet.sessionExerciseId);
+
+		return Boolean(
+			sessionExercise && sessionSetMatchesSessionExercise(sessionSet, sessionExercise)
+		);
+	});
+}
+
+function getEncodedSessionSetGroupId(
+	sessionSet: Pick<SessionSet, 'id' | 'side'>
+): string | undefined {
+	const side = normalizeSessionSetSide(sessionSet.side);
+
+	if (side === 'bilateral') {
+		return undefined;
+	}
+
+	const suffix = `:${side}`;
+	return sessionSet.id.endsWith(suffix) && sessionSet.id.length > suffix.length
+		? sessionSet.id.slice(0, -suffix.length)
+		: undefined;
+}
+
+/**
+ * Groups physical rows into logical sets without guessing through an ambiguous collision. New
+ * unilateral rows carry a shared ID prefix. Legacy right/left rows are paired only when their
+ * persisted order and creation time identify exactly one row per side; otherwise each row remains
+ * independent so a removal cannot destroy another replica's data.
+ */
+export function groupSessionSetRows<T extends SessionSet>(sessionSets: readonly T[]): T[][] {
+	const groups: T[][] = [];
+	const encodedRowsByGroupId = new Map<string, T[]>();
+	const legacyRowsByOrderAndCreation = new Map<string, T[]>();
+
+	for (const sessionSet of sessionSets) {
+		const side = normalizeSessionSetSide(sessionSet.side);
+
+		if (side === 'bilateral') {
+			groups.push([sessionSet]);
+			continue;
+		}
+
+		const encodedGroupId = getEncodedSessionSetGroupId(sessionSet);
+
+		if (encodedGroupId) {
+			const encodedKey = `${sessionSet.sessionExerciseId}\u0000${encodedGroupId}`;
+			const rows = encodedRowsByGroupId.get(encodedKey) ?? [];
+			rows.push(sessionSet);
+			encodedRowsByGroupId.set(encodedKey, rows);
+			continue;
+		}
+
+		const legacyKey = `${sessionSet.sessionExerciseId}\u0000${sessionSet.order}\u0000${sessionSet.createdAt}`;
+		const rows = legacyRowsByOrderAndCreation.get(legacyKey) ?? [];
+		rows.push(sessionSet);
+		legacyRowsByOrderAndCreation.set(legacyKey, rows);
+	}
+
+	groups.push(...encodedRowsByGroupId.values());
+
+	for (const rows of legacyRowsByOrderAndCreation.values()) {
+		const sides = rows.map((row) => normalizeSessionSetSide(row.side));
+
+		if (rows.length === 2 && sides.includes('right') && sides.includes('left')) {
+			groups.push(rows);
+			continue;
+		}
+
+		groups.push(...rows.map((row) => [row]));
+	}
+
+	return groups
+		.map((rows) =>
+			[...rows].sort(
+				(first, second) =>
+					getSessionSetSideOrder(normalizeSessionSetSide(first.side)) -
+						getSessionSetSideOrder(normalizeSessionSetSide(second.side)) ||
+					compareStableStrings(first.id, second.id)
+			)
+		)
+		.sort((first, second) => {
+			const firstOrder = Math.min(...first.map((row) => row.order));
+			const secondOrder = Math.min(...second.map((row) => row.order));
+			const firstId = first
+				.map((row) => row.id)
+				.sort()
+				.join('\u0000');
+			const secondId = second
+				.map((row) => row.id)
+				.sort()
+				.join('\u0000');
+
+			return firstOrder - secondOrder || compareStableStrings(firstId, secondId);
+		});
+}
+
+/**
+ * Returns a deterministic logical-set sequence while leaving persisted order/timestamps untouched.
+ */
+export function reconcileSessionSetOrderCollisions<T extends SessionSet>(
+	sessionSets: readonly T[]
+): T[] {
+	return groupSessionSetRows(sessionSets).flatMap((rows, index) =>
+		rows.map((sessionSet) => ({ ...sessionSet, order: index + 1 }))
 	);
 }
 
@@ -502,12 +690,17 @@ export function summarizeSession(
 	sessionExercises: SessionExercise[],
 	sessionSets: SessionSet[]
 ): SessionSummary {
-	const totalReps = sessionSets.reduce((total, sessionSet) => {
+	const visibleSessionExercises = projectUniqueSessionExercises(sessionExercises);
+	const matchingSessionSets = filterSessionSetsForSessionExercises(
+		sessionSets,
+		visibleSessionExercises
+	);
+	const totalReps = matchingSessionSets.reduce((total, sessionSet) => {
 		return typeof sessionSet.reps === 'number' && Number.isFinite(sessionSet.reps)
 			? total + sessionSet.reps
 			: total;
 	}, 0);
-	const totalVolume = sessionSets.reduce((total, sessionSet) => {
+	const totalVolume = matchingSessionSets.reduce((total, sessionSet) => {
 		if (
 			typeof sessionSet.weight !== 'number' ||
 			!Number.isFinite(sessionSet.weight) ||
@@ -529,14 +722,14 @@ export function summarizeSession(
 	return {
 		...session,
 		dayKey: session.dayKey || toDayKey(session.startedAt ?? session.createdAt),
-		lastActivityAt: getSessionActivityAt(session, sessionSets)?.value,
+		lastActivityAt: getSessionActivityAt(session, matchingSessionSets)?.value,
 		lastSetActivityAt: getLastSessionSetActivityAt(
-			sessionSets,
+			matchingSessionSets,
 			setActivityCutoffMs,
 			setActivityStartMs
 		)?.value,
-		totalExercises: sessionExercises.length,
-		totalSets: sessionSets.length,
+		totalExercises: visibleSessionExercises.length,
+		totalSets: matchingSessionSets.length,
 		totalReps,
 		totalVolume
 	};

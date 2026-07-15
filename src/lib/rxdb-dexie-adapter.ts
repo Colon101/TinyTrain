@@ -1,4 +1,4 @@
-import type { RxCollection, RxDocument } from 'rxdb';
+import type { RxCollection, RxDocument, RxDocumentData } from 'rxdb';
 import {
 	getTinyTrainRxDatabase,
 	reopenTinyTrainRxDatabase,
@@ -18,8 +18,68 @@ type TableName =
 	| 'exerciseResetEvents';
 type ChangeListener = (tableName: TableName) => void;
 type TransactionCallback<T> = () => Promise<T> | T;
+type TableSyncState<T> = { row?: T; deleted: boolean } | undefined;
+
+class BulkMutationCompensationError extends Error {
+	readonly compensationError: unknown;
+
+	constructor(operation: string, originalError: unknown, compensationError: unknown) {
+		super(`${operation} failed and its partial-write compensation also failed.`, {
+			cause: originalError
+		});
+		this.name = 'BulkMutationCompensationError';
+		this.compensationError = compensationError;
+	}
+}
 
 const changeListeners = new Set<ChangeListener>();
+const localTransactionQueuesByUserId = new Map<string, Promise<void>>();
+
+function getTransactionLockManager() {
+	if (typeof navigator === 'undefined') {
+		return undefined;
+	}
+
+	const lockManager = navigator.locks;
+	return lockManager && typeof lockManager.request === 'function' ? lockManager : undefined;
+}
+
+function runWithLocalTransactionQueue<T>(
+	userId: string,
+	callback: TransactionCallback<T>
+): Promise<T> {
+	const previousTransaction = localTransactionQueuesByUserId.get(userId) ?? Promise.resolve();
+	const run = () => Promise.resolve().then(callback);
+	const nextTransaction = previousTransaction.then(run, run);
+	const queueTail = nextTransaction.then(
+		() => undefined,
+		() => undefined
+	);
+
+	localTransactionQueuesByUserId.set(userId, queueTail);
+	void queueTail.then(() => {
+		if (localTransactionQueuesByUserId.get(userId) === queueTail) {
+			localTransactionQueuesByUserId.delete(userId);
+		}
+	});
+
+	return nextTransaction;
+}
+
+function createTransactionRunner(userId: string) {
+	const lockManager = getTransactionLockManager();
+	const lockName = `tinytrain:rxdb-transaction:${userId}`;
+
+	return function runSerializedTransaction<T>(callback: TransactionCallback<T>): Promise<T> {
+		if (lockManager) {
+			return lockManager.request(lockName, { mode: 'exclusive' }, () =>
+				Promise.resolve().then(callback)
+			);
+		}
+
+		return runWithLocalTransactionQueue(userId, callback);
+	};
+}
 
 export function subscribeToRxDexieChanges(listener: ChangeListener) {
 	changeListeners.add(listener);
@@ -37,18 +97,18 @@ function notifyTableChanged(tableName: TableName) {
 	}
 }
 
-function stripRxMeta<T>(doc: RxDocument<T> | null | undefined): T | undefined {
-	if (!doc) {
-		return undefined;
-	}
-
-	const json = doc.toMutableJSON() as Record<string, unknown>;
+function stripRxDataMeta<T>(source: Record<string, unknown>): T {
+	const json = { ...source };
 	delete json._attachments;
 	delete json._deleted;
 	delete json._meta;
 	delete json._rev;
 
 	return json as T;
+}
+
+function stripRxMeta<T>(doc: RxDocument<T> | null | undefined): T | undefined {
+	return doc ? stripRxDataMeta<T>(doc.toMutableJSON() as Record<string, unknown>) : undefined;
 }
 
 function stripUndefinedValues<T extends Record<string, unknown>>(doc: T) {
@@ -206,6 +266,111 @@ export class RxTableAdapter<T extends PlainDoc> {
 		} as T);
 	}
 
+	private async getSyncStates(ids: string[]) {
+		const states = new Map<string, TableSyncState<T>>();
+		const storageIds: string[] = [];
+
+		for (const id of new Set(ids)) {
+			const sharedDoc = this.sharedDocsById.get(id);
+
+			if (sharedDoc) {
+				states.set(id, { row: sharedDoc, deleted: false });
+			} else {
+				storageIds.push(id);
+			}
+		}
+
+		if (storageIds.length === 0) {
+			return states;
+		}
+
+		const storedDocs = await this.collection.storageInstance.findDocumentsById(storageIds, true);
+		const storedDocsById = new Map(
+			storedDocs
+				.filter((doc) => (doc as Record<string, unknown>).user_id === this.userId)
+				.map((doc) => [doc.id, doc])
+		);
+
+		for (const id of storageIds) {
+			const storedDoc = storedDocsById.get(id) as RxDocumentData<T> | undefined;
+
+			states.set(
+				id,
+				storedDoc
+					? {
+							row: stripRxDataMeta<T>(storedDoc as unknown as Record<string, unknown>),
+							deleted: storedDoc._deleted === true
+						}
+					: undefined
+			);
+		}
+
+		return states;
+	}
+
+	private async compensateSuccessfulBatch(
+		successfulIds: string[],
+		previousStates: Map<string, TableSyncState<T>>,
+		mutation: 'write' | 'delete'
+	) {
+		const restoreRows: T[] = [];
+		const removeIds: string[] = [];
+
+		for (const id of new Set(successfulIds)) {
+			const previousState = previousStates.get(id);
+
+			if (previousState && !previousState.deleted && previousState.row) {
+				restoreRows.push(this.withUserId(previousState.row));
+			} else if (mutation === 'write') {
+				removeIds.push(id);
+			}
+		}
+
+		const compensationErrors: unknown[] = [];
+
+		if (restoreRows.length > 0) {
+			try {
+				const restoreResult = await this.collection.bulkUpsert(restoreRows);
+				compensationErrors.push(...restoreResult.error);
+			} catch (error) {
+				compensationErrors.push(error);
+			}
+		}
+
+		if (removeIds.length > 0) {
+			try {
+				const removeResult = await this.collection.bulkRemove(removeIds);
+				compensationErrors.push(...removeResult.error);
+			} catch (error) {
+				compensationErrors.push(error);
+			}
+		}
+
+		if (compensationErrors.length === 1) {
+			throw compensationErrors[0];
+		}
+
+		if (compensationErrors.length > 1) {
+			throw new AggregateError(compensationErrors, 'Multiple partial-write compensations failed.');
+		}
+	}
+
+	private async rejectPartialBatch(
+		operation: string,
+		originalError: unknown,
+		successfulIds: string[],
+		previousStates: Map<string, TableSyncState<T>>,
+		mutation: 'write' | 'delete'
+	): Promise<never> {
+		try {
+			await this.compensateSuccessfulBatch(successfulIds, previousStates, mutation);
+		} catch (compensationError) {
+			throw new BulkMutationCompensationError(operation, originalError, compensationError);
+		}
+
+		throw originalError;
+	}
+
 	async toArray() {
 		const docs = await this.collection.find({ selector: { user_id: this.userId } as never }).exec();
 		return [
@@ -249,6 +414,14 @@ export class RxTableAdapter<T extends PlainDoc> {
 		return stripRxMeta<T>(await this.collection.findOne(id).exec()) ?? undefined;
 	}
 
+	/**
+	 * Sync-only lookup that can distinguish true absence from an RxDB tombstone. Normal table
+	 * reads intentionally continue to hide deleted documents.
+	 */
+	async getSyncState(id: string) {
+		return (await this.getSyncStates([id])).get(id);
+	}
+
 	async bulkGet(ids: string[]) {
 		const docsById = await this.collection.findByIds(ids).exec();
 		return ids.map((id) => this.sharedDocsById.get(id) ?? stripRxMeta<T>(docsById.get(id)));
@@ -264,10 +437,17 @@ export class RxTableAdapter<T extends PlainDoc> {
 			return [];
 		}
 
+		const previousStates = await this.getSyncStates(docs.map((doc) => doc.id));
 		const result = await this.collection.bulkInsert(docs.map((doc) => this.withUserId(doc)));
 
 		if (result.error.length > 0) {
-			throw result.error[0];
+			return this.rejectPartialBatch(
+				'Bulk insert',
+				result.error[0],
+				result.success.map((doc) => doc.primary),
+				previousStates,
+				'write'
+			);
 		}
 
 		return result.success.map((doc) => doc.primary);
@@ -283,10 +463,17 @@ export class RxTableAdapter<T extends PlainDoc> {
 			return [];
 		}
 
+		const previousStates = await this.getSyncStates(docs.map((doc) => doc.id));
 		const result = await this.collection.bulkUpsert(docs.map((doc) => this.withUserId(doc)));
 
 		if (result.error.length > 0) {
-			throw result.error[0];
+			return this.rejectPartialBatch(
+				'Bulk upsert',
+				result.error[0],
+				result.success.map((doc) => doc.primary),
+				previousStates,
+				'write'
+			);
 		}
 
 		return result.success.map((doc) => doc.primary);
@@ -321,7 +508,11 @@ export class RxTableAdapter<T extends PlainDoc> {
 	}
 
 	async delete(id: string) {
-		await this.collection.bulkRemove([id]);
+		const result = await this.collection.bulkRemove([id]);
+
+		if (result.error.length > 0) {
+			throw result.error[0];
+		}
 	}
 
 	async bulkDelete(ids: string[]) {
@@ -329,7 +520,18 @@ export class RxTableAdapter<T extends PlainDoc> {
 			return;
 		}
 
-		await this.collection.bulkRemove(ids);
+		const previousStates = await this.getSyncStates(ids);
+		const result = await this.collection.bulkRemove(ids);
+
+		if (result.error.length > 0) {
+			return this.rejectPartialBatch(
+				'Bulk delete',
+				result.error[0],
+				result.success.map((doc) => doc.primary),
+				previousStates,
+				'delete'
+			);
+		}
 	}
 
 	where(field: string) {
@@ -371,19 +573,7 @@ async function createRxDexieLikeDatabase(
 
 	await startSupabaseReplication(userId);
 
-	let transactionQueue: Promise<unknown> = Promise.resolve();
-
-	function runSerializedTransaction<T>(callback: TransactionCallback<T>): Promise<T> {
-		const run = () => Promise.resolve().then(callback);
-		const nextTransaction = transactionQueue.then(run, run);
-
-		transactionQueue = nextTransaction.then(
-			() => undefined,
-			() => undefined
-		);
-
-		return nextTransaction;
-	}
+	const runSerializedTransaction = createTransactionRunner(userId);
 
 	return {
 		exercises: new RxTableAdapter(
@@ -430,8 +620,8 @@ async function createRxDexieLikeDatabase(
 			}
 
 			// RxDB's Dexie storage uses one IndexedDB database per collection, so it cannot
-			// provide a real cross-collection transaction here. Serializing these sections
-			// at least preserves app-level write ordering for multi-table mutations.
+			// provide a real cross-collection transaction here. The user-scoped Web Lock
+			// preserves app-level write ordering across every tab for multi-table mutations.
 			return runSerializedTransaction(callback as TransactionCallback<T>);
 		}
 	};

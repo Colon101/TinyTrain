@@ -9,7 +9,9 @@
 		ExerciseUsagePreference,
 		SessionInputField,
 		SessionOverview,
-		SessionSetOverview
+		SessionSetOverview,
+		SessionStructuralEditExpectation,
+		SessionDestructiveEditExpectation
 	} from '$lib/db';
 	import ExercisePickerSheet from '$lib/features/workouts/ExercisePickerSheet.svelte';
 	import {
@@ -20,22 +22,45 @@
 	import SessionExerciseHeader from './SessionExerciseHeader.svelte';
 	import SessionSetEditor from './SessionSetEditor.svelte';
 	import { isSessionExerciseRoute } from './session-navigation';
+	import {
+		createSessionNavigationOwnershipCoordinator,
+		type SessionStructuralMutationLease
+	} from './session-navigation-ownership';
 	import { readSessionDataCache, writeSessionDataCache } from './session-data-cache';
 	import {
-		applySessionInputDraft,
-		clearSessionInputDraft as clearStoredSessionInputDraft,
+		createSessionDraftOverlayController,
+		type SessionDraftOverlayOwnerScope
+	} from './session-draft-overlay-controller';
+	import { createSessionScreenLoadLifetime } from './session-screen-load-lifetime';
+	import {
+		clearSessionInputDraftFieldIfVersion,
 		createEmptySessionInputDraft,
-		getSessionInputFieldBaseKey,
 		getSessionInputFieldKey,
 		parseSessionInputValue,
-		readSessionInputDraft,
 		rebuildSessionSetOverview,
-		SESSION_INPUT_DRAFT_CHANGE_EVENT,
-		writeSessionInputDraft,
+		migrateLegacySessionInputDraftForCurrentUser,
+		writeSessionInputDraftField,
 		type SessionInputDraft
 	} from './session-input-draft';
 	type DatabaseApi = typeof import('$lib/db');
 	type PickerMode = 'add' | 'swap';
+	type PickerMutationTarget = {
+		mode: PickerMode;
+		sessionId: string;
+		sessionExerciseId: string;
+	};
+	type SessionNavigationTarget = {
+		path: string;
+		options?: Parameters<typeof goto>[1];
+	};
+	type NonDurableInput = {
+		sessionSetId: string;
+		field: SessionInputField;
+		rawValue: string;
+		version: number;
+	};
+	const NON_DURABLE_INPUT_MESSAGE =
+		"We couldn't make a recovery copy of your latest input. Keep this tab open while TinyTrain retries the database save.";
 
 	let {
 		sessionId,
@@ -44,19 +69,22 @@
 		sessionId: string;
 		sessionExerciseId: string;
 	} = $props();
-	const cachedSessionData = untrack(() => readSessionDataCache(sessionId));
+	const controllerSessionId = untrack(() => sessionId);
+	const cachedSessionData = untrack(() => readSessionDataCache(controllerSessionId));
 	const cachedExercisePickerData = untrack(() => readExercisePickerCache());
-	const cachedSessionInputDraft = untrack(
-		() => readSessionInputDraft(sessionId) ?? createEmptySessionInputDraft(sessionId)
+	const draftOverlayController = createSessionDraftOverlayController({
+		sessionId: controllerSessionId,
+		includeCompleted: isCompletedEditRoute()
+	});
+	const cachedDraftOverlay = untrack(() =>
+		draftOverlayController.setBaseline(cachedSessionData?.overview ?? null)
 	);
 
 	let api = $state<DatabaseApi | null>(null);
-	let sessionInputDraft = $state<SessionInputDraft>(cachedSessionInputDraft);
-	let overview = $state<SessionOverview | null>(
-		applySessionInputDraft(cachedSessionData?.overview ?? null, cachedSessionInputDraft, {
-			includeCompleted: isCompletedEditRoute()
-		})
+	let sessionInputDraft = $state<SessionInputDraft>(
+		cachedDraftOverlay.draft ?? createEmptySessionInputDraft(controllerSessionId)
 	);
+	let overview = $state<SessionOverview | null>(cachedDraftOverlay.overview);
 	let exercises = $state<Exercise[]>(
 		cachedSessionData?.exercises ?? cachedExercisePickerData?.exercises ?? []
 	);
@@ -71,16 +99,24 @@
 	let isMenuOpen = $state(false);
 	let isExercisePickerOpen = $state(false);
 	let pickerMode = $state<PickerMode>('add');
+	let pickerTargetSessionId = $state('');
+	let pickerTargetSessionExerciseId = $state('');
 	let exerciseSearch = $state('');
 	let selectedPickerExerciseIds = $state<string[]>([]);
 	let newExerciseName = $state('');
 	let isNewExerciseUnilateral = $state(false);
 	let sessionSetEditorContainer = $state<HTMLElement | null>(null);
-	let loadDataGeneration = 0;
+	const loadLifetime = createSessionScreenLoadLifetime();
+	const navigationOwnership =
+		createSessionNavigationOwnershipCoordinator<SessionNavigationTarget>();
 	let inputVersions = new SvelteMap<string, number>();
 	let setInputSaveChains = new SvelteMap<string, Promise<void>>();
+	let setInputSaveAbortControllers = new SvelteMap<string, AbortController>();
 	let pendingSetInputSaves = new SvelteSet<Promise<void>>();
+	let nonDurableInputs = new SvelteMap<string, NonDurableInput>();
 	let isReplayingInputNavigation = false;
+	let isNonDurableUnloadFenceRegistered = false;
+	let screenDisposed = false;
 
 	let activeExercise = $derived(
 		overview?.exercises.find((sessionExercise) => sessionExercise.id === sessionExerciseId) ?? null
@@ -149,31 +185,61 @@
 					}`
 	);
 
+	function getStructuralEditExpectation(): SessionStructuralEditExpectation | null {
+		if (!overview) {
+			return null;
+		}
+
+		return {
+			status: overview.summary.status,
+			allowCompleted: overview.summary.status === 'completed' && isEditMode
+		};
+	}
+
+	function preventNonDurableInputUnload(event: BeforeUnloadEvent) {
+		event.preventDefault();
+		event.returnValue = '';
+	}
+
+	function syncNonDurableUnloadFence() {
+		const shouldBlockUnload = nonDurableInputs.size > 0 || navigationOwnership.shouldBlockUnload();
+
+		if (shouldBlockUnload && !isNonDurableUnloadFenceRegistered) {
+			window.addEventListener('beforeunload', preventNonDurableInputUnload);
+			isNonDurableUnloadFenceRegistered = true;
+			return;
+		}
+
+		if (
+			nonDurableInputs.size === 0 &&
+			!navigationOwnership.shouldBlockUnload() &&
+			isNonDurableUnloadFenceRegistered
+		) {
+			window.removeEventListener('beforeunload', preventNonDurableInputUnload);
+			isNonDurableUnloadFenceRegistered = false;
+		}
+	}
+
 	onMount(() => {
-		let disposed = false;
+		screenDisposed = false;
 		let databaseSubscription: { unsubscribe(): void } | null = null;
-
-		function refreshStoredSessionInputDraft(event: Event) {
-			const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
-
-			if (detail?.sessionId !== sessionId) {
+		const unsubscribeDraftOverlay = draftOverlayController.subscribe((snapshot) => {
+			if (screenDisposed || loadLifetime.isDisposed()) {
 				return;
 			}
 
-			const nextDraft = readSessionInputDraft(sessionId) ?? createEmptySessionInputDraft(sessionId);
-			sessionInputDraft = nextDraft;
-			overview = applySessionInputDraft(overview, nextDraft, {
-				includeCompleted: isCompletedEditRoute()
-			});
-		}
-
-		window.addEventListener(SESSION_INPUT_DRAFT_CHANGE_EVENT, refreshStoredSessionInputDraft);
+			sessionInputDraft = snapshot.draft ?? createEmptySessionInputDraft(sessionId);
+			overview = applyNonDurableInputs(snapshot.overview);
+		});
+		const unsubscribeNavigationOwnership = navigationOwnership.subscribe(() => {
+			syncNonDurableUnloadFence();
+		});
 
 		void (async () => {
 			try {
 				const dbApi = await import('$lib/db');
 
-				if (disposed) {
+				if (screenDisposed) {
 					return;
 				}
 
@@ -188,15 +254,29 @@
 				await loadData();
 				void dbApi.hydrateVisibleScope({ type: 'session', sessionId }).catch(() => undefined);
 			} catch (error) {
-				errorMessage = getErrorMessage(error);
+				if (!screenDisposed) {
+					errorMessage = getErrorMessage(error);
+				}
 			} finally {
-				isLoading = false;
+				if (!screenDisposed) {
+					isLoading = false;
+				}
 			}
 		})();
 
 		return () => {
-			disposed = true;
-			window.removeEventListener(SESSION_INPUT_DRAFT_CHANGE_EVENT, refreshStoredSessionInputDraft);
+			screenDisposed = true;
+			for (const controller of setInputSaveAbortControllers.values()) {
+				controller.abort();
+			}
+			setInputSaveAbortControllers.clear();
+			loadLifetime.dispose();
+			unsubscribeDraftOverlay();
+			draftOverlayController.dispose();
+			unsubscribeNavigationOwnership();
+			navigationOwnership.dispose();
+			window.removeEventListener('beforeunload', preventNonDurableInputUnload);
+			isNonDurableUnloadFenceRegistered = false;
 			databaseSubscription?.unsubscribe();
 		};
 	});
@@ -204,19 +284,29 @@
 	beforeNavigate((navigation) => {
 		const targetUrl = navigation.to?.url;
 
-		if (
-			isReplayingInputNavigation ||
-			navigation.willUnload ||
-			!hasPendingSetInputWork() ||
-			!targetUrl ||
-			isSessionExerciseRoute(targetUrl.pathname, getSessionOverviewPathname())
-		) {
+		if (isReplayingInputNavigation || navigation.willUnload || !targetUrl) {
+			return;
+		}
+
+		const ownershipSnapshot = navigationOwnership.getSnapshot();
+		const canLeaveWithoutDraftReplay =
+			nonDurableInputs.size === 0 &&
+			(!hasPendingSetInputWork() ||
+				isSessionExerciseRoute(targetUrl.pathname, getSessionOverviewPathname()));
+
+		if (canLeaveWithoutDraftReplay && !ownershipSnapshot.shouldBlockUnload) {
+			navigationOwnership.markRouteChanged();
 			return;
 		}
 
 		const targetPath = `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`;
 
 		navigation.cancel();
+
+		if (ownershipSnapshot.isStructuralBusy) {
+			return;
+		}
+
 		void navigateAfterSavingSetInputs(targetPath, {
 			replaceState: navigation.type === 'popstate'
 		});
@@ -239,48 +329,69 @@
 	}
 
 	async function loadData() {
-		const generation = ++loadDataGeneration;
+		if (screenDisposed || loadLifetime.isDisposed()) {
+			return;
+		}
+
+		const generation = loadLifetime.beginLoad();
+		const draftOwnerScope = draftOverlayController.getOwnerScope();
 		const dbApi = requireApi();
 		void dbApi.cleanupStaleSessions();
 		const nextOverview = await dbApi.runWithClosedDatabaseRetry(() =>
 			dbApi.getEditableSession(sessionId)
 		);
 
-		if (generation !== loadDataGeneration) {
+		if (
+			screenDisposed ||
+			!loadLifetime.isCurrent(generation) ||
+			!draftOverlayController.isCurrentOwnerScope(draftOwnerScope)
+		) {
 			return;
 		}
 
 		if (nextOverview?.summary.status === 'abandoned') {
-			clearLocalSessionInputDraft(sessionId);
-			await goto(resolve('/(app)/sessions/[sessionId]', { sessionId }), { replaceState: true });
+			try {
+				await navigateWithoutFlushingSetInputs(
+					resolve('/(app)/sessions/[sessionId]', { sessionId }),
+					{ replaceState: true }
+				);
+			} catch (error) {
+				if (loadLifetime.isCurrent(generation)) {
+					errorMessage = getErrorMessage(error);
+				}
+			}
 			return;
 		}
 
-		sessionInputDraft = readSessionInputDraft(sessionId) ?? createEmptySessionInputDraft(sessionId);
-		const nextOverviewWithDraft = applySessionInputDraft(nextOverview, sessionInputDraft, {
-			includeCompleted: isCompletedEditRoute()
-		});
+		if (nextOverview) {
+			migrateLegacySessionInputDraftForCurrentUser(sessionId);
+		}
 
-		overview = nextOverviewWithDraft;
+		draftOverlayController.setIncludeCompleted(isCompletedEditRoute());
+		const nextDraftOverlay = draftOverlayController.setBaseline(nextOverview, draftOwnerScope);
+		sessionInputDraft = nextDraftOverlay.draft ?? createEmptySessionInputDraft(sessionId);
+		overview = applyNonDurableInputs(nextDraftOverlay.overview);
 		writeSessionDataCache(sessionId, {
-			overview: nextOverviewWithDraft,
+			overview: nextDraftOverlay.baseline,
 			exercises,
 			exerciseUsagePreferences
 		});
 		isMenuOpen = false;
 		void loadExercisePickerData(generation).catch((error) => {
-			errorMessage = getErrorMessage(error);
+			if (loadLifetime.isCurrent(generation)) {
+				errorMessage = getErrorMessage(error);
+			}
 		});
 	}
 
-	async function loadExercisePickerData(generation = loadDataGeneration) {
+	async function loadExercisePickerData(generation = loadLifetime.getGeneration()) {
 		const dbApi = requireApi();
 		const [nextExercises, nextExerciseUsagePreferences] = await Promise.all([
 			dbApi.listExercises(),
 			dbApi.listExerciseUsagePreferences()
 		]);
 
-		if (generation !== loadDataGeneration) {
+		if (screenDisposed || !loadLifetime.isCurrent(generation)) {
 			return;
 		}
 
@@ -288,27 +399,84 @@
 		exerciseUsagePreferences = nextExerciseUsagePreferences;
 		writeExercisePickerCache(nextExercises, nextExerciseUsagePreferences);
 		writeSessionDataCache(sessionId, {
-			overview,
+			overview: draftOverlayController.getSnapshot().baseline,
 			exercises: nextExercises,
 			exerciseUsagePreferences: nextExerciseUsagePreferences
 		});
 	}
 
 	async function runMutation(
-		action: () => Promise<void>,
-		afterSuccess?: () => Promise<void> | void
+		action: (lease: SessionStructuralMutationLease) => Promise<void>,
+		afterSuccess?: (lease: SessionStructuralMutationLease) => Promise<void> | void,
+		options: {
+			flushPendingInputs?: boolean;
+			prepare?: () => Promise<boolean> | boolean;
+			settlePendingInputsBeforePrepare?: boolean;
+		} = {}
 	) {
+		if (isSaving) {
+			return;
+		}
+
+		const lease = navigationOwnership.beginStructuralMutation();
+
+		if (!lease) {
+			return;
+		}
+
 		isSaving = true;
 		errorMessage = '';
 
 		try {
-			await flushPendingSetInputs();
-			await action();
+			if (options.settlePendingInputsBeforePrepare) {
+				await waitForPendingSetInputSaves();
+
+				if (screenDisposed) {
+					return;
+				}
+
+				if (nonDurableInputs.size > 0) {
+					throw new Error(NON_DURABLE_INPUT_MESSAGE);
+				}
+			}
+
+			if (options.prepare) {
+				const prepared = await options.prepare();
+
+				if (screenDisposed || !prepared) {
+					return;
+				}
+			}
+
+			if (options.flushPendingInputs !== false) {
+				await flushPendingSetInputs();
+
+				if (screenDisposed) {
+					return;
+				}
+			}
+
+			await action(lease);
+
+			if (screenDisposed) {
+				return;
+			}
+
 			await loadData();
-			await afterSuccess?.();
+
+			if (screenDisposed) {
+				return;
+			}
+
+			if (!lease.canRedirect()) {
+				return;
+			}
+
+			await afterSuccess?.(lease);
 		} catch (error) {
 			errorMessage = getErrorMessage(error);
 		} finally {
+			lease.release();
 			isSaving = false;
 		}
 	}
@@ -336,76 +504,73 @@
 		return field === 'reps' || field === 'rir' ? `${Math.round(value)}` : formatInputValue(value);
 	}
 
-	function clearLocalSessionInputDraft(draftSessionId: string) {
-		sessionInputDraft = createEmptySessionInputDraft(draftSessionId);
-		clearStoredSessionInputDraft(draftSessionId);
-	}
-
-	function persistSessionInputDraft(nextDraft: SessionInputDraft) {
-		sessionInputDraft = nextDraft;
-
-		if (Object.keys(nextDraft.sets).length === 0) {
-			clearStoredSessionInputDraft(nextDraft.sessionId);
-			return;
-		}
-
-		writeSessionInputDraft(nextDraft);
-	}
-
 	function writeDraftInput(sessionSetId: string, field: SessionInputField, rawValue: string) {
-		const now = Date.now();
 		const fieldKey = getSessionInputFieldKey(field);
-		const baseKey = getSessionInputFieldBaseKey(field);
 		const currentSet = overview?.exercises
 			.flatMap((sessionExercise) => sessionExercise.sets)
 			.find((sessionSet) => sessionSet.id === sessionSetId);
-		const currentDraftSet = sessionInputDraft.sets[sessionSetId];
-		const nextDraft = {
-			...sessionInputDraft,
-			sets: {
-				...sessionInputDraft.sets,
-				[sessionSetId]: {
-					...(currentDraftSet ?? { updatedAt: now }),
-					[baseKey]: currentDraftSet?.[baseKey] ?? currentSet?.[fieldKey] ?? '',
-					[fieldKey]: rawValue,
-					updatedAt: now
-				}
-			},
-			updatedAt: now
-		};
+		const result = writeSessionInputDraftField({
+			sessionId,
+			sessionSetId,
+			field,
+			rawValue,
+			baseValue: currentSet?.[fieldKey] ?? ''
+		});
 
-		persistSessionInputDraft(nextDraft);
+		sessionInputDraft = result.draft;
+		return {
+			updatedAt: result.intentAt,
+			baseValue: result.baseValue,
+			ownerId: result.ownerId,
+			fieldVersion: result.fieldVersion,
+			persisted: result.persisted,
+			replacedField: result.replacedField
+		};
 	}
 
-	function clearDraftInput(sessionSetId: string, field: SessionInputField) {
-		const draftSet = sessionInputDraft.sets[sessionSetId];
-		const fieldKey = getSessionInputFieldKey(field);
-		const baseKey = getSessionInputFieldBaseKey(field);
+	function trackInputDurability(
+		ownerScope: SessionDraftOverlayOwnerScope,
+		sessionSetId: string,
+		field: SessionInputField,
+		rawValue: string,
+		version: number,
+		persisted: boolean
+	) {
+		const key = getSetInputKey(ownerScope, sessionSetId, field);
 
-		if (!draftSet || !Object.hasOwn(draftSet, fieldKey)) {
+		if (persisted) {
+			nonDurableInputs.delete(key);
+			syncNonDurableUnloadFence();
 			return;
 		}
 
-		const nextDraftSet = { ...draftSet };
-		delete nextDraftSet[fieldKey];
-		delete nextDraftSet[baseKey];
+		nonDurableInputs.set(key, { sessionSetId, field, rawValue, version });
+		syncNonDurableUnloadFence();
+	}
 
-		const hasRemainingInput = (['weightInput', 'repsInput', 'rirInput'] as const).some(
-			(nextFieldKey) => Object.hasOwn(nextDraftSet, nextFieldKey)
-		);
-		const nextSets = { ...sessionInputDraft.sets };
-
-		if (hasRemainingInput) {
-			nextSets[sessionSetId] = nextDraftSet;
-		} else {
-			delete nextSets[sessionSetId];
+	function clearNonDurableInputIfVersion(key: string, expectedVersion: number) {
+		if (nonDurableInputs.get(key)?.version === expectedVersion) {
+			nonDurableInputs.delete(key);
+			syncNonDurableUnloadFence();
 		}
+	}
 
-		persistSessionInputDraft({
-			...sessionInputDraft,
-			sets: nextSets,
-			updatedAt: Date.now()
-		});
+	function clearDraftInput(
+		sessionSetId: string,
+		field: SessionInputField,
+		expectedFieldVersion: string | null,
+		expectedRawValue?: string,
+		expectedOwnerId?: string | null
+	) {
+		const result = clearSessionInputDraftFieldIfVersion(
+			sessionId,
+			sessionSetId,
+			field,
+			expectedFieldVersion,
+			expectedRawValue,
+			expectedOwnerId
+		);
+		sessionInputDraft = result.draft;
 	}
 
 	function updateOverviewSet(
@@ -430,97 +595,222 @@
 			})
 		};
 		overview = nextOverview;
+	}
+
+	function updateSessionBaselineSet(
+		sessionSetId: string,
+		updater: (sessionSet: SessionSetOverview) => SessionSetOverview,
+		expectedOwnerScope = draftOverlayController.getOwnerScope()
+	) {
+		const baseline = draftOverlayController.getSnapshot().baseline;
+
+		if (!baseline || !draftOverlayController.isCurrentOwnerScope(expectedOwnerScope)) {
+			return;
+		}
+
+		const nextBaseline = {
+			...baseline,
+			exercises: baseline.exercises.map((sessionExercise) => ({
+				...sessionExercise,
+				sets: (sessionExercise.sets as SessionSetOverview[]).map((sessionSet) =>
+					sessionSet.id === sessionSetId ? updater(sessionSet) : sessionSet
+				)
+			}))
+		};
+		const nextSnapshot = draftOverlayController.setBaseline(nextBaseline, expectedOwnerScope);
+		overview = applyNonDurableInputs(nextSnapshot.overview);
 		writeSessionDataCache(sessionId, {
-			overview: nextOverview,
+			overview: nextSnapshot.baseline,
 			exercises,
 			exerciseUsagePreferences
 		});
 	}
 
-	function applyLocalInput(sessionSetId: string, field: SessionInputField, rawValue: string) {
+	function rebuildSessionSetWithInput(
+		sessionSet: SessionSetOverview,
+		field: SessionInputField,
+		rawValue: string
+	) {
 		const parsedValue = parseSessionInputValue(rawValue);
 
-		updateOverviewSet(sessionSetId, (sessionSet) => {
-			if (field === 'weight') {
-				return rebuildSessionSetOverview(sessionSet, {
-					weightInput: rawValue,
-					weight: parsedValue
-				});
-			}
-
-			if (field === 'reps') {
-				return rebuildSessionSetOverview(sessionSet, {
-					repsInput: rawValue,
-					reps: parsedValue
-				});
-			}
-
+		if (field === 'weight') {
 			return rebuildSessionSetOverview(sessionSet, {
-				rirInput: rawValue,
-				rir: parsedValue
+				weightInput: rawValue,
+				weight: parsedValue
 			});
+		}
+
+		if (field === 'reps') {
+			return rebuildSessionSetOverview(sessionSet, {
+				repsInput: rawValue,
+				reps: parsedValue
+			});
+		}
+
+		return rebuildSessionSetOverview(sessionSet, {
+			rirInput: rawValue,
+			rir: parsedValue
 		});
 	}
 
+	function applyNonDurableInputs(nextOverview: SessionOverview | null) {
+		if (!nextOverview || nonDurableInputs.size === 0) {
+			return nextOverview;
+		}
+		const ownerScope = draftOverlayController.getOwnerScope();
+
+		return {
+			...nextOverview,
+			exercises: nextOverview.exercises.map((sessionExercise) => ({
+				...sessionExercise,
+				sets: (sessionExercise.sets as SessionSetOverview[]).map((sessionSet) => {
+					let nextSet = sessionSet;
+
+					for (const field of ['weight', 'reps', 'rir'] as const) {
+						const key = getSetInputKey(ownerScope, sessionSet.id, field);
+						const nonDurableInput = nonDurableInputs.get(key);
+
+						if (nonDurableInput && inputVersions.get(key) === nonDurableInput.version) {
+							nextSet = rebuildSessionSetWithInput(nextSet, field, nonDurableInput.rawValue);
+						}
+					}
+
+					return nextSet;
+				})
+			}))
+		};
+	}
+
+	function applyLocalInput(sessionSetId: string, field: SessionInputField, rawValue: string) {
+		updateOverviewSet(sessionSetId, (sessionSet) =>
+			rebuildSessionSetWithInput(sessionSet, field, rawValue)
+		);
+	}
+
 	function hasPendingSetInputWork() {
-		return pendingSetInputSaves.size > 0 || Object.keys(sessionInputDraft.sets).length > 0;
+		return (
+			nonDurableInputs.size > 0 ||
+			pendingSetInputSaves.size > 0 ||
+			Object.keys(sessionInputDraft.sets).length > 0
+		);
 	}
 
 	function trackPendingSetInputSave(savePromise: Promise<void>) {
 		pendingSetInputSaves.add(savePromise);
 		void savePromise.then(
-			() => pendingSetInputSaves.delete(savePromise),
-			() => pendingSetInputSaves.delete(savePromise)
+			() => !screenDisposed && pendingSetInputSaves.delete(savePromise),
+			() => !screenDisposed && pendingSetInputSaves.delete(savePromise)
 		);
 	}
 
-	function getSetInputKey(sessionSetId: string, field: SessionInputField) {
-		return `${sessionSetId}:${field}`;
+	function getSetInputKey(
+		ownerScope: SessionDraftOverlayOwnerScope,
+		sessionSetId: string,
+		field: SessionInputField
+	) {
+		return `${ownerScope.authGeneration}:${ownerScope.ownerId ?? 'unresolved'}:${sessionSetId}:${field}`;
 	}
 
 	function queueSetInputSave(
+		draftOwnerScope: SessionDraftOverlayOwnerScope,
 		sessionSetId: string,
 		field: SessionInputField,
 		rawValue: string,
-		version: number
+		version: number,
+		intent: {
+			updatedAt: number;
+			baseValue: string;
+			ownerId: string | null;
+			fieldVersion: string;
+			persisted: boolean;
+			replacedField: { fieldVersion: string | null; rawValue: string } | null;
+		}
 	) {
-		const key = getSetInputKey(sessionSetId, field);
+		const key = getSetInputKey(draftOwnerScope, sessionSetId, field);
 		const previousSave = setInputSaveChains.get(key) ?? Promise.resolve();
-		const savePromise = previousSave
-			.catch(() => undefined)
-			.then(async () => {
-				if (inputVersions.get(key) !== version) {
+		const previousAbortController = setInputSaveAbortControllers.get(key);
+		const abortController = new AbortController();
+		previousAbortController?.abort();
+		setInputSaveAbortControllers.set(key, abortController);
+		const isCurrentSave = () =>
+			!screenDisposed &&
+			inputVersions.get(key) === version &&
+			setInputSaveAbortControllers.get(key) === abortController &&
+			draftOverlayController.isCurrentOwnerScope(draftOwnerScope);
+		let ownerBoundSave: ReturnType<DatabaseApi['updateSessionSetInput']>;
+
+		try {
+			const dbApi = requireApi();
+			// Starting the API call here admits an authenticated database operation synchronously.
+			// Its A-generation lease is already held while it waits for the previous A save.
+			ownerBoundSave = dbApi.updateSessionSetInput(sessionSetId, field, rawValue, intent, {
+				waitFor: previousSave.catch(() => undefined),
+				signal: abortController.signal,
+				expectedOwnerId: intent.ownerId
+			});
+		} catch (error) {
+			ownerBoundSave = Promise.reject(error);
+		}
+
+		const savePromise = ownerBoundSave.then(
+			async (result) => {
+				if (!isCurrentSave()) {
 					return;
 				}
 
-				try {
-					const dbApi = requireApi();
-
-					await dbApi.runWithClosedDatabaseRetry(() =>
-						dbApi.updateSessionSetInput(sessionSetId, field, rawValue)
-					);
-
-					if (inputVersions.get(key) === version) {
-						clearDraftInput(sessionSetId, field);
-					}
-				} catch (error) {
-					if (inputVersions.get(key) !== version) {
-						return;
-					}
-
-					errorMessage = getErrorMessage(error);
-
-					if (api) {
-						await loadData();
-					}
+				if (result.skipped) {
+					errorMessage =
+						'This input changed on another device. Your unsaved value was kept; review and edit it again.';
+					await loadData();
+					return;
 				}
-			});
+
+				updateSessionBaselineSet(
+					sessionSetId,
+					(sessionSet) => rebuildSessionSetOverview(sessionSet, result.sessionSet),
+					draftOwnerScope
+				);
+				const draftFieldToClear = intent.persisted
+					? { fieldVersion: intent.fieldVersion, rawValue: rawValue }
+					: intent.replacedField;
+
+				if (draftFieldToClear) {
+					clearDraftInput(
+						sessionSetId,
+						field,
+						draftFieldToClear.fieldVersion,
+						draftFieldToClear.rawValue,
+						intent.ownerId
+					);
+				} else {
+					sessionInputDraft =
+						draftOverlayController.refreshDraft().draft ?? createEmptySessionInputDraft(sessionId);
+				}
+
+				clearNonDurableInputIfVersion(key, version);
+			},
+			async (error) => {
+				if (!isCurrentSave()) {
+					return;
+				}
+
+				errorMessage = getErrorMessage(error);
+
+				if (api) {
+					await loadData();
+				}
+			}
+		);
 
 		setInputSaveChains.set(key, savePromise);
 		trackPendingSetInputSave(savePromise);
 		void savePromise.finally(() => {
-			if (setInputSaveChains.get(key) === savePromise) {
+			if (!screenDisposed && setInputSaveChains.get(key) === savePromise) {
 				setInputSaveChains.delete(key);
+			}
+
+			if (!screenDisposed && setInputSaveAbortControllers.get(key) === abortController) {
+				setInputSaveAbortControllers.delete(key);
 			}
 		});
 	}
@@ -534,6 +824,10 @@
 	async function flushPendingSetInputs() {
 		await waitForPendingSetInputSaves();
 
+		if (nonDurableInputs.size > 0) {
+			throw new Error(NON_DURABLE_INPUT_MESSAGE);
+		}
+
 		if (Object.keys(sessionInputDraft.sets).length === 0) {
 			return;
 		}
@@ -544,44 +838,116 @@
 			await dbApi.runWithClosedDatabaseRetry(() => dbApi.flushSessionInputDraft(sessionId));
 		} finally {
 			sessionInputDraft =
-				readSessionInputDraft(sessionId) ?? createEmptySessionInputDraft(sessionId);
+				draftOverlayController.refreshDraft().draft ?? createEmptySessionInputDraft(sessionId);
 		}
 	}
 
 	async function navigateAfterSavingSetInputs(
 		targetPath: string,
-		options?: Parameters<typeof goto>[1]
+		options?: Parameters<typeof goto>[1],
+		lease?: SessionStructuralMutationLease
 	) {
+		if (screenDisposed) {
+			return;
+		}
+
 		isSaving = true;
 		errorMessage = '';
 
 		try {
-			await flushPendingSetInputs();
-			isReplayingInputNavigation = true;
-			// eslint-disable-next-line svelte/no-navigation-without-resolve
-			await goto(targetPath, options);
+			if (lease) {
+				await flushPendingSetInputs();
+
+				if (screenDisposed || !lease.canRedirect()) {
+					return;
+				}
+
+				await performOwnedSessionNavigation({ path: targetPath, options });
+				return;
+			}
+
+			await navigationOwnership.requestReplay(
+				{ path: targetPath, options },
+				{
+					prepare: flushPendingSetInputs,
+					navigate: performOwnedSessionNavigation
+				}
+			);
 		} catch (error) {
-			errorMessage = getErrorMessage(error);
+			if (!screenDisposed) {
+				errorMessage = getErrorMessage(error);
+			}
+		} finally {
+			if (!screenDisposed) {
+				isSaving = false;
+			}
+		}
+	}
+
+	async function performOwnedSessionNavigation(target: SessionNavigationTarget) {
+		if (screenDisposed) {
+			return;
+		}
+
+		isReplayingInputNavigation = true;
+
+		try {
+			// eslint-disable-next-line svelte/no-navigation-without-resolve
+			await goto(target.path, target.options);
 		} finally {
 			isReplayingInputNavigation = false;
-			isSaving = false;
 		}
+	}
+
+	async function navigateWithoutFlushingSetInputs(
+		targetPath: string,
+		options?: Parameters<typeof goto>[1],
+		lease?: SessionStructuralMutationLease
+	) {
+		if (screenDisposed || (lease && !lease.canRedirect())) {
+			return;
+		}
+
+		if (nonDurableInputs.size > 0) {
+			await waitForPendingSetInputSaves();
+
+			if (screenDisposed || (lease && !lease.canRedirect())) {
+				return;
+			}
+
+			if (nonDurableInputs.size > 0) {
+				throw new Error(NON_DURABLE_INPUT_MESSAGE);
+			}
+		}
+
+		await performOwnedSessionNavigation({ path: targetPath, options });
 	}
 
 	function handleSetInput(sessionSetId: string, field: SessionInputField, event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
+
+		if (isSaving) {
+			const persistedValue = activeExercise?.sets.find((set) => set.id === sessionSetId)?.[
+				getSessionInputFieldKey(field)
+			];
+			input.value = persistedValue ?? '';
+			return;
+		}
+
 		const rawValue = sanitizeInputValue(field, input.value);
 
 		if (input.value !== rawValue) {
 			input.value = rawValue;
 		}
 
-		const key = getSetInputKey(sessionSetId, field);
+		const draftOwnerScope = draftOverlayController.getOwnerScope();
+		const key = getSetInputKey(draftOwnerScope, sessionSetId, field);
 		const version = (inputVersions.get(key) ?? 0) + 1;
 		inputVersions.set(key, version);
-		writeDraftInput(sessionSetId, field, rawValue);
+		const intent = writeDraftInput(sessionSetId, field, rawValue);
+		trackInputDurability(draftOwnerScope, sessionSetId, field, rawValue, version, intent.persisted);
 		applyLocalInput(sessionSetId, field, rawValue);
-		queueSetInputSave(sessionSetId, field, rawValue, version);
+		queueSetInputSave(draftOwnerScope, sessionSetId, field, rawValue, version, intent);
 	}
 
 	function focusNextSetInput(currentInput: HTMLInputElement) {
@@ -612,6 +978,10 @@
 	}
 
 	function autofillPreviousSet(sessionSet: SessionSetOverview) {
+		if (isSaving) {
+			return;
+		}
+
 		const previousReference = sessionSet.previousReference;
 
 		if (!previousReference) {
@@ -623,19 +993,34 @@
 			['reps', formatAutofillInputValue('reps', previousReference.reps)],
 			['rir', formatAutofillInputValue('rir', previousReference.rir)]
 		];
+		const draftOwnerScope = draftOverlayController.getOwnerScope();
 
 		for (const [field, rawValue] of values) {
-			const key = getSetInputKey(sessionSet.id, field);
+			const key = getSetInputKey(draftOwnerScope, sessionSet.id, field);
 			const version = (inputVersions.get(key) ?? 0) + 1;
 			inputVersions.set(key, version);
-			writeDraftInput(sessionSet.id, field, rawValue);
+			const intent = writeDraftInput(sessionSet.id, field, rawValue);
+			trackInputDurability(
+				draftOwnerScope,
+				sessionSet.id,
+				field,
+				rawValue,
+				version,
+				intent.persisted
+			);
 			applyLocalInput(sessionSet.id, field, rawValue);
-			queueSetInputSave(sessionSet.id, field, rawValue, version);
+			queueSetInputSave(draftOwnerScope, sessionSet.id, field, rawValue, version, intent);
 		}
 	}
 
 	function openExercisePicker(mode: PickerMode) {
+		if (!activeExercise) {
+			return;
+		}
+
 		pickerMode = mode;
+		pickerTargetSessionId = sessionId;
+		pickerTargetSessionExerciseId = activeExercise.id;
 		exerciseSearch = '';
 		selectedPickerExerciseIds = [];
 		newExerciseName = '';
@@ -646,9 +1031,31 @@
 
 	function closeExercisePicker() {
 		isExercisePickerOpen = false;
+		pickerMode = 'add';
+		pickerTargetSessionId = '';
+		pickerTargetSessionExerciseId = '';
+		exerciseSearch = '';
 		selectedPickerExerciseIds = [];
 		newExerciseName = '';
 		isNewExerciseUnilateral = false;
+		isMenuOpen = false;
+	}
+
+	function getPickerMutationTarget(): PickerMutationTarget | null {
+		if (
+			!pickerTargetSessionId ||
+			!pickerTargetSessionExerciseId ||
+			pickerTargetSessionId !== sessionId ||
+			pickerTargetSessionExerciseId !== sessionExerciseId
+		) {
+			return null;
+		}
+
+		return {
+			mode: pickerMode,
+			sessionId: pickerTargetSessionId,
+			sessionExerciseId: pickerTargetSessionExerciseId
+		};
 	}
 
 	function handleExerciseSearchInput(event: Event) {
@@ -727,45 +1134,79 @@
 		return null;
 	}
 
-	async function applyPickedExercises(exerciseIds: string[]) {
-		if (!overview || !activeExercise || exerciseIds.length === 0) {
+	async function applyPickedExercises(
+		exerciseIds: string[],
+		target: PickerMutationTarget,
+		expectation: SessionStructuralEditExpectation,
+		destructiveExpectation?: SessionDestructiveEditExpectation
+	) {
+		if (exerciseIds.length === 0) {
 			return;
 		}
 
 		const dbApi = requireApi();
 
-		if (pickerMode === 'swap') {
-			await dbApi.replaceSessionExercise(activeExercise.id, exerciseIds[0]);
+		if (target.mode === 'swap') {
+			await dbApi.replaceSessionExercise(
+				target.sessionExerciseId,
+				exerciseIds[0],
+				expectation,
+				destructiveExpectation
+			);
 			closeExercisePicker();
 			return;
 		}
 
-		for (const exerciseId of exerciseIds) {
-			await dbApi.addExerciseToSession(overview.summary.id, exerciseId);
-		}
+		await dbApi.addExercisesToSession(target.sessionId, exerciseIds, expectation);
 
 		closeExercisePicker();
 	}
 
 	function handleAddSelected() {
 		const pickedIds = [...selectedPickerExerciseIds];
+		const target = getPickerMutationTarget();
+		const expectation = getStructuralEditExpectation();
+		let destructiveExpectation: SessionDestructiveEditExpectation | undefined;
+
+		if (!target || !expectation) {
+			return;
+		}
+		const isSwap = target.mode === 'swap';
 
 		void runMutation(
 			async () => {
-				await applyPickedExercises(pickedIds);
+				await applyPickedExercises(pickedIds, target, expectation, destructiveExpectation);
 			},
-			async () => {
-				if (pickerMode === 'add' && pickedIds.length > 0 && overview) {
+			async (lease) => {
+				if (target.mode === 'add' && pickedIds.length > 0 && overview) {
 					const addedExercise = overview.exercises.find(
 						(sessionExercise) => sessionExercise.exerciseId === pickedIds[pickedIds.length - 1]
 					);
 
 					if (addedExercise) {
-						await navigateAfterSavingSetInputs(getSessionExercisePath(addedExercise.id), {
-							replaceState: true
-						});
+						await navigateAfterSavingSetInputs(
+							getSessionExercisePath(addedExercise.id, target.sessionId),
+							{
+								replaceState: true
+							},
+							lease
+						);
 					}
 				}
+			},
+			{
+				flushPendingInputs: !isSwap,
+				settlePendingInputsBeforePrepare: isSwap,
+				prepare: isSwap
+					? async () => {
+							destructiveExpectation =
+								await requireApi().captureSessionExerciseDestructiveEditExpectation(
+									target.sessionExerciseId,
+									{ activeSetsOnly: true }
+								);
+							return true;
+						}
+					: undefined
 			}
 		);
 	}
@@ -774,35 +1215,66 @@
 		event.preventDefault();
 
 		const exerciseName = (newExerciseName || cleanExerciseSearch).trim();
+		const createAsUnilateral = isNewExerciseUnilateral;
+		const target = getPickerMutationTarget();
 
 		if (!exerciseName) {
 			return;
 		}
+		const expectation = getStructuralEditExpectation();
+		let destructiveExpectation: SessionDestructiveEditExpectation | undefined;
+		let createdExerciseId = '';
+
+		if (!target || !expectation) {
+			return;
+		}
+		const isSwap = target.mode === 'swap';
 
 		void runMutation(
 			async () => {
-				const exercise = await requireApi().createExercise(exerciseName, isNewExerciseUnilateral);
-				await applyPickedExercises([exercise.id]);
+				const exercise = await requireApi().createExercise(exerciseName, createAsUnilateral);
+				createdExerciseId = exercise.id;
+				await applyPickedExercises([exercise.id], target, expectation, destructiveExpectation);
 			},
-			async () => {
-				if (pickerMode === 'add' && overview) {
+			async (lease) => {
+				if (target.mode === 'add' && overview) {
 					const addedExercise = overview.exercises.find(
-						(sessionExercise) => sessionExercise.exerciseNameSnapshot === exerciseName
+						(sessionExercise) => sessionExercise.exerciseId === createdExerciseId
 					);
 
 					if (addedExercise) {
-						await navigateAfterSavingSetInputs(getSessionExercisePath(addedExercise.id), {
-							replaceState: true
-						});
+						await navigateAfterSavingSetInputs(
+							getSessionExercisePath(addedExercise.id, target.sessionId),
+							{
+								replaceState: true
+							},
+							lease
+						);
 					}
 				}
+			},
+			{
+				flushPendingInputs: !isSwap,
+				settlePendingInputsBeforePrepare: isSwap,
+				prepare: isSwap
+					? async () => {
+							destructiveExpectation =
+								await requireApi().captureSessionExerciseDestructiveEditExpectation(
+									target.sessionExerciseId,
+									{ activeSetsOnly: true }
+								);
+							return true;
+						}
+					: undefined
 			}
 		);
 	}
 
 	function handleStartSession() {
+		const targetSessionId = sessionId;
+
 		void runMutation(async () => {
-			await requireApi().startWorkoutSession(sessionId);
+			await requireApi().startWorkoutSession(targetSessionId);
 		});
 	}
 
@@ -810,58 +1282,122 @@
 		if (!activeExercise) {
 			return;
 		}
+		const targetSessionExerciseId = activeExercise.id;
+		const expectation = getStructuralEditExpectation();
+
+		if (!expectation) {
+			return;
+		}
 
 		void runMutation(async () => {
-			await requireApi().addSessionSetRow(activeExercise.id);
+			await requireApi().addSessionSetRow(targetSessionExerciseId, expectation);
 		});
 	}
 
 	function handleRemoveSet(sessionSetId: string) {
-		void runMutation(async () => {
-			await requireApi().removeSessionSetRow(sessionSetId);
-		});
+		const expectation = getStructuralEditExpectation();
+		let destructiveExpectation: SessionDestructiveEditExpectation | undefined;
+
+		if (!expectation) {
+			return;
+		}
+
+		void runMutation(
+			async () => {
+				await requireApi().removeSessionSetRow(sessionSetId, expectation, destructiveExpectation);
+			},
+			undefined,
+			{
+				flushPendingInputs: false,
+				settlePendingInputsBeforePrepare: true,
+				prepare: async () => {
+					destructiveExpectation =
+						await requireApi().captureSessionSetRemovalExpectation(sessionSetId);
+					return true;
+				}
+			}
+		);
 	}
 
 	function handleRemoveExercise() {
 		if (!activeExercise || !overview) {
 			return;
 		}
+		const targetSessionId = sessionId;
+		const targetSessionExercise = activeExercise;
+		const targetSessionExerciseId = targetSessionExercise.id;
 
-		const nextRouteTarget =
-			overview.exercises[exerciseIndex + 1] ?? overview.exercises[exerciseIndex - 1] ?? null;
+		const nextRouteTargetId =
+			(overview.exercises[exerciseIndex + 1] ?? overview.exercises[exerciseIndex - 1] ?? null)
+				?.id ?? null;
 
-		if (
-			activeExercise.sets.some(
-				(sessionSet) =>
-					sessionSet.weightInput?.trim() ||
-					sessionSet.repsInput?.trim() ||
-					sessionSet.rirInput?.trim()
-			) &&
-			!window.confirm(
-				`Remove ${activeExercise.exerciseNameSnapshot} and discard its logged values?`
-			)
-		) {
+		const expectation = getStructuralEditExpectation();
+		let destructiveExpectation: SessionDestructiveEditExpectation | undefined;
+
+		if (!expectation) {
 			return;
 		}
 
 		void runMutation(
 			async () => {
-				await requireApi().removeSessionExercise(activeExercise.id);
+				await requireApi().removeSessionExercise(
+					targetSessionExerciseId,
+					expectation,
+					destructiveExpectation
+				);
 			},
-			async () => {
-				if (nextRouteTarget) {
-					await navigateAfterSavingSetInputs(getSessionExercisePath(nextRouteTarget.id), {
-						replaceState: true
-					});
+			async (lease) => {
+				if (nextRouteTargetId) {
+					await navigateWithoutFlushingSetInputs(
+						getSessionExercisePath(nextRouteTargetId, targetSessionId),
+						{
+							replaceState: true
+						},
+						lease
+					);
 					return;
 				}
 
-				await navigateAfterSavingSetInputs(getSessionOverviewPath(), { replaceState: true });
+				await navigateWithoutFlushingSetInputs(
+					getSessionOverviewPath(targetSessionId),
+					{
+						replaceState: true
+					},
+					lease
+				);
+			},
+			{
+				flushPendingInputs: false,
+				settlePendingInputsBeforePrepare: true,
+				prepare: async () => {
+					destructiveExpectation =
+						await requireApi().captureSessionExerciseDestructiveEditExpectation(
+							targetSessionExerciseId
+						);
+
+					if (screenDisposed) {
+						return false;
+					}
+
+					return (
+						!targetSessionExercise.sets.some(
+							(sessionSet) =>
+								sessionSet.weightInput?.trim() ||
+								sessionSet.repsInput?.trim() ||
+								sessionSet.rirInput?.trim()
+						) ||
+						window.confirm(
+							`Remove ${targetSessionExercise.exerciseNameSnapshot} and discard its logged values?`
+						)
+					);
+				}
 			}
 		);
 	}
 
 	function handleEndSession() {
+		const targetSessionId = sessionId;
+
 		if (!window.confirm('End this session?')) {
 			return;
 		}
@@ -869,34 +1405,35 @@
 		void runMutation(
 			async () => {
 				await flushPendingSetInputs();
-				await requireApi().completeWorkoutSession(sessionId);
+				await requireApi().completeWorkoutSession(targetSessionId);
 			},
-			async () => {
-				clearLocalSessionInputDraft(sessionId);
-				await navigateAfterSavingSetInputs(resolve('/(app)/sessions/[sessionId]', { sessionId }), {
-					replaceState: true
-				});
+			async (lease) => {
+				await navigateWithoutFlushingSetInputs(
+					resolve('/(app)/sessions/[sessionId]', { sessionId: targetSessionId }),
+					{ replaceState: true },
+					lease
+				);
 			}
 		);
 	}
 
-	function getSessionExercisePath(nextSessionExerciseId: string) {
+	function getSessionExercisePath(nextSessionExerciseId: string, pathSessionId = sessionId) {
 		const path = resolve('/(app)/sessions/[sessionId]/exercises/[sessionExerciseId]', {
-			sessionId,
+			sessionId: pathSessionId,
 			sessionExerciseId: nextSessionExerciseId
 		});
 
 		return `${path}${isEditMode ? '?edit=1' : ''}`;
 	}
 
-	function getSessionOverviewPath() {
-		const path = getSessionOverviewPathname();
+	function getSessionOverviewPath(pathSessionId = sessionId) {
+		const path = getSessionOverviewPathname(pathSessionId);
 
 		return `${path}${isEditMode ? '?edit=1' : ''}`;
 	}
 
-	function getSessionOverviewPathname() {
-		return resolve('/(app)/sessions/[sessionId]', { sessionId });
+	function getSessionOverviewPathname(pathSessionId = sessionId) {
+		return resolve('/(app)/sessions/[sessionId]', { sessionId: pathSessionId });
 	}
 
 	async function navigateBetweenSessionExercises(targetPath: string) {
@@ -929,6 +1466,15 @@
 </script>
 
 <section class="flex min-h-0 flex-1 flex-col overflow-hidden">
+	{#if nonDurableInputs.size > 0}
+		<p
+			class="mb-4 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-3 text-sm leading-5 text-amber-100"
+			role="alert"
+		>
+			{NON_DURABLE_INPUT_MESSAGE}
+		</p>
+	{/if}
+
 	{#if errorMessage}
 		<p
 			class="mb-4 rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-3 text-sm leading-5 text-red-100"

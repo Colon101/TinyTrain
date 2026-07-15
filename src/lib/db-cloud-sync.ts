@@ -31,6 +31,7 @@ type WhereClause<T> = {
 type DataTable<T extends { id: string }> = {
 	toArray(): Promise<T[]>;
 	get(id: string): Promise<T | undefined>;
+	getSyncState(id: string): Promise<{ row?: T; deleted: boolean } | undefined>;
 	bulkGet(ids: string[]): Promise<(T | undefined)[]>;
 	add(doc: T): Promise<string>;
 	bulkAdd(docs: T[]): Promise<string[]>;
@@ -50,6 +51,7 @@ type DatabaseCloudSyncDatabase = {
 	sessionExercises: DataTable<SessionExercise>;
 	sessionSets: DataTable<SessionSet>;
 	exerciseResetEvents: DataTable<ExerciseResetEvent>;
+	transaction<T>(mode: string, ...args: unknown[]): Promise<T>;
 };
 
 export type DatabaseCloudSyncDependencies = {
@@ -141,11 +143,38 @@ type ReconcileChoice<T extends SyncableRow> = {
 	winner: ReconcileWinner;
 };
 
+type AppliedReconcileChoice<T extends SyncableRow> = {
+	row?: T;
+	winner?: ReconcileWinner;
+	deleted?: boolean;
+	skipped?: boolean;
+};
+
+type LocalRowSnapshot<T extends SyncableRow> = {
+	captured: boolean;
+	row?: T;
+};
+
 type RemoteReconcileRow<T extends SyncableRow> = {
 	row: T;
 	deleted: boolean;
 	modifiedAt?: string;
 };
+
+type ConditionalRemoteWrite<T extends SyncableRow> = {
+	row: T;
+	expectedRemote?: RemoteReconcileRow<T>;
+};
+
+class RemoteWriteConflict<T extends SyncableRow = SyncableRow> extends Error {
+	constructor(
+		readonly rowId: string,
+		readonly expectedRemote?: RemoteReconcileRow<T>
+	) {
+		super(`Remote row ${rowId} changed during reconciliation.`);
+		this.name = 'RemoteWriteConflict';
+	}
+}
 
 type SyncedTableConfig<T extends SyncableRow = SyncableRow> = {
 	tableName: SupabaseTableName;
@@ -428,44 +457,188 @@ async function fetchAllSupabaseRows<T extends SyncableRow>(
 	}
 }
 
-async function upsertSupabaseRows(
+function isUniqueConstraintError(error: unknown) {
+	return (
+		typeof error === 'object' &&
+		error !== null &&
+		'code' in error &&
+		(error as { code?: unknown }).code === '23505'
+	);
+}
+
+async function writeSupabaseRowConditionally<T extends SyncableRow>(
 	deps: DatabaseCloudSyncDependencies,
 	userId: string,
 	tableName: SupabaseTableName,
-	rows: SyncableRow[]
+	row: T,
+	expectedRemote: RemoteReconcileRow<T> | undefined
 ) {
-	const pageSize = 200;
+	assertSyncContextActive(deps, userId);
+	const uploadRow = toSupabaseUpsertRow(userId, tableName, row);
 
-	for (let index = 0; index < rows.length; index += pageSize) {
+	if (!expectedRemote) {
+		const { error } = await supabase.from(tableName).insert(uploadRow).select('id');
 		assertSyncContextActive(deps, userId);
-		const pageRows = rows
-			.slice(index, index + pageSize)
-			.map((row) => toSupabaseUpsertRow(userId, tableName, row));
-
-		if (pageRows.length === 0) {
-			continue;
-		}
-
-		const { error } = await supabase.from(tableName).upsert(pageRows, { onConflict: 'id' });
 
 		if (error) {
+			if (isUniqueConstraintError(error)) {
+				throw new RemoteWriteConflict(row.id);
+			}
+
 			throw error;
 		}
 
-		assertSyncContextActive(deps, userId);
+		return;
+	}
+
+	let update = supabase.from(tableName).update(uploadRow).eq('id', row.id).eq('user_id', userId);
+
+	update = expectedRemote.modifiedAt
+		? update.eq('_modified', expectedRemote.modifiedAt)
+		: update.is('_modified', null);
+
+	const { data, error } = await update.select('id');
+	assertSyncContextActive(deps, userId);
+
+	if (error) {
+		throw error;
+	}
+
+	if (!data || data.length === 0) {
+		throw new RemoteWriteConflict(row.id, expectedRemote);
 	}
 }
 
-async function putReconciledRows<T extends SyncableRow>(
+async function runSerializedLocalMutation<T extends SyncableRow, TResult>(
+	deps: DatabaseCloudSyncDependencies,
+	table: DataTable<T>,
+	callback: () => Promise<TResult>
+): Promise<TResult> {
+	return deps.db.transaction('rw', table, callback);
+}
+
+async function writeSupabaseRowsConditionally<T extends SyncableRow>(
 	deps: DatabaseCloudSyncDependencies,
 	userId: string,
-	table: DataTable<T>,
-	rows: T[]
+	options: ReconcileTableOptions<T>,
+	writes: ConditionalRemoteWrite<T>[]
 ) {
-	for (const row of rows) {
-		assertSyncContextActive(deps, userId);
-		await table.put(row);
+	const normalize = options.normalize ?? ((row: T) => row);
+	let uploadedRows = 0;
+
+	for (const { row, expectedRemote } of writes) {
+		const uploaded = await runSerializedLocalMutation(deps, options.localTable, async () => {
+			assertSyncContextActive(deps, userId);
+			const currentState = await options.localTable.getSyncState(row.id);
+			assertSyncContextActive(deps, userId);
+
+			if (
+				!currentState ||
+				currentState.deleted ||
+				!currentState.row ||
+				(options.filterLocal && !options.filterLocal(currentState.row)) ||
+				!areRowsEqual(normalize(currentState.row), row)
+			) {
+				return false;
+			}
+
+			// Keep the shared app mutation lock until the conditional cloud write finishes. Any edit or
+			// delete that already won the lock was observed above; any later one runs after this exact
+			// revision was uploaded and is then owned by normal live replication.
+			await writeSupabaseRowConditionally(deps, userId, options.tableName, row, expectedRemote);
+			return true;
+		});
+
+		uploadedRows += Number(uploaded);
 	}
+
+	return uploadedRows;
+}
+
+async function applyReconciledRow<T extends SyncableRow>(
+	deps: DatabaseCloudSyncDependencies,
+	userId: string,
+	mode: DatabaseUploadMode,
+	options: ReconcileTableOptions<T>,
+	id: string,
+	localSnapshot: LocalRowSnapshot<T>,
+	remoteRow: RemoteReconcileRow<T> | undefined
+): Promise<AppliedReconcileChoice<T>> {
+	const normalize = options.normalize ?? ((row: T) => row);
+
+	return runSerializedLocalMutation(deps, options.localTable, async () => {
+		assertSyncContextActive(deps, userId);
+		const storedLocalState = await options.localTable.getSyncState(id);
+		assertSyncContextActive(deps, userId);
+
+		// Local tombstones are pending replication state, not absence. A stale live cloud row must
+		// not resurrect them, and this explicit sync must not upload live data over the deletion.
+		if (storedLocalState?.deleted) {
+			return { skipped: true };
+		}
+
+		const storedLocalRow = storedLocalState?.row;
+
+		// Filtered rows are outside this sync table's ownership. In particular, a remote exercise
+		// tombstone must never remove a built-in exercise that was intentionally absent from the
+		// original local snapshot.
+		if (storedLocalRow && options.filterLocal && !options.filterLocal(storedLocalRow)) {
+			return { skipped: true };
+		}
+
+		const currentLocalRow = storedLocalRow ? normalize(storedLocalRow) : undefined;
+		const snapshotLocalRow = localSnapshot.row ? normalize(localSnapshot.row) : undefined;
+		const localChangedAfterSnapshot =
+			localSnapshot.captured && !areRowsEqual(snapshotLocalRow, currentLocalRow);
+
+		// A local edit or removal that happened while cloud data was in flight is newer knowledge
+		// than this reconciliation attempt. Never overwrite or resurrect it from the stale fetch;
+		// the normal replication pass can resolve the newly-produced local revision afterwards.
+		if (localChangedAfterSnapshot) {
+			return currentLocalRow ? { row: currentLocalRow, winner: 'local' } : { skipped: true };
+		}
+
+		if (remoteRow?.deleted) {
+			if (shouldApplyRemoteDeletion(currentLocalRow, remoteRow)) {
+				if (storedLocalRow) {
+					assertSyncContextActive(deps, userId);
+					await options.localTable.delete(id);
+				}
+
+				return { winner: 'remote', deleted: true };
+			}
+
+			return currentLocalRow ? { row: currentLocalRow, winner: 'local' } : { skipped: true };
+		}
+
+		if (
+			(options.tableName === 'workout_sessions' ||
+				options.tableName === 'session_exercises' ||
+				options.tableName === 'session_sets') &&
+			currentLocalRow &&
+			remoteRow &&
+			!areRowsEqual(currentLocalRow, remoteRow.row)
+		) {
+			// Explicit sync has no trustworthy assumed-master revision. Choosing or synthesizing a row
+			// here can reopen a completed session, split an exercise swap from its child sets, erase a
+			// disjoint set edit, or undo an explicit clear. Leave both live branches intact for RxDB
+			// replication, whose conflict handlers receive the real common base.
+			return { skipped: true };
+		}
+
+		const choice = chooseReconciledRow(options.tableName, currentLocalRow, remoteRow?.row, mode);
+
+		if (!choice) {
+			return { skipped: true };
+		}
+
+		if (!storedLocalRow || !areRowsEqual(storedLocalRow, choice.row)) {
+			assertSyncContextActive(deps, userId);
+			await options.localTable.put(choice.row);
+		}
+
+		return choice;
+	});
 }
 
 async function reconcileTable<T extends SyncableRow>(
@@ -474,69 +647,83 @@ async function reconcileTable<T extends SyncableRow>(
 	mode: DatabaseUploadMode,
 	options: ReconcileTableOptions<T>
 ): Promise<DatabaseTableUploadSummary> {
+	const maxAttempts = 3;
 	const normalize = options.normalize ?? ((row: T) => row);
-	assertSyncContextActive(deps, userId);
-	const localRows = (await options.localTable.toArray())
-		.filter((row) => options.filterLocal?.(row) ?? true)
-		.map(normalize);
-	assertSyncContextActive(deps, userId);
-	const remoteRows = await fetchAllSupabaseRows(deps, userId, options.tableName, normalize);
-	assertSyncContextActive(deps, userId);
-	const localRowsById = new Map(localRows.map((row) => [row.id, row]));
-	const remoteRowsById = new Map(remoteRows.map((row) => [row.row.id, row]));
-	const ids = [...new Set([...localRowsById.keys(), ...remoteRowsById.keys()])];
-	const mergedRows: T[] = [];
-	let localWins = 0;
-	let remoteWins = 0;
 
-	for (const id of ids) {
-		const localRow = localRowsById.get(id);
-		const remoteRow = remoteRowsById.get(id);
+	for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+		assertSyncContextActive(deps, userId);
+		const localRows = (await options.localTable.toArray())
+			.filter((row) => options.filterLocal?.(row) ?? true)
+			.map(normalize);
+		assertSyncContextActive(deps, userId);
+		const remoteRows = await fetchAllSupabaseRows(deps, userId, options.tableName, normalize);
+		assertSyncContextActive(deps, userId);
+		const localRowsById = new Map(localRows.map((row) => [row.id, row]));
+		const remoteRowsById = new Map(remoteRows.map((row) => [row.row.id, row]));
+		const ids = [...new Set([...localRowsById.keys(), ...remoteRowsById.keys()])];
+		const mergedRows: T[] = [];
+		const writes: ConditionalRemoteWrite<T>[] = [];
+		let localWins = 0;
+		let remoteWins = 0;
 
-		if (remoteRow?.deleted) {
-			if (shouldApplyRemoteDeletion(localRow, remoteRow)) {
-				if (localRow) {
-					assertSyncContextActive(deps, userId);
-					await options.localTable.delete(id);
-				}
-				remoteWins += 1;
+		for (const id of ids) {
+			const remoteRow = remoteRowsById.get(id);
+			const choice = await applyReconciledRow(
+				deps,
+				userId,
+				mode,
+				options,
+				id,
+				{ captured: true, row: localRowsById.get(id) },
+				remoteRow
+			);
+
+			if (choice.skipped) {
 				continue;
 			}
 
-			if (localRow) {
-				mergedRows.push(localRow);
-				localWins += 1;
+			if (choice.row) {
+				mergedRows.push(choice.row);
+
+				if (!remoteRow || remoteRow.deleted || !areRowsEqual(choice.row, remoteRow.row)) {
+					writes.push({ row: choice.row, expectedRemote: remoteRow });
+				}
 			}
-			continue;
+
+			if (choice.winner === 'local') {
+				localWins += 1;
+			} else if (choice.winner === 'remote') {
+				remoteWins += 1;
+			}
 		}
 
-		const choice = chooseReconciledRow(options.tableName, localRow, remoteRow?.row, mode);
+		try {
+			const uploadedRows = await writeSupabaseRowsConditionally(deps, userId, options, writes);
 
-		if (!choice) {
-			continue;
-		}
+			return {
+				table: options.tableName,
+				localRows: localRows.length,
+				remoteRows: remoteRows.length,
+				mergedRows: mergedRows.length,
+				uploadedRows,
+				localWins,
+				remoteWins
+			};
+		} catch (error) {
+			if (!(error instanceof RemoteWriteConflict)) {
+				throw error;
+			}
 
-		mergedRows.push(choice.row);
-
-		if (choice.winner === 'local') {
-			localWins += 1;
-		} else {
-			remoteWins += 1;
+			if (attempt === maxAttempts) {
+				throw new Error(
+					`Cloud sync stopped because ${options.tableName}/${error.rowId} kept changing on another device. No newer cloud data was overwritten.`,
+					{ cause: error }
+				);
+			}
 		}
 	}
 
-	await putReconciledRows(deps, userId, options.localTable, mergedRows);
-	await upsertSupabaseRows(deps, userId, options.tableName, mergedRows);
-
-	return {
-		table: options.tableName,
-		localRows: localRows.length,
-		remoteRows: remoteRows.length,
-		mergedRows: mergedRows.length,
-		uploadedRows: mergedRows.length,
-		localWins,
-		remoteWins
-	};
+	throw new Error(`Cloud sync could not reconcile ${options.tableName}.`);
 }
 
 async function reconcileSupabaseDatabase(
@@ -633,20 +820,42 @@ async function putMergedRemoteRow<T extends SyncableRow>(
 	normalize: (row: T) => T = (nextRow) => nextRow
 ) {
 	const userId = getActiveSyncUserId(deps);
-	const currentRow = await table.get(row.id);
+	const normalizedRemoteRow = normalize(row);
+	const snapshotLocalState = await table.getSyncState(row.id);
 	assertSyncContextActive(deps, userId);
-	const choice = chooseReconciledRow(tableName, currentRow, normalize(row), 'richest');
 
-	if (!choice) {
+	if (snapshotLocalState?.deleted) {
 		return;
 	}
 
-	if (currentRow && areRowsEqual(currentRow, choice.row)) {
+	const snapshotLocalRow = snapshotLocalState?.row;
+	const snapshotChoice = chooseReconciledRow(
+		tableName,
+		snapshotLocalRow ? normalize(snapshotLocalRow) : undefined,
+		normalizedRemoteRow,
+		'richest'
+	);
+
+	if (!snapshotChoice || snapshotChoice.winner === 'local') {
 		return;
 	}
 
-	assertSyncContextActive(deps, userId);
-	await table.put(choice.row);
+	if (snapshotLocalRow && areRowsEqual(snapshotLocalRow, snapshotChoice.row)) {
+		return;
+	}
+
+	// The first read is only a cheap early-out. Hydration can await long enough for the user to
+	// edit this row, so the actual write must re-read and resolve again inside the same serialized
+	// local mutation used by session editing.
+	await applyReconciledRow(
+		deps,
+		userId,
+		'richest',
+		{ tableName, localTable: table, normalize },
+		row.id,
+		{ captured: true, row: snapshotLocalRow },
+		{ row: normalizedRemoteRow, deleted: false }
+	);
 }
 
 async function putMergedRemoteRows<T extends SyncableRow>(
@@ -788,12 +997,19 @@ async function backfillRecentRows(
 		for (const remoteRow of remoteRows) {
 			assertSyncContextActive(deps, userId);
 			if (remoteRow.deleted) {
-				const localRow = await localTable.get(remoteRow.row.id);
-				assertSyncContextActive(deps, userId);
-
-				if (localRow && shouldApplyRemoteDeletion(localRow, remoteRow)) {
-					await localTable.delete(remoteRow.row.id);
-				}
+				await applyReconciledRow(
+					deps,
+					userId,
+					'richest',
+					{
+						tableName: tableConfig.tableName,
+						localTable,
+						normalize: tableConfig.normalize
+					},
+					remoteRow.row.id,
+					{ captured: false },
+					remoteRow
+				);
 				continue;
 			}
 
