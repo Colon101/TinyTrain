@@ -9,6 +9,12 @@ const runtimeMocks = vi.hoisted(() => ({
 	reopenDatabase: vi.fn(),
 	stopReplication: vi.fn(),
 	getSupabaseUser: vi.fn(),
+	authSubscriber: null as
+		| null
+		| ((snapshot: {
+				user: { id: string; email: string; user_metadata: Record<string, unknown> } | null;
+				isLoading: boolean;
+		  }) => void),
 	authUserId: 'user-1' as string | null,
 	hydrationError: null as Error | null,
 	database: {}
@@ -61,7 +67,10 @@ vi.mock('../supabase', () => ({
 	initializeSupabaseAuth: vi.fn(),
 	loginWithSupabaseGoogle: vi.fn(),
 	logoutFromSupabase: vi.fn(),
-	subscribeToSupabaseAuth: vi.fn(),
+	subscribeToSupabaseAuth: vi.fn((subscriber: NonNullable<typeof runtimeMocks.authSubscriber>) => {
+		runtimeMocks.authSubscriber = subscriber;
+		return { unsubscribe: vi.fn() };
+	}),
 	supabase: {
 		from(tableName: string) {
 			return {
@@ -105,6 +114,7 @@ beforeEach(() => {
 	runtimeMocks.reopenDatabase.mockReset().mockResolvedValue(runtimeMocks.database);
 	runtimeMocks.stopReplication.mockReset();
 	runtimeMocks.getSupabaseUser.mockReset().mockResolvedValue({ id: 'user-1' });
+	runtimeMocks.authSubscriber = null;
 	runtimeMocks.authUserId = 'user-1';
 	runtimeMocks.hydrationError = null;
 });
@@ -118,6 +128,37 @@ function createRuntimeDatabase(owner: string) {
 }
 
 describe('authenticated runtime ownership', () => {
+	it('invalidates auth-owned state on account changes but not token refreshes', async () => {
+		const runtime = await import('./runtime');
+		const authState = await import('$lib/auth-owned-state');
+		const invalidate = vi.fn();
+		authState.registerAuthOwnedVolatileInvalidator(invalidate);
+		runtime.startAuthBridge();
+		const emitAuth = runtimeMocks.authSubscriber;
+		const user = (id: string) => ({
+			id,
+			email: `${id}@example.com`,
+			user_metadata: {}
+		});
+
+		expect(emitAuth).not.toBeNull();
+		emitAuth!({ isLoading: false, user: user('user-1') });
+		const userOneIdentity = authState.getAuthOwnedStateIdentity();
+		invalidate.mockClear();
+		emitAuth!({ isLoading: false, user: user('user-1') });
+
+		expect(authState.getAuthOwnedStateIdentity()).toBe(userOneIdentity);
+		expect(invalidate).not.toHaveBeenCalled();
+
+		emitAuth!({ isLoading: false, user: user('user-2') });
+		expect(authState.getAuthOwnedStateIdentity()).toMatchObject({
+			ownerId: 'user-2',
+			generation: userOneIdentity.generation + 1,
+			isResolved: true
+		});
+		expect(invalidate).toHaveBeenCalledOnce();
+	});
+
 	it('does not activate a user returned by a stale auth lookup', async () => {
 		const fetchedUser = deferred<{ id: string } | null>();
 		runtimeMocks.getSupabaseUser.mockReturnValue(fetchedUser.promise);

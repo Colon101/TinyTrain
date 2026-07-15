@@ -4,6 +4,7 @@
 	import { page } from '$app/state';
 	import { onMount, untrack } from 'svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import { getAuthOwnedStateIdentity } from '$lib/auth-owned-state';
 	import type {
 		Exercise,
 		ExerciseUsagePreference,
@@ -21,12 +22,15 @@
 	import SessionSetEditor from './SessionSetEditor.svelte';
 	import { isSessionExerciseRoute } from './session-navigation';
 	import { readSessionDataCache, writeSessionDataCache } from './session-data-cache';
+	import { createSessionMutationFence } from './session-mutation-fence';
+	import { createSessionScreenLoadLifetime } from './session-screen-load-lifetime';
 	import {
 		applySessionInputDraft,
 		clearSessionInputDraft as clearStoredSessionInputDraft,
 		createEmptySessionInputDraft,
 		getSessionInputFieldBaseKey,
 		getSessionInputFieldKey,
+		migrateLegacySessionInputDraftForCurrentUser,
 		parseSessionInputValue,
 		readSessionInputDraft,
 		rebuildSessionSetOverview,
@@ -36,6 +40,8 @@
 	} from './session-input-draft';
 	type DatabaseApi = typeof import('$lib/db');
 	type PickerMode = 'add' | 'swap';
+	const runMutationSingleFlight = createSessionMutationFence();
+	const loadLifetime = createSessionScreenLoadLifetime();
 
 	let {
 		sessionId,
@@ -76,7 +82,6 @@
 	let newExerciseName = $state('');
 	let isNewExerciseUnilateral = $state(false);
 	let sessionSetEditorContainer = $state<HTMLElement | null>(null);
-	let loadDataGeneration = 0;
 	let inputVersions = new SvelteMap<string, number>();
 	let setInputSaveChains = new SvelteMap<string, Promise<void>>();
 	let pendingSetInputSaves = new SvelteSet<Promise<void>>();
@@ -150,8 +155,8 @@
 	);
 
 	onMount(() => {
-		let disposed = false;
 		let databaseSubscription: { unsubscribe(): void } | null = null;
+		const mountedOwnerIdentity = getAuthOwnedStateIdentity();
 
 		function refreshStoredSessionInputDraft(event: Event) {
 			const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
@@ -173,7 +178,7 @@
 			try {
 				const dbApi = await import('$lib/db');
 
-				if (disposed) {
+				if (loadLifetime.isDisposed()) {
 					return;
 				}
 
@@ -186,16 +191,23 @@
 					{ debounceMs: 250 }
 				);
 				await loadData();
-				void dbApi.hydrateVisibleScope({ type: 'session', sessionId }).catch(() => undefined);
+
+				if (!loadLifetime.isDisposed() && getAuthOwnedStateIdentity() === mountedOwnerIdentity) {
+					void dbApi.hydrateVisibleScope({ type: 'session', sessionId }).catch(() => undefined);
+				}
 			} catch (error) {
-				errorMessage = getErrorMessage(error);
+				if (!loadLifetime.isDisposed()) {
+					errorMessage = getErrorMessage(error);
+				}
 			} finally {
-				isLoading = false;
+				if (!loadLifetime.isDisposed()) {
+					isLoading = false;
+				}
 			}
 		})();
 
 		return () => {
-			disposed = true;
+			loadLifetime.dispose();
 			window.removeEventListener(SESSION_INPUT_DRAFT_CHANGE_EVENT, refreshStoredSessionInputDraft);
 			databaseSubscription?.unsubscribe();
 		};
@@ -239,14 +251,19 @@
 	}
 
 	async function loadData() {
-		const generation = ++loadDataGeneration;
+		if (loadLifetime.isDisposed()) {
+			return;
+		}
+
+		const generation = loadLifetime.beginLoad();
+		const ownerIdentity = getAuthOwnedStateIdentity();
 		const dbApi = requireApi();
 		void dbApi.cleanupStaleSessions();
 		const nextOverview = await dbApi.runWithClosedDatabaseRetry(() =>
 			dbApi.getEditableSession(sessionId)
 		);
 
-		if (generation !== loadDataGeneration) {
+		if (!loadLifetime.isCurrent(generation) || getAuthOwnedStateIdentity() !== ownerIdentity) {
 			return;
 		}
 
@@ -254,6 +271,10 @@
 			clearLocalSessionInputDraft(sessionId);
 			await goto(resolve('/(app)/sessions/[sessionId]', { sessionId }), { replaceState: true });
 			return;
+		}
+
+		if (nextOverview) {
+			migrateLegacySessionInputDraftForCurrentUser(sessionId);
 		}
 
 		sessionInputDraft = readSessionInputDraft(sessionId) ?? createEmptySessionInputDraft(sessionId);
@@ -268,19 +289,24 @@
 			exerciseUsagePreferences
 		});
 		isMenuOpen = false;
-		void loadExercisePickerData(generation).catch((error) => {
-			errorMessage = getErrorMessage(error);
+		void loadExercisePickerData(generation, ownerIdentity).catch((error) => {
+			if (loadLifetime.isCurrent(generation) && getAuthOwnedStateIdentity() === ownerIdentity) {
+				errorMessage = getErrorMessage(error);
+			}
 		});
 	}
 
-	async function loadExercisePickerData(generation = loadDataGeneration) {
+	async function loadExercisePickerData(
+		generation = loadLifetime.getGeneration(),
+		ownerIdentity = getAuthOwnedStateIdentity()
+	) {
 		const dbApi = requireApi();
 		const [nextExercises, nextExerciseUsagePreferences] = await Promise.all([
 			dbApi.listExercises(),
 			dbApi.listExerciseUsagePreferences()
 		]);
 
-		if (generation !== loadDataGeneration) {
+		if (!loadLifetime.isCurrent(generation) || getAuthOwnedStateIdentity() !== ownerIdentity) {
 			return;
 		}
 
@@ -298,19 +324,41 @@
 		action: () => Promise<void>,
 		afterSuccess?: () => Promise<void> | void
 	) {
-		isSaving = true;
-		errorMessage = '';
+		await runMutationSingleFlight(async () => {
+			const mutationOwnerIdentity = getAuthOwnedStateIdentity();
+			isSaving = true;
+			errorMessage = '';
 
-		try {
-			await flushPendingSetInputs();
-			await action();
-			await loadData();
-			await afterSuccess?.();
-		} catch (error) {
-			errorMessage = getErrorMessage(error);
-		} finally {
-			isSaving = false;
-		}
+			try {
+				await flushPendingSetInputs();
+
+				if (loadLifetime.isDisposed() || getAuthOwnedStateIdentity() !== mutationOwnerIdentity) {
+					return;
+				}
+
+				await action();
+
+				if (loadLifetime.isDisposed() || getAuthOwnedStateIdentity() !== mutationOwnerIdentity) {
+					return;
+				}
+
+				await loadData();
+
+				if (loadLifetime.isDisposed() || getAuthOwnedStateIdentity() !== mutationOwnerIdentity) {
+					return;
+				}
+
+				await afterSuccess?.();
+			} catch (error) {
+				if (!loadLifetime.isDisposed()) {
+					errorMessage = getErrorMessage(error);
+				}
+			} finally {
+				if (!loadLifetime.isDisposed()) {
+					isSaving = false;
+				}
+			}
+		});
 	}
 
 	function sanitizeInputValue(field: SessionInputField, rawValue: string) {
@@ -569,6 +617,10 @@
 	}
 
 	function handleSetInput(sessionSetId: string, field: SessionInputField, event: Event) {
+		if (isSaving) {
+			return;
+		}
+
 		const input = event.currentTarget as HTMLInputElement;
 		const rawValue = sanitizeInputValue(field, input.value);
 
@@ -612,6 +664,10 @@
 	}
 
 	function autofillPreviousSet(sessionSet: SessionSetOverview) {
+		if (isSaving) {
+			return;
+		}
+
 		const previousReference = sessionSet.previousReference;
 
 		if (!previousReference) {

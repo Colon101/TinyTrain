@@ -98,6 +98,7 @@
 						previousValue={set.previousReference?.weight}
 						delta={set.weightDelta}
 						{indicatorPosition}
+						disabled={isSaving}
 						onInput={(event) => onSetInput(set.id, 'weight', event)}
 						onKeydown={onSetInputKeydown}
 					/>
@@ -112,6 +113,7 @@
 						previousValue={set.previousReference?.reps}
 						delta={set.repsDelta}
 						{indicatorPosition}
+						disabled={isSaving}
 						onInput={(event) => onSetInput(set.id, 'reps', event)}
 						onKeydown={onSetInputKeydown}
 					/>
@@ -126,6 +128,7 @@
 						previousValue={set.previousReference?.rir}
 						delta={set.rirDelta}
 						{indicatorPosition}
+						disabled={isSaving}
 						onInput={(event) => onSetInput(set.id, 'rir', event)}
 						onKeydown={onSetInputKeydown}
 					/>

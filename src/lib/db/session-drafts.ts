@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { getResolvedAuthOwnerId } from '$lib/auth-owned-state';
 import type { SessionInputField } from './models';
 
 export type SessionInputFieldKey = `${SessionInputField}Input`;
@@ -15,6 +16,7 @@ export type SessionInputDraft = {
 };
 
 export const SESSION_INPUT_DRAFT_CHANGE_EVENT = 'tinytrain:session-input-draft-change';
+const SESSION_INPUT_DRAFT_PREFIX = 'tinytrain:session-input-draft:';
 const SESSION_INPUT_DRAFT_SET_STRING_KEYS = [
 	'weightInput',
 	'weightInputBase',
@@ -31,7 +33,15 @@ function notifySessionInputDraftChange(sessionId: string) {
 }
 
 export function getSessionInputDraftKey(sessionId: string) {
-	return `tinytrain:session-input-draft:${sessionId}`;
+	const ownerId = getResolvedAuthOwnerId();
+
+	return ownerId
+		? `${SESSION_INPUT_DRAFT_PREFIX}${encodeURIComponent(ownerId)}:${sessionId}`
+		: null;
+}
+
+export function getLegacySessionInputDraftKey(sessionId: string) {
+	return `${SESSION_INPUT_DRAFT_PREFIX}${sessionId}`;
 }
 
 export function createEmptySessionInputDraft(sessionId: string): SessionInputDraft {
@@ -48,7 +58,20 @@ export function readSessionInputDraft(sessionId: string) {
 	}
 
 	try {
-		const rawDraft = localStorage.getItem(getSessionInputDraftKey(sessionId));
+		const draftKey = getSessionInputDraftKey(sessionId);
+
+		if (!draftKey) {
+			return null;
+		}
+
+		return parseSessionInputDraft(sessionId, localStorage.getItem(draftKey));
+	} catch {
+		return null;
+	}
+}
+
+function parseSessionInputDraft(sessionId: string, rawDraft: string | null) {
+	try {
 		const draft = rawDraft ? (JSON.parse(rawDraft) as Partial<SessionInputDraft>) : null;
 
 		if (
@@ -61,15 +84,13 @@ export function readSessionInputDraft(sessionId: string) {
 			return null;
 		}
 
-		const sets = Object.fromEntries(
-			Object.entries(draft.sets).filter((entry): entry is [string, SessionInputDraftSet] =>
-				isSessionInputDraftSet(entry[1])
-			)
-		);
-
 		return {
 			sessionId,
-			sets,
+			sets: Object.fromEntries(
+				Object.entries(draft.sets).filter((entry): entry is [string, SessionInputDraftSet] =>
+					isSessionInputDraftSet(entry[1])
+				)
+			),
 			updatedAt:
 				typeof draft.updatedAt === 'number' && Number.isFinite(draft.updatedAt)
 					? draft.updatedAt
@@ -77,6 +98,39 @@ export function readSessionInputDraft(sessionId: string) {
 		};
 	} catch {
 		return null;
+	}
+}
+
+/** Claims the old unscoped recovery copy only after the current user's DB confirms the session. */
+export function migrateLegacySessionInputDraftForCurrentUser(sessionId: string) {
+	if (!browser) {
+		return false;
+	}
+
+	const draftKey = getSessionInputDraftKey(sessionId);
+
+	if (!draftKey) {
+		return false;
+	}
+
+	try {
+		if (parseSessionInputDraft(sessionId, localStorage.getItem(draftKey))) {
+			return false;
+		}
+
+		const legacyKey = getLegacySessionInputDraftKey(sessionId);
+		const legacyDraft = parseSessionInputDraft(sessionId, localStorage.getItem(legacyKey));
+
+		if (!legacyDraft) {
+			return false;
+		}
+
+		localStorage.setItem(draftKey, JSON.stringify(legacyDraft));
+		localStorage.removeItem(legacyKey);
+		notifySessionInputDraftChange(sessionId);
+		return true;
+	} catch {
+		return false;
 	}
 }
 
@@ -102,7 +156,13 @@ export function clearSessionInputDraft(sessionId: string) {
 	}
 
 	try {
-		localStorage.removeItem(getSessionInputDraftKey(sessionId));
+		const draftKey = getSessionInputDraftKey(sessionId);
+
+		if (!draftKey) {
+			return;
+		}
+
+		localStorage.removeItem(draftKey);
 		notifySessionInputDraftChange(sessionId);
 	} catch {
 		// Draft cleanup should not block the underlying workout mutation.
@@ -115,7 +175,13 @@ export function writeSessionInputDraft(draft: SessionInputDraft) {
 	}
 
 	try {
-		localStorage.setItem(getSessionInputDraftKey(draft.sessionId), JSON.stringify(draft));
+		const draftKey = getSessionInputDraftKey(draft.sessionId);
+
+		if (!draftKey) {
+			return;
+		}
+
+		localStorage.setItem(draftKey, JSON.stringify(draft));
 		notifySessionInputDraftChange(draft.sessionId);
 	} catch {
 		// Draft persistence should not block the underlying workout mutation.

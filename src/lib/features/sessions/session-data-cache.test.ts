@@ -8,7 +8,10 @@ const emptyEntry = {
 
 async function loadFreshCache() {
 	vi.resetModules();
-	return import('./session-data-cache');
+	const authState = await import('$lib/auth-owned-state');
+	authState.setAuthOwnedStateIdentity('user-a', true);
+
+	return { ...(await import('./session-data-cache')), authState };
 }
 
 describe('session data cache', () => {
@@ -36,5 +39,23 @@ describe('session data cache', () => {
 
 		expect(readSessionDataCache('session-a')).not.toBeNull();
 		expect(readSessionDataCache('session-0')).toBeNull();
+	});
+
+	it('never exposes cached session data to another account', async () => {
+		const { authState, readSessionDataCache, writeSessionDataCache } = await loadFreshCache();
+		writeSessionDataCache('shared-session-id', emptyEntry);
+
+		authState.setAuthOwnedStateIdentity('user-b', true);
+
+		expect(readSessionDataCache('shared-session-id')).toBeNull();
+	});
+
+	it('keeps cached data across a same-user token refresh', async () => {
+		const { authState, readSessionDataCache, writeSessionDataCache } = await loadFreshCache();
+		writeSessionDataCache('session-a', emptyEntry);
+
+		authState.setAuthOwnedStateIdentity('user-a', true);
+
+		expect(readSessionDataCache('session-a')).not.toBeNull();
 	});
 });

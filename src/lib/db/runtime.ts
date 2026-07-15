@@ -1,4 +1,5 @@
 import { browser } from '$app/environment';
+import { setAuthOwnedStateIdentity } from '$lib/auth-owned-state';
 import {
 	getSupabaseAuthSnapshot,
 	getSupabaseUser,
@@ -365,6 +366,8 @@ export function startAuthBridge() {
 	authBridgeStarted = true;
 	void initializeSupabaseAuth();
 	subscribeToSupabaseAuth((snapshot) => {
+		setAuthOwnedStateIdentity(snapshot.user?.id ?? null, !snapshot.isLoading);
+
 		if (!snapshot.user) {
 			if (!snapshot.isLoading) {
 				clearSupabaseRuntimeState();

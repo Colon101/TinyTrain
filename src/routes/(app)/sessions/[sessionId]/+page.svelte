@@ -8,4 +8,6 @@
 	<title>Session Overview | TinyTrain</title>
 </svelte:head>
 
-<SessionOverviewScreen sessionId={data.sessionId} />
+{#key data.sessionId}
+	<SessionOverviewScreen sessionId={data.sessionId} />
+{/key}
