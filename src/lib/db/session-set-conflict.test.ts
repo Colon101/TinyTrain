@@ -110,4 +110,18 @@ describe('session set conflict resolution', () => {
 
 		expect(resolved._deleted).toBe(true);
 	});
+
+	it('does not delete a master set from a conflicting local tombstone', async () => {
+		const localSet = createSessionSet({ updatedAt: secondEditAt });
+		const masterSet = createSessionSet({ weightInput: '100', weight: 100, updatedAt: firstEditAt });
+		const resolved = await sessionSetConflictHandler.resolve(
+			{
+				realMasterState: { ...masterSet, user_id: 'user-1', _deleted: false },
+				newDocumentState: { ...localSet, user_id: 'user-1', _deleted: true }
+			},
+			'test'
+		);
+
+		expect(resolved).toMatchObject({ weightInput: '100', weight: 100, _deleted: false });
+	});
 });

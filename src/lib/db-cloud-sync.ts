@@ -233,31 +233,6 @@ function hasMeaningfulValue(value: unknown) {
 	return false;
 }
 
-function getSessionSetCompletenessScore(
-	deps: DatabaseCloudSyncDependencies,
-	sessionSet: SessionSet
-) {
-	const normalizedSessionSet = deps.withSessionSetDefaults(sessionSet);
-	const setValueScore =
-		(Number(deps.hasInputValue(normalizedSessionSet.weightInput)) +
-			Number(deps.hasInputValue(normalizedSessionSet.repsInput)) +
-			Number(deps.hasInputValue(normalizedSessionSet.rirInput))) *
-		2;
-	const numericScore =
-		Number(
-			typeof normalizedSessionSet.weight === 'number' &&
-				Number.isFinite(normalizedSessionSet.weight)
-		) +
-		Number(
-			typeof normalizedSessionSet.reps === 'number' && Number.isFinite(normalizedSessionSet.reps)
-		) +
-		Number(
-			typeof normalizedSessionSet.rir === 'number' && Number.isFinite(normalizedSessionSet.rir)
-		);
-
-	return setValueScore + numericScore;
-}
-
 function getGenericCompletenessScore(row: SyncableRow) {
 	const ignoredFields = new Set([
 		'id',
@@ -275,18 +250,6 @@ function getGenericCompletenessScore(row: SyncableRow) {
 
 		return score + Number(hasMeaningfulValue(value));
 	}, 0);
-}
-
-function getRowCompletenessScore(
-	deps: DatabaseCloudSyncDependencies,
-	tableName: SupabaseTableName,
-	row: SyncableRow
-) {
-	if (tableName === 'session_sets') {
-		return getSessionSetCompletenessScore(deps, row as SessionSet);
-	}
-
-	return getGenericCompletenessScore(row);
 }
 
 function getRowTimestamp(row: SyncableRow) {
@@ -325,7 +288,6 @@ function wasRowEditedAfterCreate(row: SyncableRow) {
 }
 
 function chooseReconciledRow<T extends SyncableRow>(
-	deps: DatabaseCloudSyncDependencies,
 	tableName: SupabaseTableName,
 	localRow: T | undefined,
 	remoteRow: T | undefined,
@@ -371,8 +333,8 @@ function chooseReconciledRow<T extends SyncableRow>(
 		}
 	}
 
-	const localScore = getRowCompletenessScore(deps, tableName, localRow);
-	const remoteScore = getRowCompletenessScore(deps, tableName, remoteRow);
+	const localScore = getGenericCompletenessScore(localRow);
+	const remoteScore = getGenericCompletenessScore(remoteRow);
 
 	if (localScore !== remoteScore) {
 		return localScore > remoteScore
@@ -548,7 +510,7 @@ async function reconcileTable<T extends SyncableRow>(
 			continue;
 		}
 
-		const choice = chooseReconciledRow(deps, options.tableName, localRow, remoteRow?.row, mode);
+		const choice = chooseReconciledRow(options.tableName, localRow, remoteRow?.row, mode);
 
 		if (!choice) {
 			continue;
@@ -673,7 +635,7 @@ async function putMergedRemoteRow<T extends SyncableRow>(
 	const userId = getActiveSyncUserId(deps);
 	const currentRow = await table.get(row.id);
 	assertSyncContextActive(deps, userId);
-	const choice = chooseReconciledRow(deps, tableName, currentRow, normalize(row), 'richest');
+	const choice = chooseReconciledRow(tableName, currentRow, normalize(row), 'richest');
 
 	if (!choice) {
 		return;
