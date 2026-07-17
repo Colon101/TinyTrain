@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta
+			name="description"
+			content="TinyTrain is a tiny training log for tracking workouts, sessions, exercises, and progress, with offline support after the first load."
+		/>
+		<meta name="text-scale" content="scale" />
+		<meta name="theme-color" content="#172033" />
+		<meta name="mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-title" content="TinyTrain" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+		<link rel="manifest" href="/manifest.webmanifest" />
+		<link rel="icon" href="/app-icon.svg" type="image/svg+xml" />
+		<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+		<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+		<script>
+			// Apply saved theme variables before CSS paints. Keep these keys synchronized with accent-theme.ts.
+			try {
+				const customThemeVariables = [
+					'--theme-custom-accent',
+					'--theme-custom-accent-soft',
+					'--theme-custom-accent-subtle',
+					'--theme-custom-accent-shadow',
+					'--theme-custom-on-accent',
+					'--theme-custom-surface-canvas',
+					'--theme-custom-surface-canvas-top',
+					'--theme-custom-surface-canvas-bottom',
+					'--theme-custom-surface-app',
+					'--theme-custom-surface-overlay',
+					'--theme-custom-surface-raised',
+					'--theme-custom-surface-menu',
+					'--theme-custom-surface-dialog',
+					'--theme-custom-surface-soft',
+					'--theme-custom-surface-line-soft'
+				];
+				const savedCustomAccent = localStorage.getItem('tinytrain:custom-accent:v1');
+
+				if (savedCustomAccent) {
+					try {
+						const storedCustomAccent = JSON.parse(savedCustomAccent);
+						const customPalette = storedCustomAccent?.palette;
+						const isValidCustomPalette =
+							storedCustomAccent?.version === 1 &&
+							customPalette &&
+							customThemeVariables.every((variable) =>
+								/^#[0-9a-f]{6}$/i.test(customPalette[variable])
+							);
+
+						if (isValidCustomPalette) {
+							for (const variable of customThemeVariables) {
+								document.documentElement.style.setProperty(variable, customPalette[variable]);
+							}
+						}
+					} catch {
+						// A malformed custom value falls back to the stable default custom palette.
+					}
+				}
+
+				const savedAccentTheme = localStorage.getItem('tinytrain:accent-theme:v1');
+
+				if (savedAccentTheme) {
+					document.documentElement.dataset.accentTheme = savedAccentTheme;
+				}
+			} catch {
+				// Storage may be disabled; the CSS default remains fully usable.
+			}
+		</script>
+		<script>
+			window.__tinytrainInstallPrompt = null;
+			window.addEventListener('beforeinstallprompt', (event) => {
+				event.preventDefault();
+				window.__tinytrainInstallPrompt = event;
+				window.dispatchEvent(new Event('tinytraininstallprompt'));
+			});
+
+			if ('serviceWorker' in navigator) {
+				const rootScope = new URL('/', window.location.origin).href;
+				const updateLogPrefix = '[TinyTrain update check]';
+				// Keep this list synchronized with `AUTH_CACHE_PARAM_NAMES` in src/service-worker.ts.
+				// This inline script is not bundled with that module, so the compiler cannot enforce it.
+				const authCacheParamNames = new Set([
+					'code',
+					'state',
+					'error',
+					'error_description',
+					'access_token',
+					'refresh_token',
+					'provider_token',
+					'provider_refresh_token'
+				]);
+
+				function logServiceWorkerUpdateCheck(data) {
+					if (!data || data.type !== 'TINYTRAIN_CACHE_UPDATE_CHECK') {
+						return;
+					}
+
+					const labels = {
+						checking: 'checking cache update',
+						current: 'cache is current',
+						newer: 'newer deployment found',
+						failed: 'check failed; trusting cache',
+						'precache-skipped': 'precache incomplete; keeping the current app version'
+					};
+
+					console.info(`${updateLogPrefix} ${labels[data.status] || data.status}`, data);
+				}
+
+				navigator.serviceWorker.addEventListener('message', (event) => {
+					logServiceWorkerUpdateCheck(event.data);
+				});
+
+				function hasAuthCacheParams(url) {
+					for (const paramName of authCacheParamNames) {
+						if (url.searchParams.has(paramName)) {
+							return true;
+						}
+					}
+
+					const hashParams = new URLSearchParams(url.hash.startsWith('#') ? url.hash.slice(1) : '');
+
+					for (const paramName of authCacheParamNames) {
+						if (hashParams.has(paramName)) {
+							return true;
+						}
+					}
+
+					return false;
+				}
+
+				function getCacheableUrl(urlValue) {
+					try {
+						const url = new URL(urlValue, window.location.origin);
+
+						if (url.origin !== window.location.origin || hasAuthCacheParams(url)) {
+							return null;
+						}
+
+						return url.href;
+					} catch {
+						return null;
+					}
+				}
+
+				function getCurrentPageCacheUrls() {
+					const urls = [rootScope];
+					const currentPageUrl = getCacheableUrl(window.location.href);
+
+					if (currentPageUrl) {
+						urls.push(currentPageUrl);
+					}
+
+					for (const entry of performance.getEntriesByType('resource')) {
+						const resourceUrl = getCacheableUrl(entry.name);
+
+						if (resourceUrl) {
+							urls.push(resourceUrl);
+						}
+					}
+
+					return [...new Set(urls)];
+				}
+
+				function warmServiceWorkerCache(registration) {
+					const worker = registration.active || navigator.serviceWorker.controller;
+
+					if (!worker) {
+						return;
+					}
+
+					worker.postMessage({
+						type: 'CACHE_URLS',
+						urls: getCurrentPageCacheUrls()
+					});
+				}
+
+				function requestLastUpdateCheckStatus(registration) {
+					const worker = registration.active || navigator.serviceWorker.controller;
+
+					if (!worker) {
+						return;
+					}
+
+					worker.postMessage({ type: 'GET_CACHE_UPDATE_STATUS' });
+				}
+
+				function showVisibleUpdateCheckRequest() {
+					fetch(`/deployment.json?tinytrain-visible-update-check=${Date.now()}`, {
+						cache: 'no-store'
+					})
+						.then(async (response) => {
+							const manifest = response.ok ? await response.json() : null;
+							console.info(`${updateLogPrefix} visible network request finished`, {
+								status: response.status,
+								deploymentId: manifest && manifest.id
+							});
+						})
+						.catch((error) => {
+							console.info(`${updateLogPrefix} visible network request failed`, error);
+						});
+				}
+
+				window.addEventListener('load', () => {
+					navigator.serviceWorker
+						.getRegistrations()
+						.then(async (registrations) => {
+							await Promise.all(
+								registrations
+									.filter((registration) => registration.scope !== rootScope)
+									.map((registration) => registration.unregister())
+							);
+
+							return navigator.serviceWorker.register('/service-worker.js', {
+								scope: '/',
+								type: 'module'
+							});
+						})
+						.then((registration) => {
+							registration.update();
+							requestLastUpdateCheckStatus(registration);
+							warmServiceWorkerCache(registration);
+							return navigator.serviceWorker.ready;
+						})
+						.then((registration) => {
+							requestLastUpdateCheckStatus(registration);
+							warmServiceWorkerCache(registration);
+							showVisibleUpdateCheckRequest();
+						})
+						.catch(() => undefined);
+				});
+			}
+		</script>
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>

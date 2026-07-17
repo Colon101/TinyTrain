@@ -1,0 +1,24 @@
+{
+	"name": "TinyTrain",
+	"short_name": "TinyTrain",
+	"description": "A tiny training log that works offline after the first load.",
+	"start_url": "/",
+	"scope": "/",
+	"display": "standalone",
+	"background_color": "#080b0d",
+	"theme_color": "#172033",
+	"icons": [
+		{
+			"src": "/app-icon.png",
+			"sizes": "512x512",
+			"type": "image/png",
+			"purpose": "any maskable"
+		},
+		{
+			"src": "/app-icon.svg",
+			"sizes": "512x512",
+			"type": "image/svg+xml",
+			"purpose": "any maskable"
+		}
+	]
+}
