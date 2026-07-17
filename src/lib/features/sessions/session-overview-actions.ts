@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store';
 import type { SessionOverview, SessionStatus } from '$lib/db';
-import { getResolvedAuthOwnerId } from '$lib/auth-owned-state';
+import { getResolvedAuthOwnerId, type AuthOwnedStateIdentity } from '$lib/auth-owned-state';
 
 export type SessionOverviewTimerSummary = Pick<
 	SessionOverview['summary'],
@@ -109,6 +109,7 @@ export function clearSessionEditDraft(sessionId: string) {
 }
 
 export type SessionOverviewActions = {
+	ownerIdentity: AuthOwnedStateIdentity;
 	status: SessionStatus;
 	timerSummary: SessionOverviewTimerSummary;
 	isEditMode: boolean;

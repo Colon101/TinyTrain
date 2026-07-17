@@ -4,7 +4,10 @@
 	import { page } from '$app/state';
 	import { onMount, untrack } from 'svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-	import { getAuthOwnedStateIdentity } from '$lib/auth-owned-state';
+	import {
+		getAuthOwnedStateIdentity,
+		isAuthOwnedStateIdentityCurrent
+	} from '$lib/auth-owned-state';
 	import type {
 		Exercise,
 		ExerciseUsagePreference,
@@ -50,6 +53,7 @@
 		sessionId: string;
 		sessionExerciseId: string;
 	} = $props();
+	const screenOwnerIdentity = untrack(() => getAuthOwnedStateIdentity());
 	const cachedSessionData = untrack(() => readSessionDataCache(sessionId));
 	const cachedExercisePickerData = untrack(() => readExercisePickerCache());
 	const cachedSessionInputDraft = untrack(
@@ -156,12 +160,11 @@
 
 	onMount(() => {
 		let databaseSubscription: { unsubscribe(): void } | null = null;
-		const mountedOwnerIdentity = getAuthOwnedStateIdentity();
 
 		function refreshStoredSessionInputDraft(event: Event) {
 			const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
 
-			if (detail?.sessionId !== sessionId) {
+			if (!isScreenCurrent() || detail?.sessionId !== sessionId) {
 				return;
 			}
 
@@ -178,7 +181,7 @@
 			try {
 				const dbApi = await import('$lib/db');
 
-				if (loadLifetime.isDisposed()) {
+				if (!isScreenCurrent()) {
 					return;
 				}
 
@@ -186,21 +189,23 @@
 				databaseSubscription = dbApi.subscribeToDatabaseChanges(
 					['workoutSessions', 'sessionExercises', 'sessionSets', 'exercises'],
 					() => {
-						void loadData();
+						if (isScreenCurrent()) {
+							void loadData();
+						}
 					},
 					{ debounceMs: 250 }
 				);
 				await loadData();
 
-				if (!loadLifetime.isDisposed() && getAuthOwnedStateIdentity() === mountedOwnerIdentity) {
+				if (isScreenCurrent()) {
 					void dbApi.hydrateVisibleScope({ type: 'session', sessionId }).catch(() => undefined);
 				}
 			} catch (error) {
-				if (!loadLifetime.isDisposed() && getAuthOwnedStateIdentity() === mountedOwnerIdentity) {
+				if (isScreenCurrent()) {
 					errorMessage = getErrorMessage(error);
 				}
 			} finally {
-				if (!loadLifetime.isDisposed() && getAuthOwnedStateIdentity() === mountedOwnerIdentity) {
+				if (isScreenCurrent()) {
 					isLoading = false;
 				}
 			}
@@ -218,6 +223,7 @@
 
 		if (
 			isReplayingInputNavigation ||
+			!isScreenCurrent() ||
 			navigation.willUnload ||
 			!hasPendingSetInputWork() ||
 			!targetUrl ||
@@ -246,24 +252,28 @@
 		return api;
 	}
 
+	function isScreenCurrent() {
+		return !loadLifetime.isDisposed() && isAuthOwnedStateIdentityCurrent(screenOwnerIdentity);
+	}
+
 	function isCompletedEditRoute() {
 		return page.url.searchParams.get('edit') === '1';
 	}
 
 	async function loadData() {
-		if (loadLifetime.isDisposed()) {
+		if (!isScreenCurrent()) {
 			return;
 		}
 
 		const generation = loadLifetime.beginLoad();
-		const ownerIdentity = getAuthOwnedStateIdentity();
+		const ownerIdentity = screenOwnerIdentity;
 		const dbApi = requireApi();
 		void dbApi.cleanupStaleSessions();
 		const nextOverview = await dbApi.runWithClosedDatabaseRetry(() =>
 			dbApi.getEditableSession(sessionId)
 		);
 
-		if (!loadLifetime.isCurrent(generation) || getAuthOwnedStateIdentity() !== ownerIdentity) {
+		if (!loadLifetime.isCurrent(generation) || !isAuthOwnedStateIdentityCurrent(ownerIdentity)) {
 			return;
 		}
 
@@ -283,14 +293,18 @@
 		});
 
 		overview = nextOverviewWithDraft;
-		writeSessionDataCache(sessionId, {
-			overview: nextOverviewWithDraft,
-			exercises,
-			exerciseUsagePreferences
-		});
+		writeSessionDataCache(
+			sessionId,
+			{
+				overview: nextOverviewWithDraft,
+				exercises,
+				exerciseUsagePreferences
+			},
+			ownerIdentity
+		);
 		isMenuOpen = false;
 		void loadExercisePickerData(generation, ownerIdentity).catch((error) => {
-			if (loadLifetime.isCurrent(generation) && getAuthOwnedStateIdentity() === ownerIdentity) {
+			if (loadLifetime.isCurrent(generation) && isAuthOwnedStateIdentityCurrent(ownerIdentity)) {
 				errorMessage = getErrorMessage(error);
 			}
 		});
@@ -298,7 +312,7 @@
 
 	async function loadExercisePickerData(
 		generation = loadLifetime.getGeneration(),
-		ownerIdentity = getAuthOwnedStateIdentity()
+		ownerIdentity = screenOwnerIdentity
 	) {
 		const dbApi = requireApi();
 		const [nextExercises, nextExerciseUsagePreferences] = await Promise.all([
@@ -306,18 +320,22 @@
 			dbApi.listExerciseUsagePreferences()
 		]);
 
-		if (!loadLifetime.isCurrent(generation) || getAuthOwnedStateIdentity() !== ownerIdentity) {
+		if (!loadLifetime.isCurrent(generation) || !isAuthOwnedStateIdentityCurrent(ownerIdentity)) {
 			return;
 		}
 
 		exercises = nextExercises;
 		exerciseUsagePreferences = nextExerciseUsagePreferences;
-		writeExercisePickerCache(nextExercises, nextExerciseUsagePreferences);
-		writeSessionDataCache(sessionId, {
-			overview,
-			exercises: nextExercises,
-			exerciseUsagePreferences: nextExerciseUsagePreferences
-		});
+		writeExercisePickerCache(nextExercises, nextExerciseUsagePreferences, ownerIdentity);
+		writeSessionDataCache(
+			sessionId,
+			{
+				overview,
+				exercises: nextExercises,
+				exerciseUsagePreferences: nextExerciseUsagePreferences
+			},
+			ownerIdentity
+		);
 	}
 
 	async function runMutation(
@@ -325,36 +343,39 @@
 		afterSuccess?: () => Promise<void> | void
 	) {
 		await runMutationSingleFlight(async () => {
-			const mutationOwnerIdentity = getAuthOwnedStateIdentity();
+			if (!isScreenCurrent()) {
+				return;
+			}
+
 			isSaving = true;
 			errorMessage = '';
 
 			try {
 				await flushPendingSetInputs();
 
-				if (loadLifetime.isDisposed() || getAuthOwnedStateIdentity() !== mutationOwnerIdentity) {
+				if (!isScreenCurrent()) {
 					return;
 				}
 
 				await action();
 
-				if (loadLifetime.isDisposed() || getAuthOwnedStateIdentity() !== mutationOwnerIdentity) {
+				if (!isScreenCurrent()) {
 					return;
 				}
 
 				await loadData();
 
-				if (loadLifetime.isDisposed() || getAuthOwnedStateIdentity() !== mutationOwnerIdentity) {
+				if (!isScreenCurrent()) {
 					return;
 				}
 
 				await afterSuccess?.();
 			} catch (error) {
-				if (!loadLifetime.isDisposed() && getAuthOwnedStateIdentity() === mutationOwnerIdentity) {
+				if (isScreenCurrent()) {
 					errorMessage = getErrorMessage(error);
 				}
 			} finally {
-				if (!loadLifetime.isDisposed() && getAuthOwnedStateIdentity() === mutationOwnerIdentity) {
+				if (isScreenCurrent()) {
 					isSaving = false;
 				}
 			}
@@ -478,11 +499,15 @@
 			})
 		};
 		overview = nextOverview;
-		writeSessionDataCache(sessionId, {
-			overview: nextOverview,
-			exercises,
-			exerciseUsagePreferences
-		});
+		writeSessionDataCache(
+			sessionId,
+			{
+				overview: nextOverview,
+				exercises,
+				exerciseUsagePreferences
+			},
+			screenOwnerIdentity
+		);
 	}
 
 	function applyLocalInput(sessionSetId: string, field: SessionInputField, rawValue: string) {
@@ -533,11 +558,15 @@
 		version: number
 	) {
 		const key = getSetInputKey(sessionSetId, field);
+		const saveOwnerIdentity = screenOwnerIdentity;
 		const previousSave = setInputSaveChains.get(key) ?? Promise.resolve();
 		const savePromise = previousSave
 			.catch(() => undefined)
 			.then(async () => {
-				if (inputVersions.get(key) !== version) {
+				if (
+					inputVersions.get(key) !== version ||
+					!isAuthOwnedStateIdentityCurrent(saveOwnerIdentity)
+				) {
 					return;
 				}
 
@@ -548,17 +577,25 @@
 						dbApi.updateSessionSetInput(sessionSetId, field, rawValue)
 					);
 
-					if (inputVersions.get(key) === version) {
+					if (
+						inputVersions.get(key) === version &&
+						isAuthOwnedStateIdentityCurrent(saveOwnerIdentity)
+					) {
 						clearDraftInput(sessionSetId, field);
 					}
 				} catch (error) {
-					if (inputVersions.get(key) !== version) {
+					if (
+						inputVersions.get(key) !== version ||
+						!isAuthOwnedStateIdentityCurrent(saveOwnerIdentity)
+					) {
 						return;
 					}
 
-					errorMessage = getErrorMessage(error);
+					if (isScreenCurrent()) {
+						errorMessage = getErrorMessage(error);
+					}
 
-					if (api) {
+					if (api && isScreenCurrent()) {
 						await loadData();
 					}
 				}
@@ -580,7 +617,15 @@
 	}
 
 	async function flushPendingSetInputs() {
+		if (!isAuthOwnedStateIdentityCurrent(screenOwnerIdentity)) {
+			return;
+		}
+
 		await waitForPendingSetInputSaves();
+
+		if (!isAuthOwnedStateIdentityCurrent(screenOwnerIdentity)) {
+			return;
+		}
 
 		if (Object.keys(sessionInputDraft.sets).length === 0) {
 			return;
@@ -591,8 +636,10 @@
 		try {
 			await dbApi.runWithClosedDatabaseRetry(() => dbApi.flushSessionInputDraft(sessionId));
 		} finally {
-			sessionInputDraft =
-				readSessionInputDraft(sessionId) ?? createEmptySessionInputDraft(sessionId);
+			if (isAuthOwnedStateIdentityCurrent(screenOwnerIdentity)) {
+				sessionInputDraft =
+					readSessionInputDraft(sessionId) ?? createEmptySessionInputDraft(sessionId);
+			}
 		}
 	}
 
@@ -600,24 +647,38 @@
 		targetPath: string,
 		options?: Parameters<typeof goto>[1]
 	) {
+		if (!isScreenCurrent()) {
+			return;
+		}
+
 		isSaving = true;
 		errorMessage = '';
 
 		try {
 			await flushPendingSetInputs();
+
+			if (!isScreenCurrent()) {
+				return;
+			}
+
 			isReplayingInputNavigation = true;
 			// eslint-disable-next-line svelte/no-navigation-without-resolve
 			await goto(targetPath, options);
 		} catch (error) {
-			errorMessage = getErrorMessage(error);
+			if (isScreenCurrent()) {
+				errorMessage = getErrorMessage(error);
+			}
 		} finally {
 			isReplayingInputNavigation = false;
-			isSaving = false;
+
+			if (isScreenCurrent()) {
+				isSaving = false;
+			}
 		}
 	}
 
 	function handleSetInput(sessionSetId: string, field: SessionInputField, event: Event) {
-		if (isSaving) {
+		if (isSaving || !isScreenCurrent()) {
 			return;
 		}
 
@@ -664,7 +725,7 @@
 	}
 
 	function autofillPreviousSet(sessionSet: SessionSetOverview) {
-		if (isSaving) {
+		if (isSaving || !isScreenCurrent()) {
 			return;
 		}
 
@@ -956,6 +1017,10 @@
 	}
 
 	async function navigateBetweenSessionExercises(targetPath: string) {
+		if (!isScreenCurrent()) {
+			return;
+		}
+
 		isSaving = true;
 		errorMessage = '';
 
@@ -965,9 +1030,13 @@
 			// eslint-disable-next-line svelte/no-navigation-without-resolve
 			await goto(targetPath);
 		} catch (error) {
-			errorMessage = getErrorMessage(error);
+			if (isScreenCurrent()) {
+				errorMessage = getErrorMessage(error);
+			}
 		} finally {
-			isSaving = false;
+			if (isScreenCurrent()) {
+				isSaving = false;
+			}
 		}
 	}
 

@@ -3,7 +3,10 @@
 	import { beforeNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import { getAuthOwnedStateIdentity } from '$lib/auth-owned-state';
+	import {
+		getAuthOwnedStateIdentity,
+		isAuthOwnedStateIdentityCurrent
+	} from '$lib/auth-owned-state';
 	import type { SessionOverview } from '$lib/db';
 	import ProfileMenu from '$lib/features/app/ProfileMenu.svelte';
 	import {
@@ -191,7 +194,14 @@
 
 		sessionTimer = null;
 
-		if (!sessionId || !ownerId || isCheckingAuth || Boolean(authError)) {
+		if (
+			!sessionId ||
+			!ownerId ||
+			!ownerIdentity.isResolved ||
+			ownerIdentity.ownerId !== ownerId ||
+			isCheckingAuth ||
+			Boolean(authError)
+		) {
 			return;
 		}
 
@@ -244,7 +254,15 @@
 
 	$effect(() => {
 		const sessionId = sessionMatch?.[1];
-		const timerSummary = isSessionOverviewPage ? $sessionOverviewActions?.timerSummary : null;
+		const ownerId = currentUser.userId;
+		const actions = isSessionOverviewPage ? $sessionOverviewActions : null;
+		const timerSummary =
+			actions &&
+			ownerId &&
+			actions.ownerIdentity.ownerId === ownerId &&
+			isAuthOwnedStateIdentityCurrent(actions.ownerIdentity)
+				? actions.timerSummary
+				: null;
 
 		if (timerSummary && timerSummary.id === sessionId) {
 			sessionTimer = timerSummary;
@@ -253,7 +271,16 @@
 
 	$effect(() => {
 		const sessionId = sessionMatch?.[1];
-		sessionEditDraft = sessionId && isSessionEditRoute ? readSessionEditDraft(sessionId) : null;
+		const ownerId = currentUser.userId;
+		const ownerIdentity = getAuthOwnedStateIdentity();
+		sessionEditDraft =
+			sessionId &&
+			isSessionEditRoute &&
+			ownerId &&
+			ownerIdentity.isResolved &&
+			ownerIdentity.ownerId === ownerId
+				? readSessionEditDraft(sessionId)
+				: null;
 	});
 
 	$effect(() => {

@@ -1,18 +1,22 @@
-export type AuthOwnedStateIdentity = {
+export type AuthOwnedStateIdentity = Readonly<{
 	ownerId: string | null;
 	generation: number;
 	isResolved: boolean;
-};
+}>;
 
-let identity: AuthOwnedStateIdentity = {
+let identity: AuthOwnedStateIdentity = Object.freeze({
 	ownerId: null,
 	generation: 0,
 	isResolved: false
-};
+});
 const volatileInvalidators = new Set<() => void>();
 
 export function getAuthOwnedStateIdentity() {
 	return identity;
+}
+
+export function isAuthOwnedStateIdentityCurrent(candidate: AuthOwnedStateIdentity) {
+	return identity === candidate;
 }
 
 export function getResolvedAuthOwnerId() {
@@ -26,11 +30,11 @@ export function setAuthOwnedStateIdentity(ownerId: string | null, isResolved: bo
 		return;
 	}
 
-	identity = {
+	identity = Object.freeze({
 		ownerId: nextOwnerId,
 		generation: identity.generation + 1,
 		isResolved
-	};
+	});
 
 	for (const invalidate of volatileInvalidators) {
 		invalidate();

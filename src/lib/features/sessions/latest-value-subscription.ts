@@ -21,6 +21,10 @@ export function startLatestValueSubscription<T>({
 	let loadGeneration = 0;
 
 	async function refresh() {
+		if (disposed || !isCurrent()) {
+			return;
+		}
+
 		const generation = ++loadGeneration;
 
 		try {

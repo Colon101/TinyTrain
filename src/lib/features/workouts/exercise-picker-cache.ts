@@ -1,7 +1,9 @@
 import type { Exercise, ExerciseUsagePreference } from '$lib/db';
 import {
 	getAuthOwnedStateIdentity,
-	registerAuthOwnedVolatileInvalidator
+	isAuthOwnedStateIdentityCurrent,
+	registerAuthOwnedVolatileInvalidator,
+	type AuthOwnedStateIdentity
 } from '$lib/auth-owned-state';
 
 type ExercisePickerCacheEntry = {
@@ -28,12 +30,17 @@ export function readExercisePickerCache() {
 
 export function writeExercisePickerCache(
 	exercises: Exercise[],
-	exerciseUsagePreferences: ExerciseUsagePreference[]
+	exerciseUsagePreferences: ExerciseUsagePreference[],
+	ownerIdentity: AuthOwnedStateIdentity
 ) {
 	const identity = getAuthOwnedStateIdentity();
 
-	if (!identity.isResolved || !identity.ownerId) {
-		return;
+	if (
+		!isAuthOwnedStateIdentityCurrent(ownerIdentity) ||
+		!identity.isResolved ||
+		!identity.ownerId
+	) {
+		return false;
 	}
 
 	exercisePickerCache = {
@@ -43,4 +50,6 @@ export function writeExercisePickerCache(
 		authGeneration: identity.generation,
 		updatedAt: Date.now()
 	};
+
+	return true;
 }

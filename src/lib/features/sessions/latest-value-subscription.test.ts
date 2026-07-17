@@ -58,6 +58,21 @@ describe('latest value subscription', () => {
 		expect(apply).not.toHaveBeenCalled();
 	});
 
+	it('does not start another read when refreshed after disposal', async () => {
+		const load = vi.fn(async () => 'value');
+		const controller = startLatestValueSubscription({
+			subscribe: () => ({ unsubscribe: vi.fn() }),
+			load,
+			apply: vi.fn()
+		});
+
+		await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
+		controller.dispose();
+		await controller.refresh();
+
+		expect(load).toHaveBeenCalledOnce();
+	});
+
 	it('does not publish after its external owner becomes stale', async () => {
 		const pendingRead = deferred<string>();
 		const apply = vi.fn();

@@ -1,7 +1,9 @@
 import type { Exercise, ExerciseUsagePreference, SessionOverview } from '$lib/db';
 import {
 	getAuthOwnedStateIdentity,
-	registerAuthOwnedVolatileInvalidator
+	isAuthOwnedStateIdentityCurrent,
+	registerAuthOwnedVolatileInvalidator,
+	type AuthOwnedStateIdentity
 } from '$lib/auth-owned-state';
 
 type SessionDataCacheEntry = {
@@ -43,12 +45,17 @@ export function readSessionDataCache(sessionId: string) {
 
 export function writeSessionDataCache(
 	sessionId: string,
-	entry: Omit<SessionDataCacheEntry, 'sessionId' | 'updatedAt' | 'ownerId' | 'authGeneration'>
+	entry: Omit<SessionDataCacheEntry, 'sessionId' | 'updatedAt' | 'ownerId' | 'authGeneration'>,
+	ownerIdentity: AuthOwnedStateIdentity
 ) {
 	const identity = getAuthOwnedStateIdentity();
 
-	if (!identity.isResolved || !identity.ownerId) {
-		return;
+	if (
+		!isAuthOwnedStateIdentityCurrent(ownerIdentity) ||
+		!identity.isResolved ||
+		!identity.ownerId
+	) {
+		return false;
 	}
 
 	sessionDataCache.delete(sessionId);
@@ -69,4 +76,6 @@ export function writeSessionDataCache(
 
 		sessionDataCache.delete(leastRecentlyUsedSessionId);
 	}
+
+	return true;
 }
