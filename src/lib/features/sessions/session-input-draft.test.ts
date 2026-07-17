@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setAuthOwnedStateIdentity } from '$lib/auth-owned-state';
 import type { SessionOverview, SessionSetOverview, SessionStatus } from '../../db/models';
 import {
 	applySessionInputDraft,
 	clearSessionInputDraft,
 	getSessionInputDraftKey,
+	migrateLegacySessionInputDraftForCurrentUser,
 	readSessionInputDraft,
 	type SessionInputDraft,
 	type SessionInputDraftSet,
@@ -11,6 +13,10 @@ import {
 } from './session-input-draft';
 
 vi.mock('$app/environment', () => ({ browser: true }));
+
+beforeEach(() => {
+	setAuthOwnedStateIdentity('user-a', true);
+});
 
 const timestamp = '2026-07-11T10:00:00.000Z';
 
@@ -187,6 +193,68 @@ describe('applySessionInputDraft', () => {
 describe('session input draft storage', () => {
 	afterEach(() => {
 		vi.unstubAllGlobals();
+	});
+
+	it('uses a different draft key for each authenticated owner', () => {
+		const userAKey = getSessionInputDraftKey('shared-session-id');
+
+		setAuthOwnedStateIdentity('user-b', true);
+
+		expect(userAKey).toBe('tinytrain:session-input-draft:user-a:shared-session-id');
+		expect(getSessionInputDraftKey('shared-session-id')).toBe(
+			'tinytrain:session-input-draft:user-b:shared-session-id'
+		);
+	});
+
+	it('isolates drafts when two owners share the same session id', () => {
+		const storedValues = new Map<string, string>();
+		vi.stubGlobal('localStorage', {
+			getItem: (key: string) => storedValues.get(key) ?? null,
+			setItem: (key: string, value: string) => storedValues.set(key, value),
+			removeItem: (key: string) => storedValues.delete(key)
+		});
+		vi.stubGlobal('window', { dispatchEvent: vi.fn() });
+		writeSessionInputDraft(buildDraft({ weightInput: '100' }));
+
+		setAuthOwnedStateIdentity('user-b', true);
+		expect(readSessionInputDraft('session-1')).toBeNull();
+		writeSessionInputDraft(buildDraft({ weightInput: '200' }));
+
+		setAuthOwnedStateIdentity('user-a', true);
+		expect(readSessionInputDraft('session-1')?.sets['set-1']?.weightInput).toBe('100');
+	});
+
+	it('claims a legacy draft only after the signed-in session has been confirmed', () => {
+		const storedValues = new Map<string, string>([
+			[
+				'tinytrain:session-input-draft:session-1',
+				JSON.stringify(buildDraft({ weightInput: '102.5' }))
+			]
+		]);
+		vi.stubGlobal('localStorage', {
+			getItem: (key: string) => storedValues.get(key) ?? null,
+			setItem: (key: string, value: string) => storedValues.set(key, value),
+			removeItem: (key: string) => storedValues.delete(key)
+		});
+		vi.stubGlobal('window', { dispatchEvent: vi.fn() });
+
+		expect(readSessionInputDraft('session-1')).toBeNull();
+		expect(migrateLegacySessionInputDraftForCurrentUser('session-1')).toBe(true);
+		expect(readSessionInputDraft('session-1')?.sets['set-1']?.weightInput).toBe('102.5');
+		expect(storedValues.has('tinytrain:session-input-draft:session-1')).toBe(false);
+	});
+
+	it('does not read or write drafts while authentication is unresolved', () => {
+		const getItem = vi.fn();
+		const setItem = vi.fn();
+		vi.stubGlobal('localStorage', { getItem, setItem });
+		setAuthOwnedStateIdentity(null, false);
+
+		expect(readSessionInputDraft('session-1')).toBeNull();
+		writeSessionInputDraft(buildDraft({ weightInput: '102.5' }));
+
+		expect(getItem).not.toHaveBeenCalled();
+		expect(setItem).not.toHaveBeenCalled();
 	});
 
 	it('discards persisted sets containing non-string input fields', () => {

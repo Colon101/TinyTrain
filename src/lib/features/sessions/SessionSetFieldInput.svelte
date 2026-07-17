@@ -17,6 +17,7 @@
 		previousValue,
 		delta,
 		indicatorPosition,
+		disabled = false,
 		onInput,
 		onKeydown
 	}: {
@@ -29,6 +30,7 @@
 		previousValue?: number;
 		delta: SessionFieldDelta;
 		indicatorPosition: ProgressIndicatorPosition;
+		disabled?: boolean;
 		onInput: (event: Event) => void;
 		onKeydown: (event: KeyboardEvent) => void;
 	} = $props();
@@ -110,6 +112,7 @@
 		aria-describedby={delta.label ? deltaDescriptionId : undefined}
 		{value}
 		placeholder={formatPlaceholder(previousValue)}
+		{disabled}
 		oninput={onInput}
 		onkeydown={onKeydown}
 	/>

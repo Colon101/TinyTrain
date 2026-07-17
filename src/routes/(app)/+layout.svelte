@@ -3,16 +3,22 @@
 	import { beforeNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
+	import {
+		getAuthOwnedStateIdentity,
+		isAuthOwnedStateIdentityCurrent
+	} from '$lib/auth-owned-state';
 	import type { SessionOverview } from '$lib/db';
 	import ProfileMenu from '$lib/features/app/ProfileMenu.svelte';
 	import {
 		SESSION_EDIT_DISCARD_MESSAGE,
 		clearSessionEditDraft,
+		migrateLegacySessionEditDraftForCurrentUser,
 		readSessionEditDraft,
 		sessionOverviewActions
 	} from '$lib/features/sessions/session-overview-actions';
 	import type { SessionEditDraft } from '$lib/features/sessions/session-overview-actions';
 	import { formatDuration, formatSessionStatus } from '$lib/features/sessions/session-format';
+	import { startLatestValueSubscription } from '$lib/features/sessions/latest-value-subscription';
 	import type { CloudUser } from '$lib/features/app/user';
 	import GlobalSessionInactivityMonitor from '$lib/features/sessions/GlobalSessionInactivityMonitor.svelte';
 	import Icon from '$lib/ui/Icon.svelte';
@@ -181,12 +187,21 @@
 
 	$effect(() => {
 		const sessionId = sessionMatch?.[1];
-		let cancelled = false;
-		let subscription: SubscriptionLike | null = null;
+		const ownerId = currentUser.userId;
+		const ownerIdentity = getAuthOwnedStateIdentity();
+		let disposed = false;
+		let timerSubscription: ReturnType<typeof startLatestValueSubscription> | null = null;
 
 		sessionTimer = null;
 
-		if (!sessionId || isCheckingAuth || Boolean(authError)) {
+		if (
+			!sessionId ||
+			!ownerId ||
+			!ownerIdentity.isResolved ||
+			ownerIdentity.ownerId !== ownerId ||
+			isCheckingAuth ||
+			Boolean(authError)
+		) {
 			return;
 		}
 
@@ -196,44 +211,58 @@
 			try {
 				const api = (await import('$lib/db')) as DatabaseApi;
 
-				async function loadTimer() {
-					const timer = await api.getSessionTimerSummary(activeSessionId);
-
-					if (!cancelled) {
-						sessionTimer = timer;
-					}
+				if (disposed || getAuthOwnedStateIdentity() !== ownerIdentity) {
+					return;
 				}
 
-				await loadTimer();
+				timerSubscription = startLatestValueSubscription({
+					subscribe: (onChange) =>
+						api.subscribeToDatabaseChanges(
+							['workoutSessions', 'sessionExercises', 'sessionSets'],
+							onChange,
+							{ debounceMs: 250 }
+						),
+					load: () => api.getSessionTimerSummary(activeSessionId),
+					isCurrent: () => getAuthOwnedStateIdentity() === ownerIdentity,
+					apply: (timer) => {
+						sessionTimer = timer;
+
+						if (timer) {
+							migrateLegacySessionEditDraftForCurrentUser(activeSessionId);
+							sessionEditDraft = isSessionEditRoute ? readSessionEditDraft(activeSessionId) : null;
+						}
+					},
+					onError: () => {
+						sessionTimer = null;
+					}
+				});
 				void api
 					.hydrateVisibleScope({ type: 'session', sessionId: activeSessionId })
 					.catch(() => undefined);
-
-				if (!cancelled) {
-					subscription = api.subscribeToDatabaseChanges(
-						['workoutSessions', 'sessionExercises', 'sessionSets'],
-						() => {
-							void loadTimer();
-						},
-						{ debounceMs: 250 }
-					);
-				}
 			} catch {
-				if (!cancelled) {
+				if (!disposed && getAuthOwnedStateIdentity() === ownerIdentity) {
 					sessionTimer = null;
 				}
 			}
 		})();
 
 		return () => {
-			cancelled = true;
-			subscription?.unsubscribe();
+			disposed = true;
+			timerSubscription?.dispose();
 		};
 	});
 
 	$effect(() => {
 		const sessionId = sessionMatch?.[1];
-		const timerSummary = isSessionOverviewPage ? $sessionOverviewActions?.timerSummary : null;
+		const ownerId = currentUser.userId;
+		const actions = isSessionOverviewPage ? $sessionOverviewActions : null;
+		const timerSummary =
+			actions &&
+			ownerId &&
+			actions.ownerIdentity.ownerId === ownerId &&
+			isAuthOwnedStateIdentityCurrent(actions.ownerIdentity)
+				? actions.timerSummary
+				: null;
 
 		if (timerSummary && timerSummary.id === sessionId) {
 			sessionTimer = timerSummary;
@@ -242,7 +271,16 @@
 
 	$effect(() => {
 		const sessionId = sessionMatch?.[1];
-		sessionEditDraft = sessionId && isSessionEditRoute ? readSessionEditDraft(sessionId) : null;
+		const ownerId = currentUser.userId;
+		const ownerIdentity = getAuthOwnedStateIdentity();
+		sessionEditDraft =
+			sessionId &&
+			isSessionEditRoute &&
+			ownerId &&
+			ownerIdentity.isResolved &&
+			ownerIdentity.ownerId === ownerId
+				? readSessionEditDraft(sessionId)
+				: null;
 	});
 
 	$effect(() => {

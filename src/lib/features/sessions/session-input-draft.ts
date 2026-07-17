@@ -9,6 +9,7 @@ import {
 	createEmptySessionInputDraft,
 	getSessionInputDraftKey,
 	isSessionInputDraftSet,
+	migrateLegacySessionInputDraftForCurrentUser,
 	readSessionInputDraft,
 	SESSION_INPUT_DRAFT_CHANGE_EVENT,
 	writeSessionInputDraft,
@@ -22,6 +23,7 @@ export {
 	clearSessionInputDraft,
 	createEmptySessionInputDraft,
 	getSessionInputDraftKey,
+	migrateLegacySessionInputDraftForCurrentUser,
 	readSessionInputDraft,
 	SESSION_INPUT_DRAFT_CHANGE_EVENT,
 	writeSessionInputDraft

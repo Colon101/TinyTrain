@@ -4,6 +4,10 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onDestroy, onMount, untrack } from 'svelte';
+	import {
+		getAuthOwnedStateIdentity,
+		isAuthOwnedStateIdentityCurrent
+	} from '$lib/auth-owned-state';
 	import type {
 		Exercise,
 		ExerciseUsagePreference,
@@ -25,15 +29,21 @@
 		SESSION_EDIT_DISCARD_MESSAGE,
 		clearSessionEditDraft,
 		clearSessionOverviewActions,
+		migrateLegacySessionEditDraftForCurrentUser,
 		readSessionEditDraft,
-		setSessionOverviewActions
+		setSessionOverviewActions,
+		writeSessionEditDraft
 	} from './session-overview-actions';
-	import { writeSessionEditDraft } from './session-overview-actions';
 	import { formatDayHeading, formatDuration } from './session-format';
 	import { hasLoggedValues } from './session-overview';
-	import { applySessionInputDraft } from './session-input-draft';
+	import {
+		applySessionInputDraft,
+		migrateLegacySessionInputDraftForCurrentUser
+	} from './session-input-draft';
 	import { shareOrDownloadSessionImage } from './session-share-image';
 	import { readSessionDataCache, writeSessionDataCache } from './session-data-cache';
+	import { createSessionMutationFence } from './session-mutation-fence';
+	import { createSessionScreenLoadLifetime } from './session-screen-load-lifetime';
 
 	type DatabaseApi = typeof import('$lib/db');
 	type PickerMode = 'add' | 'swap';
@@ -58,8 +68,11 @@
 
 	const DRAG_SCROLL_EDGE_PX = 96;
 	const DRAG_SCROLL_MAX_STEP_PX = 18;
+	const runMutationSingleFlight = createSessionMutationFence();
+	const loadLifetime = createSessionScreenLoadLifetime();
 
 	let { sessionId }: { sessionId: string } = $props();
+	const screenOwnerIdentity = untrack(() => getAuthOwnedStateIdentity());
 	const cachedSessionData = untrack(() => readSessionDataCache(sessionId));
 	const cachedExercisePickerData = untrack(() => readExercisePickerCache());
 
@@ -98,7 +111,6 @@
 	let selectedPickerExerciseIds = $state<string[]>([]);
 	let newExerciseName = $state('');
 	let isNewExerciseUnilateral = $state(false);
-	let loadDataGeneration = 0;
 	let openExerciseMenuId = $state('');
 	let draggedSessionExerciseId = $state('');
 	let dragStartSessionExerciseIds = $state<string[]>([]);
@@ -199,7 +211,6 @@
 	);
 
 	onMount(() => {
-		let disposed = false;
 		let databaseSubscription: { unsubscribe(): void } | null = null;
 
 		function handlePointerDown(event: PointerEvent) {
@@ -216,7 +227,7 @@
 			try {
 				const dbApi = await import('$lib/db');
 
-				if (disposed) {
+				if (!isScreenCurrent()) {
 					return;
 				}
 
@@ -224,21 +235,30 @@
 				databaseSubscription = dbApi.subscribeToDatabaseChanges(
 					['workoutSessions', 'sessionExercises', 'sessionSets', 'exercises'],
 					() => {
-						void loadData();
+						if (isScreenCurrent()) {
+							void loadData();
+						}
 					},
 					{ debounceMs: 250 }
 				);
 				await loadData();
-				void dbApi.hydrateVisibleScope({ type: 'session', sessionId }).catch(() => undefined);
+
+				if (isScreenCurrent()) {
+					void dbApi.hydrateVisibleScope({ type: 'session', sessionId }).catch(() => undefined);
+				}
 			} catch (error) {
-				errorMessage = getErrorMessage(error);
+				if (isScreenCurrent()) {
+					errorMessage = getErrorMessage(error);
+				}
 			} finally {
-				isLoading = false;
+				if (isScreenCurrent()) {
+					isLoading = false;
+				}
 			}
 		})();
 
 		return () => {
-			disposed = true;
+			loadLifetime.dispose();
 			databaseSubscription?.unsubscribe();
 			window.removeEventListener('pointerdown', handlePointerDown, { capture: true });
 			stopDragAutoScroll();
@@ -274,20 +294,34 @@
 		return api;
 	}
 
+	function isScreenCurrent() {
+		return !loadLifetime.isDisposed() && isAuthOwnedStateIdentityCurrent(screenOwnerIdentity);
+	}
+
 	function isCompletedEditRoute() {
 		return page.url.searchParams.get('edit') === '1';
 	}
 
 	async function loadData() {
-		const generation = ++loadDataGeneration;
+		if (!isScreenCurrent()) {
+			return;
+		}
+
+		const generation = loadLifetime.beginLoad();
+		const ownerIdentity = screenOwnerIdentity;
 		const dbApi = requireApi();
 		void dbApi.cleanupStaleSessions();
 		const nextOverview = await dbApi.runWithClosedDatabaseRetry(() =>
 			dbApi.getEditableSession(sessionId)
 		);
 
-		if (generation !== loadDataGeneration) {
+		if (!loadLifetime.isCurrent(generation) || !isAuthOwnedStateIdentityCurrent(ownerIdentity)) {
 			return;
+		}
+
+		if (nextOverview) {
+			migrateLegacySessionInputDraftForCurrentUser(sessionId);
+			migrateLegacySessionEditDraftForCurrentUser(sessionId);
 		}
 
 		const nextOverviewWithDraft = applySessionInputDraft(nextOverview, undefined, {
@@ -295,55 +329,92 @@
 		});
 
 		overview = nextOverviewWithDraft;
-		writeSessionDataCache(sessionId, {
-			overview: nextOverviewWithDraft,
-			exercises,
-			exerciseUsagePreferences
-		});
+		writeSessionDataCache(
+			sessionId,
+			{
+				overview: nextOverviewWithDraft,
+				exercises,
+				exerciseUsagePreferences
+			},
+			ownerIdentity
+		);
 		nowMs = Date.now();
 		openExerciseMenuId = '';
-		void loadExercisePickerData(generation).catch((error) => {
-			errorMessage = getErrorMessage(error);
+		void loadExercisePickerData(generation, ownerIdentity).catch((error) => {
+			if (loadLifetime.isCurrent(generation) && isAuthOwnedStateIdentityCurrent(ownerIdentity)) {
+				errorMessage = getErrorMessage(error);
+			}
 		});
 	}
 
-	async function loadExercisePickerData(generation = loadDataGeneration) {
+	async function loadExercisePickerData(
+		generation = loadLifetime.getGeneration(),
+		ownerIdentity = screenOwnerIdentity
+	) {
 		const dbApi = requireApi();
 		const [nextExercises, nextExerciseUsagePreferences] = await Promise.all([
 			dbApi.listExercises(),
 			dbApi.listExerciseUsagePreferences()
 		]);
 
-		if (generation !== loadDataGeneration) {
+		if (!loadLifetime.isCurrent(generation) || !isAuthOwnedStateIdentityCurrent(ownerIdentity)) {
 			return;
 		}
 
 		exercises = nextExercises;
 		exerciseUsagePreferences = nextExerciseUsagePreferences;
-		writeExercisePickerCache(nextExercises, nextExerciseUsagePreferences);
-		writeSessionDataCache(sessionId, {
-			overview,
-			exercises: nextExercises,
-			exerciseUsagePreferences: nextExerciseUsagePreferences
+		writeExercisePickerCache(nextExercises, nextExerciseUsagePreferences, ownerIdentity);
+		writeSessionDataCache(
+			sessionId,
+			{
+				overview,
+				exercises: nextExercises,
+				exerciseUsagePreferences: nextExerciseUsagePreferences
+			},
+			ownerIdentity
+		);
+	}
+
+	async function runMutation(
+		action: () => Promise<void>,
+		afterSuccess?: () => Promise<void> | void
+	) {
+		await runMutationSingleFlight(async () => {
+			if (!isScreenCurrent()) {
+				return;
+			}
+
+			isSaving = true;
+			errorMessage = '';
+
+			try {
+				await action();
+
+				if (!isScreenCurrent()) {
+					return;
+				}
+
+				await afterSuccess?.();
+
+				if (!isScreenCurrent()) {
+					return;
+				}
+
+				await loadData();
+			} catch (error) {
+				if (isScreenCurrent()) {
+					errorMessage = getErrorMessage(error);
+				}
+			} finally {
+				if (isScreenCurrent()) {
+					isSaving = false;
+				}
+			}
 		});
 	}
 
-	async function runMutation(action: () => Promise<void>) {
-		isSaving = true;
-		errorMessage = '';
-
-		try {
-			await action();
-			await loadData();
-		} catch (error) {
-			errorMessage = getErrorMessage(error);
-		} finally {
-			isSaving = false;
-		}
-	}
-
 	function writeStoredEditDraft() {
-		if (!browser || !overview || !isEditMode) {
+		if (!browser || !overview || !isEditMode || !isScreenCurrent()) {
 			return;
 		}
 
@@ -354,7 +425,7 @@
 	}
 
 	function clearStoredEditDraft() {
-		if (!browser) {
+		if (!browser || !isScreenCurrent()) {
 			return;
 		}
 
@@ -368,14 +439,19 @@
 	}
 
 	async function syncEditUrl(editMode: boolean) {
+		if (!isScreenCurrent()) {
+			return false;
+		}
+
 		const nextPath = getSessionOverviewPath(editMode);
 
 		if (`${page.url.pathname}${page.url.search}` === nextPath) {
-			return;
+			return true;
 		}
 
 		// eslint-disable-next-line svelte/no-navigation-without-resolve
 		await goto(nextPath, { replaceState: true, keepFocus: true, noScroll: true });
+		return isScreenCurrent();
 	}
 
 	function getDurationSeconds(startedAt?: string | null, completedAt?: string | null) {
@@ -410,7 +486,7 @@
 	}
 
 	function enterEditMode() {
-		if (!overview || !canEditSession) {
+		if (!overview || !canEditSession || !isScreenCurrent()) {
 			return;
 		}
 
@@ -428,7 +504,9 @@
 		try {
 			await loadData();
 		} catch (error) {
-			errorMessage = getErrorMessage(error);
+			if (isScreenCurrent()) {
+				errorMessage = getErrorMessage(error);
+			}
 		}
 	}
 
@@ -537,7 +615,10 @@
 			return;
 		}
 
-		await syncEditUrl(false);
+		if (!(await syncEditUrl(false))) {
+			return;
+		}
+
 		clearStoredEditDraft();
 		isEditMode = false;
 		isTimeEditorOpen = false;
@@ -550,7 +631,10 @@
 		}
 
 		if (!hasUnsavedTimeChanges) {
-			await syncEditUrl(false);
+			if (!(await syncEditUrl(false))) {
+				return;
+			}
+
 			clearStoredEditDraft();
 			isEditMode = false;
 			isTimeEditorOpen = false;
@@ -562,13 +646,20 @@
 		const nextStartedAt = draftStartedAt;
 		const nextCompletedAt = draftCompletedAt || undefined;
 
-		void runMutation(async () => {
-			await requireApi().updateWorkoutSessionTiming(summaryId, nextStartedAt, nextCompletedAt);
-			clearStoredEditDraft();
-			await syncEditUrl(false);
-			isEditMode = false;
-			isTimeEditorOpen = false;
-		});
+		void runMutation(
+			async () => {
+				await requireApi().updateWorkoutSessionTiming(summaryId, nextStartedAt, nextCompletedAt);
+			},
+			async () => {
+				if (!(await syncEditUrl(false))) {
+					return;
+				}
+
+				clearStoredEditDraft();
+				isEditMode = false;
+				isTimeEditorOpen = false;
+			}
+		);
 	}
 
 	function openExercisePicker(mode: PickerMode, nextTargetSessionExerciseId = '') {
@@ -737,16 +828,20 @@
 		const summaryId = overview.summary.id;
 		const summaryDayKey = overview.summary.dayKey;
 
-		void runMutation(async () => {
-			await requireApi().deleteWorkoutSession(summaryId);
-			const todayDayKey = new Date().toLocaleDateString('sv-SE');
-			const homePath =
-				summaryDayKey === todayDayKey ? '/' : `/?date=${encodeURIComponent(summaryDayKey)}`;
-			// eslint-disable-next-line svelte/no-navigation-without-resolve
-			await goto(homePath === '/' ? resolve('/') : `${resolve('/')}${homePath.slice(1)}`, {
-				replaceState: true
-			});
-		});
+		void runMutation(
+			async () => {
+				await requireApi().deleteWorkoutSession(summaryId);
+			},
+			async () => {
+				const todayDayKey = new Date().toLocaleDateString('sv-SE');
+				const homePath =
+					summaryDayKey === todayDayKey ? '/' : `/?date=${encodeURIComponent(summaryDayKey)}`;
+				// eslint-disable-next-line svelte/no-navigation-without-resolve
+				await goto(homePath === '/' ? resolve('/') : `${resolve('/')}${homePath.slice(1)}`, {
+					replaceState: true
+				});
+			}
+		);
 	}
 
 	function handleResetSession() {
@@ -788,7 +883,12 @@
 	}
 
 	async function handleShareSession() {
-		if (!overview || overview.summary.status !== 'completed' || isSharingSession) {
+		if (
+			!overview ||
+			overview.summary.status !== 'completed' ||
+			isSharingSession ||
+			!isScreenCurrent()
+		) {
 			return;
 		}
 
@@ -800,15 +900,25 @@
 				? await requireApi().getEditableSession(overview.previousSummary.id)
 				: null;
 
+			if (!isScreenCurrent()) {
+				return;
+			}
+
 			await shareOrDownloadSessionImage(overview, nowMs, previousOverview);
 		} catch (error) {
+			if (!isScreenCurrent()) {
+				return;
+			}
+
 			if (error instanceof DOMException && error.name === 'AbortError') {
 				return;
 			}
 
 			errorMessage = getErrorMessage(error);
 		} finally {
-			isSharingSession = false;
+			if (isScreenCurrent()) {
+				isSharingSession = false;
+			}
 		}
 	}
 
@@ -859,11 +969,15 @@
 				)
 		};
 		overview = nextOverview;
-		writeSessionDataCache(sessionId, {
-			overview: nextOverview,
-			exercises,
-			exerciseUsagePreferences
-		});
+		writeSessionDataCache(
+			sessionId,
+			{
+				overview: nextOverview,
+				exercises,
+				exerciseUsagePreferences
+			},
+			screenOwnerIdentity
+		);
 	}
 
 	function cacheDragDropTargets(excludedSessionExerciseId: string) {
@@ -1142,13 +1256,17 @@
 			try {
 				await requireApi().reorderSessionExercises(summaryId, finalSessionExerciseIds);
 			} catch (error) {
-				if (overview === optimisticOverview) {
+				if (isScreenCurrent() && overview === optimisticOverview) {
 					overview = overviewBeforeReorder;
-					writeSessionDataCache(sessionId, {
-						overview: overviewBeforeReorder,
-						exercises,
-						exerciseUsagePreferences
-					});
+					writeSessionDataCache(
+						sessionId,
+						{
+							overview: overviewBeforeReorder,
+							exercises,
+							exerciseUsagePreferences
+						},
+						screenOwnerIdentity
+					);
 				}
 
 				throw error;
@@ -1179,12 +1297,13 @@
 	});
 
 	$effect(() => {
-		if (!overview) {
+		if (!overview || !isScreenCurrent()) {
 			clearSessionOverviewActions();
 			return;
 		}
 
 		setSessionOverviewActions({
+			ownerIdentity: screenOwnerIdentity,
 			status: overview.summary.status,
 			timerSummary: timerSummary ?? overview.summary,
 			isEditMode,

@@ -2,6 +2,10 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
+	import {
+		getAuthOwnedStateIdentity,
+		isAuthOwnedStateIdentityCurrent
+	} from '$lib/auth-owned-state';
 	import ExercisePickerSheet from './ExercisePickerSheet.svelte';
 	import { readExercisePickerCache, writeExercisePickerCache } from './exercise-picker-cache';
 	import WorkoutDetailView from './WorkoutDetailView.svelte';
@@ -363,6 +367,7 @@
 		}
 
 		const generation = ++exercisePickerLoadGeneration;
+		const ownerIdentity = getAuthOwnedStateIdentity();
 		const api = requireDbApi();
 		let nextExercises: Exercise[];
 		let nextExerciseUsagePreferences: ExerciseUsagePreference[];
@@ -375,6 +380,7 @@
 		} catch (error) {
 			if (
 				generation !== exercisePickerLoadGeneration ||
+				!isAuthOwnedStateIdentityCurrent(ownerIdentity) ||
 				!isCurrentPageDataLoad(pageDataGeneration, routeWorkoutIdAtStart)
 			) {
 				return;
@@ -385,6 +391,7 @@
 
 		if (
 			generation !== exercisePickerLoadGeneration ||
+			!isAuthOwnedStateIdentityCurrent(ownerIdentity) ||
 			!isCurrentPageDataLoad(pageDataGeneration, routeWorkoutIdAtStart)
 		) {
 			return;
@@ -392,7 +399,7 @@
 
 		exercises = nextExercises;
 		exerciseUsagePreferences = nextExerciseUsagePreferences;
-		writeExercisePickerCache(nextExercises, nextExerciseUsagePreferences);
+		writeExercisePickerCache(nextExercises, nextExerciseUsagePreferences, ownerIdentity);
 	}
 
 	async function loadSelectedWorkoutExercises(

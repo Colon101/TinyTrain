@@ -15,4 +15,6 @@
 	<title>Session Exercise | TinyTrain</title>
 </svelte:head>
 
-<SessionExerciseScreen sessionId={data.sessionId} sessionExerciseId={data.sessionExerciseId} />
+{#key data.sessionId}
+	<SessionExerciseScreen sessionId={data.sessionId} sessionExerciseId={data.sessionExerciseId} />
+{/key}

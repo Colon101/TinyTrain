@@ -1,5 +1,6 @@
 import { writable } from 'svelte/store';
 import type { SessionOverview, SessionStatus } from '$lib/db';
+import { getResolvedAuthOwnerId, type AuthOwnedStateIdentity } from '$lib/auth-owned-state';
 
 export type SessionOverviewTimerSummary = Pick<
 	SessionOverview['summary'],
@@ -16,24 +17,38 @@ export type SessionEditDraft = {
 };
 
 export function getSessionEditDraftKey(sessionId: string) {
+	const ownerId = getResolvedAuthOwnerId();
+
+	return ownerId ? `${SESSION_EDIT_DRAFT_PREFIX}${encodeURIComponent(ownerId)}:${sessionId}` : null;
+}
+
+export function getLegacySessionEditDraftKey(sessionId: string) {
 	return `${SESSION_EDIT_DRAFT_PREFIX}${sessionId}`;
+}
+
+function parseSessionEditDraft(rawDraft: string | null): SessionEditDraft | null {
+	try {
+		const parsedDraft = rawDraft ? (JSON.parse(rawDraft) as Partial<SessionEditDraft>) : null;
+
+		return parsedDraft &&
+			typeof parsedDraft.startedAt === 'string' &&
+			typeof parsedDraft.completedAt === 'string'
+			? { startedAt: parsedDraft.startedAt, completedAt: parsedDraft.completedAt }
+			: null;
+	} catch {
+		return null;
+	}
 }
 
 export function readSessionEditDraft(sessionId: string): SessionEditDraft | null {
 	try {
-		const rawDraft = globalThis.localStorage?.getItem(getSessionEditDraftKey(sessionId)) ?? null;
-		const parsedDraft = rawDraft ? (JSON.parse(rawDraft) as Partial<SessionEditDraft>) : null;
+		const draftKey = getSessionEditDraftKey(sessionId);
 
-		if (
-			parsedDraft &&
-			typeof parsedDraft.startedAt === 'string' &&
-			typeof parsedDraft.completedAt === 'string'
-		) {
-			return {
-				startedAt: parsedDraft.startedAt,
-				completedAt: parsedDraft.completedAt
-			};
+		if (!draftKey) {
+			return null;
 		}
+
+		return parseSessionEditDraft(globalThis.localStorage?.getItem(draftKey) ?? null);
 	} catch {
 		clearSessionEditDraft(sessionId);
 	}
@@ -41,9 +56,41 @@ export function readSessionEditDraft(sessionId: string): SessionEditDraft | null
 	return null;
 }
 
+/** Claims the old unscoped recovery copy only after the current user's DB confirms the session. */
+export function migrateLegacySessionEditDraftForCurrentUser(sessionId: string) {
+	const draftKey = getSessionEditDraftKey(sessionId);
+
+	if (!draftKey) {
+		return false;
+	}
+
+	try {
+		if (parseSessionEditDraft(globalThis.localStorage?.getItem(draftKey) ?? null)) {
+			return false;
+		}
+
+		const legacyKey = getLegacySessionEditDraftKey(sessionId);
+		const legacyDraft = parseSessionEditDraft(globalThis.localStorage?.getItem(legacyKey) ?? null);
+
+		if (!legacyDraft) {
+			return false;
+		}
+
+		globalThis.localStorage?.setItem(draftKey, JSON.stringify(legacyDraft));
+		globalThis.localStorage?.removeItem(legacyKey);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export function writeSessionEditDraft(sessionId: string, draft: SessionEditDraft) {
 	try {
-		globalThis.localStorage?.setItem(getSessionEditDraftKey(sessionId), JSON.stringify(draft));
+		const draftKey = getSessionEditDraftKey(sessionId);
+
+		if (draftKey) {
+			globalThis.localStorage?.setItem(draftKey, JSON.stringify(draft));
+		}
 	} catch {
 		// Optional edit-draft persistence must not block saving or leaving edit mode.
 	}
@@ -51,13 +98,18 @@ export function writeSessionEditDraft(sessionId: string, draft: SessionEditDraft
 
 export function clearSessionEditDraft(sessionId: string) {
 	try {
-		globalThis.localStorage?.removeItem(getSessionEditDraftKey(sessionId));
+		const draftKey = getSessionEditDraftKey(sessionId);
+
+		if (draftKey) {
+			globalThis.localStorage?.removeItem(draftKey);
+		}
 	} catch {
 		// Optional edit-draft cleanup must not block the underlying action.
 	}
 }
 
 export type SessionOverviewActions = {
+	ownerIdentity: AuthOwnedStateIdentity;
 	status: SessionStatus;
 	timerSummary: SessionOverviewTimerSummary;
 	isEditMode: boolean;

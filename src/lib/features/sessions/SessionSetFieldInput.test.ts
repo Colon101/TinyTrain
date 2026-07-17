@@ -30,6 +30,7 @@ describe('SessionSetFieldInput', () => {
 		expect(body).toContain('placeholder="100"');
 		expect(body).toContain('data-delta-position="bottom-left"');
 		expect(body).toContain('2.5 higher than the previous session');
+		expect(body).not.toMatch(/<input[^>]*\sdisabled(?:=""|(?=[\s>]))/);
 	});
 
 	it('retains the numeric keyboard pattern without adding a comparison description', () => {
@@ -53,5 +54,25 @@ describe('SessionSetFieldInput', () => {
 		expect(body).toContain('pattern="[0-9]*"');
 		expect(body).not.toContain('aria-describedby');
 		expect(body).not.toContain('previous session');
+	});
+
+	it('uses native disabled semantics during a destructive save', () => {
+		const { body } = render(SessionSetFieldInput, {
+			props: {
+				setId: 'set-3',
+				field: 'rir',
+				inputMode: 'numeric',
+				ariaLabel: 'Set 03 RIR',
+				value: '2',
+				delta: { state: 'empty', label: '' },
+				indicatorPosition: 'bottom-right',
+				disabled: true,
+				onInput: () => undefined,
+				onKeydown: () => undefined
+			}
+		});
+
+		expect(body).toMatch(/<input[^>]*\sdisabled(?:=""|(?=[\s>]))/);
+		expect(body).toContain('aria-label="Set 03 RIR"');
 	});
 });
