@@ -8,7 +8,6 @@ import type {
 	ExerciseDetail,
 	ExerciseHistoryEntry,
 	ExerciseListItem,
-	ExerciseResetEvent,
 	ExerciseSource,
 	ExerciseUsagePreference,
 	SessionExercise,
@@ -68,20 +67,6 @@ export function getSessionExercisePerformedAt(
 	return (
 		session.completedAt ?? session.startedAt ?? sessionExercise.performedAt ?? session.createdAt
 	);
-}
-
-export function buildLatestResetAtByExerciseId(resetEvents: ExerciseResetEvent[]) {
-	const latestResetAtByExerciseId = new Map<string, string>();
-
-	for (const resetEvent of resetEvents) {
-		const currentValue = latestResetAtByExerciseId.get(resetEvent.exerciseId);
-
-		if (!currentValue || currentValue < resetEvent.resetAt) {
-			latestResetAtByExerciseId.set(resetEvent.exerciseId, resetEvent.resetAt);
-		}
-	}
-
-	return latestResetAtByExerciseId;
 }
 
 export async function listEquivalentExerciseIds(exerciseId: string) {
@@ -434,24 +419,12 @@ export async function listExerciseItems(): Promise<ExerciseListItem[]> {
 		});
 	}
 
-	const exerciseIds = [...itemsByNormalizedName.values()].map((item) => item.exercise.id);
-	const resetEvents =
-		exerciseIds.length === 0
-			? []
-			: await db.exerciseResetEvents.where('exerciseId').anyOf(exerciseIds).toArray();
-	const latestResetAtByExerciseId = buildLatestResetAtByExerciseId(resetEvents);
-
-	return [...itemsByNormalizedName.values()]
-		.map((item) => ({
-			...item,
-			latestResetAt: latestResetAtByExerciseId.get(item.exercise.id)
-		}))
-		.sort(
-			(first, second) =>
-				compareOptionalRecency(first.lastPerformedAt, second.lastPerformedAt) ||
-				second.historyCount - first.historyCount ||
-				first.exercise.name.localeCompare(second.exercise.name)
-		);
+	return [...itemsByNormalizedName.values()].sort(
+		(first, second) =>
+			compareOptionalRecency(first.lastPerformedAt, second.lastPerformedAt) ||
+			second.historyCount - first.historyCount ||
+			first.exercise.name.localeCompare(second.exercise.name)
+	);
 }
 
 export async function getExercise(exerciseId: string) {
@@ -560,34 +533,6 @@ export async function setExerciseUnilateral(exerciseId: string, unilateral: bool
 	return withExerciseDefaults({ ...exercise, unilateral, updatedAt });
 }
 
-export async function recordExerciseReset(exerciseId: string) {
-	requireLoggedInUser();
-
-	const exercise = await getExercise(exerciseId);
-
-	if (!exercise) {
-		throw new Error('Exercise not found.');
-	}
-
-	const now = timestamp();
-	const resetEvent: ExerciseResetEvent = {
-		id: createId(),
-		exerciseId,
-		resetAt: now,
-		createdAt: now
-	};
-
-	await db.exerciseResetEvents.add(resetEvent);
-
-	return resetEvent;
-}
-
-export async function listExerciseResetEvents(exerciseId: string) {
-	const resetEvents = await db.exerciseResetEvents.where('exerciseId').equals(exerciseId).toArray();
-
-	return resetEvents.sort((first, second) => second.resetAt.localeCompare(first.resetAt));
-}
-
 export async function listExerciseHistory(
 	exerciseId: string,
 	options: { sessionExercises?: SessionExercise[] } = {}
@@ -595,7 +540,6 @@ export async function listExerciseHistory(
 	return (await listHistoricalSessionExerciseMatches(exerciseId, options)).map(
 		({ session, sessionExercise, sets }) => ({
 			sessionId: session.id,
-			workoutId: session.workoutId,
 			workoutNameSnapshot: session.workoutNameSnapshot,
 			dayKey: session.dayKey || toDayKey(session.startedAt ?? session.createdAt),
 			performedAt: sessionExercise.performedAt,
@@ -608,10 +552,9 @@ export async function listExerciseHistory(
 }
 
 export async function getExerciseDetail(exerciseId: string): Promise<ExerciseDetail | null> {
-	const [exercise, history, resetEvents] = await Promise.all([
+	const [exercise, history] = await Promise.all([
 		getExercise(exerciseId),
-		listExerciseHistory(exerciseId),
-		listExerciseResetEvents(exerciseId)
+		listExerciseHistory(exerciseId)
 	]);
 
 	if (!exercise) {
@@ -620,7 +563,6 @@ export async function getExerciseDetail(exerciseId: string): Promise<ExerciseDet
 
 	return {
 		exercise,
-		history,
-		resetEvents
+		history
 	};
 }

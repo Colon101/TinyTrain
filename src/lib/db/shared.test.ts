@@ -4,7 +4,6 @@ import type {
 	SessionExercise,
 	SessionExerciseDetail,
 	SessionSet,
-	SessionSetReference,
 	WorkoutSession
 } from './models';
 import {
@@ -13,7 +12,6 @@ import {
 	getLastSessionSetActivityAt,
 	getSessionActivityAt,
 	normalizeName,
-	summarizeExerciseProgress,
 	summarizeSession,
 	toParsedInputValue,
 	toStoredInputValue
@@ -74,7 +72,6 @@ function historyEntry(
 ): ExerciseHistoryEntry {
 	return {
 		sessionId: 'previous-session',
-		workoutId: 'workout',
 		workoutNameSnapshot: 'Upper body',
 		dayKey: '2026-05-03',
 		status: 'completed',
@@ -216,67 +213,7 @@ describe('previous-performance comparisons', () => {
 
 		expect([...references.keys()]).toEqual(['1:left']);
 		expect(references.get('1:left')).toMatchObject({
-			sessionId: 'previous-session',
-			order: 1,
-			side: 'left',
 			weight: 45
-		});
-	});
-
-	const priorSet = new Map<string, SessionSetReference>([
-		[
-			'1:bilateral',
-			{
-				sessionId: 'previous-session',
-				order: 1,
-				side: 'bilateral',
-				weight: 100,
-				reps: 5,
-				rir: 2
-			}
-		]
-	]);
-
-	it.each([
-		{
-			name: 'new exercise',
-			values: { weight: 100, reps: 5, rir: 2 },
-			references: new Map<string, SessionSetReference>(),
-			status: 'new',
-			summary: 'First logged performance for this exercise.'
-		},
-		{
-			name: 'matched exercise',
-			values: { weight: 100.004, reps: 5, rir: 2 },
-			references: priorSet,
-			status: 'matched',
-			summary: 'Matched the last workout.'
-		},
-		{
-			name: 'improved exercise',
-			values: { weight: 102.5, reps: 5, rir: 2 },
-			references: priorSet,
-			status: 'improved',
-			summary: '1 higher field'
-		},
-		{
-			name: 'regressed exercise',
-			values: { weight: 100, reps: 4, rir: 2 },
-			references: priorSet,
-			status: 'regressed',
-			summary: '1 lower field'
-		},
-		{
-			name: 'mixed exercise',
-			values: { weight: 102.5, reps: 4, rir: 2 },
-			references: priorSet,
-			status: 'mixed',
-			summary: '1 higher field, 1 lower field'
-		}
-	])('classifies a $name', ({ values, references, status, summary }) => {
-		expect(summarizeExerciseProgress(exerciseDetail([sessionSet(values)]), references)).toEqual({
-			progressStatus: status,
-			progressSummary: summary
 		});
 	});
 });

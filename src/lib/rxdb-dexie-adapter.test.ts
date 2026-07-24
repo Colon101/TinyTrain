@@ -39,8 +39,7 @@ function createDatabase() {
 		workoutExercises: createCollection(),
 		workoutSessions: createCollection(),
 		sessionExercises: createCollection(),
-		sessionSets: createCollection(),
-		exerciseResetEvents: createCollection()
+		sessionSets: createCollection()
 	};
 }
 

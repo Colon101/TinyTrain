@@ -287,7 +287,6 @@ export async function mergeExerciseHistory(
 		await syncNow();
 		return {
 			mainExercise: renamedMainExercise,
-			secondaryExercise,
 			copiedSessionExercises: sessionExercisesToAdd.length,
 			copiedSessionSets: sessionSetsToAdd.length,
 			skippedConflicts,
@@ -297,7 +296,6 @@ export async function mergeExerciseHistory(
 	} catch (error) {
 		return {
 			mainExercise: renamedMainExercise,
-			secondaryExercise,
 			copiedSessionExercises: sessionExercisesToAdd.length,
 			copiedSessionSets: sessionSetsToAdd.length,
 			skippedConflicts,

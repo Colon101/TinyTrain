@@ -94,7 +94,6 @@ function buildCompletedOverview(): SessionOverview {
 			totalVolume: 0
 		},
 		previousSummary: null,
-		progress: null,
 		exercises: []
 	};
 }

@@ -312,22 +312,6 @@ export function createFieldDelta(current?: number, previous?: number): SessionFi
 	};
 }
 
-export function toSessionSetReference(
-	entry: ExerciseHistoryEntry,
-	sessionSet: SessionSet
-): SessionSetReference {
-	return {
-		sessionId: entry.sessionId,
-		startedAt: entry.startedAt,
-		completedAt: entry.completedAt,
-		order: sessionSet.order,
-		side: sessionSet.side,
-		weight: sessionSet.weight,
-		reps: sessionSet.reps,
-		rir: sessionSet.rir
-	};
-}
-
 export function buildPreviousReferenceBySetKey(
 	currentExercise: SessionExerciseDetail,
 	previousPerformance: ExerciseHistoryEntry | null
@@ -350,7 +334,11 @@ export function buildPreviousReferenceBySetKey(
 		);
 
 		if (previousSet) {
-			referenceBySetKey.set(setKey, toSessionSetReference(previousPerformance, previousSet));
+			referenceBySetKey.set(setKey, {
+				weight: previousSet.weight,
+				reps: previousSet.reps,
+				rir: previousSet.rir
+			});
 		}
 	}
 
@@ -369,80 +357,6 @@ export function findLatestHistoryEntryWithPerformedSets(history: ExerciseHistory
 			(entry) => getSessionSetOrderCount(entry.sets) > 0 && hasPerformedSetValues(entry.sets)
 		) ?? null
 	);
-}
-
-export function summarizeExerciseProgress(
-	currentExercise: SessionExerciseDetail,
-	previousReferenceBySetKey: Map<string, SessionSetReference>
-) {
-	if (previousReferenceBySetKey.size === 0) {
-		return {
-			progressStatus: 'new' as const,
-			progressSummary: 'First logged performance for this exercise.'
-		};
-	}
-
-	let improvedFieldCount = 0;
-	let regressedFieldCount = 0;
-
-	for (const currentSet of currentExercise.sets) {
-		const previousReference = previousReferenceBySetKey.get(getSessionSetKey(currentSet));
-
-		if (!previousReference) {
-			continue;
-		}
-
-		for (const fieldDelta of [
-			createFieldDelta(currentSet.weight, previousReference.weight),
-			createFieldDelta(currentSet.reps, previousReference.reps),
-			createFieldDelta(currentSet.rir, previousReference.rir)
-		]) {
-			if (fieldDelta.state === 'improved') {
-				improvedFieldCount += 1;
-				continue;
-			}
-
-			if (fieldDelta.state === 'regressed') {
-				regressedFieldCount += 1;
-			}
-		}
-	}
-
-	const summaryParts: string[] = [];
-
-	if (improvedFieldCount > 0) {
-		summaryParts.push(`${improvedFieldCount} higher field${improvedFieldCount === 1 ? '' : 's'}`);
-	}
-
-	if (regressedFieldCount > 0) {
-		summaryParts.push(`${regressedFieldCount} lower field${regressedFieldCount === 1 ? '' : 's'}`);
-	}
-
-	if (summaryParts.length === 0) {
-		return {
-			progressStatus: 'matched' as const,
-			progressSummary: 'Matched the last workout.'
-		};
-	}
-
-	if (improvedFieldCount > 0 && regressedFieldCount === 0) {
-		return {
-			progressStatus: 'improved' as const,
-			progressSummary: summaryParts.join(', ')
-		};
-	}
-
-	if (regressedFieldCount > 0 && improvedFieldCount === 0) {
-		return {
-			progressStatus: 'regressed' as const,
-			progressSummary: summaryParts.join(', ')
-		};
-	}
-
-	return {
-		progressStatus: 'mixed' as const,
-		progressSummary: summaryParts.join(', ')
-	};
 }
 
 export type SessionActivityTimestamp = { value: string; time: number };

@@ -167,7 +167,6 @@ function createReconcileDependencies(workout: SyncableRow) {
 	const workoutSessions = createReconcileTable();
 	const sessionExercises = createReconcileTable();
 	const sessionSets = createReconcileTable();
-	const exerciseResetEvents = createReconcileTable();
 
 	return {
 		workouts,
@@ -179,8 +178,7 @@ function createReconcileDependencies(workout: SyncableRow) {
 				workoutExercises: workoutExercises.table,
 				workoutSessions: workoutSessions.table,
 				sessionExercises: sessionExercises.table,
-				sessionSets: sessionSets.table,
-				exerciseResetEvents: exerciseResetEvents.table
+				sessionSets: sessionSets.table
 			} as unknown as DatabaseCloudSyncDependencies['db']
 		}
 	};

@@ -18,7 +18,6 @@
 	} from '$lib/db';
 
 	type DatabaseApi = typeof import('$lib/db');
-	type PageMode = 'workouts' | 'detail';
 	type DragPreview = {
 		pointerId: number;
 		x: number;
@@ -42,9 +41,6 @@
 	);
 	let workouts = $state<Workout[]>([]);
 	let workoutExercises = $state<WorkoutExerciseWithExercise[]>([]);
-	let selectedWorkoutId = $state('');
-	let pageMode = $state<PageMode>('workouts');
-	let activeRouteWorkoutId = $state<string | null>(null);
 	let isCreatingWorkout = $state(false);
 	let newWorkoutName = $state('');
 	let isExercisePickerOpen = $state(false);
@@ -61,9 +57,7 @@
 	let exercisePickerLoadGeneration = 0;
 	let isDisposed = false;
 
-	let selectedWorkout = $derived(
-		workouts.find((workout) => workout.id === selectedWorkoutId) ?? null
-	);
+	let selectedWorkout = $derived(workouts.find((workout) => workout.id === routeWorkoutId) ?? null);
 	let selectedExerciseIds = $derived(
 		new Set(workoutExercises.map((workoutExercise) => workoutExercise.exercise.id))
 	);
@@ -94,26 +88,18 @@
 				databaseSubscription = api.subscribeToDatabaseChanges(
 					['workouts', 'workoutExercises', 'exercises', 'sessionExercises', 'workoutSessions'],
 					() => {
-						const preferredWorkoutId = selectedWorkoutId || routeWorkoutId;
-
-						void loadPageData(preferredWorkoutId).catch((error) => {
-							if (!isDisposed && preferredWorkoutId === (selectedWorkoutId || routeWorkoutId)) {
+						void loadPageData().catch((error) => {
+							if (!isDisposed) {
 								errorMessage = getErrorMessage(error);
 							}
 						});
 					},
 					{ debounceMs: 250 }
 				);
-				const initialRouteWorkoutId = routeWorkoutId;
-				pageMode = initialRouteWorkoutId ? 'detail' : 'workouts';
-				const didLoadInitialRoute = await loadPageData(initialRouteWorkoutId);
+				await loadPageData();
 
 				if (isDisposed) {
 					return;
-				}
-
-				if (didLoadInitialRoute && initialRouteWorkoutId === routeWorkoutId) {
-					activeRouteWorkoutId = initialRouteWorkoutId;
 				}
 
 				void api.hydrateVisibleScope({ type: 'workouts' }).catch(() => undefined);
@@ -133,36 +119,6 @@
 			databaseSubscription?.unsubscribe();
 			stopDragAutoScroll();
 		};
-	});
-
-	$effect(() => {
-		const nextRouteWorkoutId = routeWorkoutId;
-		const isReady = Boolean(dbApi) && !isLoading;
-
-		if (!isReady || nextRouteWorkoutId === activeRouteWorkoutId) {
-			return;
-		}
-
-		activeRouteWorkoutId = nextRouteWorkoutId;
-		invalidatePageDataLoads();
-		errorMessage = '';
-
-		closeExercisePicker();
-		pageMode = nextRouteWorkoutId ? 'detail' : 'workouts';
-
-		if (!nextRouteWorkoutId) {
-			selectedWorkoutId = '';
-			clearWorkoutExercises();
-			return;
-		}
-
-		selectedWorkoutId = nextRouteWorkoutId;
-		clearWorkoutExercises();
-		void loadPageData(nextRouteWorkoutId).catch((error) => {
-			if (routeWorkoutId === nextRouteWorkoutId) {
-				errorMessage = getErrorMessage(error);
-			}
-		});
 	});
 
 	function getErrorMessage(error: unknown) {
@@ -203,13 +159,13 @@
 		return (
 			!isDisposed &&
 			generation === workoutExerciseLoadGeneration &&
-			workoutId === selectedWorkoutId &&
+			workoutId === routeWorkoutId &&
 			(!expectedPageLoad ||
 				isCurrentPageDataLoad(expectedPageLoad.generation, expectedPageLoad.routeWorkoutId))
 		);
 	}
 
-	async function loadPageData(preferredWorkoutId = selectedWorkoutId) {
+	async function loadPageData() {
 		if (isDisposed) {
 			return false;
 		}
@@ -235,49 +191,28 @@
 
 		workouts = nextWorkouts;
 
-		if (preferredWorkoutId) {
-			if (nextWorkouts.some((workout) => workout.id === preferredWorkoutId)) {
-				selectedWorkoutId = preferredWorkoutId;
-
-				try {
-					await loadSelectedWorkoutExercises(preferredWorkoutId, {
-						generation,
-						routeWorkoutId: routeWorkoutIdAtStart
-					});
-				} catch (error) {
-					if (!isCurrentPageDataLoad(generation, routeWorkoutIdAtStart)) {
-						return false;
-					}
-
-					throw error;
-				}
-
+		if (routeWorkoutId && nextWorkouts.some((workout) => workout.id === routeWorkoutId)) {
+			try {
+				await loadSelectedWorkoutExercises(routeWorkoutId, {
+					generation,
+					routeWorkoutId: routeWorkoutIdAtStart
+				});
+			} catch (error) {
 				if (!isCurrentPageDataLoad(generation, routeWorkoutIdAtStart)) {
 					return false;
 				}
 
-				void loadExercisePickerData(generation, routeWorkoutIdAtStart).catch((error) => {
-					if (isCurrentPageDataLoad(generation, routeWorkoutIdAtStart)) {
-						errorMessage = getErrorMessage(error);
-					}
-				});
-				return true;
+				throw error;
 			}
 
-			selectedWorkoutId = '';
-			pageMode = 'workouts';
+			if (!isCurrentPageDataLoad(generation, routeWorkoutIdAtStart)) {
+				return false;
+			}
+		} else {
 			closeExercisePicker();
 			clearWorkoutExercises();
-			void loadExercisePickerData(generation, routeWorkoutIdAtStart).catch((error) => {
-				if (isCurrentPageDataLoad(generation, routeWorkoutIdAtStart)) {
-					errorMessage = getErrorMessage(error);
-				}
-			});
-			return true;
 		}
 
-		selectedWorkoutId = '';
-		clearWorkoutExercises();
 		void loadExercisePickerData(generation, routeWorkoutIdAtStart).catch((error) => {
 			if (isCurrentPageDataLoad(generation, routeWorkoutIdAtStart)) {
 				errorMessage = getErrorMessage(error);
@@ -331,14 +266,14 @@
 	}
 
 	async function loadSelectedWorkoutExercises(
-		workoutId = selectedWorkoutId,
+		workoutId = routeWorkoutId,
 		expectedPageLoad?: { generation: number; routeWorkoutId: string }
 	) {
 		const generation = ++workoutExerciseLoadGeneration;
 		const api = dbApi;
 
 		if (isDisposed || !api || !workoutId) {
-			if (!isDisposed && !workoutId && !selectedWorkoutId) {
+			if (!isDisposed && !workoutId && !routeWorkoutId) {
 				workoutExercises = [];
 			}
 
@@ -389,8 +324,6 @@
 			const workout = await requireDbApi().createWorkout(newWorkoutName);
 			newWorkoutName = '';
 			isCreatingWorkout = false;
-			pageMode = 'detail';
-			await loadPageData(workout.id);
 			await goto(resolve('/(app)/workouts/[workoutId]', { workoutId: workout.id }), {
 				keepFocus: true
 			});
@@ -398,22 +331,11 @@
 	}
 
 	function openWorkout(workoutId: string) {
-		invalidatePageDataLoads();
-		errorMessage = '';
-		selectedWorkoutId = workoutId;
-		pageMode = 'detail';
-		closeExercisePicker();
-		clearWorkoutExercises();
-		void loadSelectedWorkoutExercises(workoutId).catch((error) => {
-			if (!isDisposed && selectedWorkoutId === workoutId) {
-				errorMessage = getErrorMessage(error);
-			}
-		});
 		void goto(resolve('/(app)/workouts/[workoutId]', { workoutId }), { keepFocus: true });
 	}
 
 	function openExercisePicker() {
-		if (!selectedWorkoutId) {
+		if (!routeWorkoutId) {
 			return;
 		}
 
@@ -425,7 +347,9 @@
 	}
 
 	function addSelectedExercises(exerciseIds: string[]) {
-		if (!selectedWorkoutId || exerciseIds.length === 0) {
+		const workoutId = routeWorkoutId;
+
+		if (!workoutId || exerciseIds.length === 0) {
 			return;
 		}
 
@@ -437,15 +361,17 @@
 
 		void runMutation(async () => {
 			const api = requireDbApi();
-			await api.addExercisesToWorkout(selectedWorkoutId, exerciseIdsToAdd);
+			await api.addExercisesToWorkout(workoutId, exerciseIdsToAdd);
 
 			closeExercisePicker();
-			await loadSelectedWorkoutExercises();
+			await loadSelectedWorkoutExercises(workoutId);
 		});
 	}
 
 	function handleCreateExercise(exerciseName: string, unilateral: boolean) {
-		if (!selectedWorkoutId) {
+		const workoutId = routeWorkoutId;
+
+		if (!workoutId) {
 			return;
 		}
 
@@ -453,9 +379,9 @@
 			const api = requireDbApi();
 			const exercise = await api.createExercise(exerciseName, unilateral);
 
-			await api.addExerciseToWorkout(selectedWorkoutId, exercise.id);
+			await api.addExercisesToWorkout(workoutId, [exercise.id]);
 			closeExercisePicker();
-			await loadPageData(selectedWorkoutId);
+			await loadPageData();
 		});
 	}
 
@@ -645,7 +571,7 @@
 			return;
 		}
 
-		if (!draggedWorkoutExerciseId || !selectedWorkoutId) {
+		if (!draggedWorkoutExerciseId || !routeWorkoutId) {
 			resetDrag();
 			return;
 		}
@@ -653,7 +579,7 @@
 		const target = event.currentTarget as HTMLElement;
 		const finalWorkoutExerciseIds = getWorkoutExerciseIds();
 		const startedWorkoutExerciseIds = dragStartWorkoutExerciseIds;
-		const workoutId = selectedWorkoutId;
+		const workoutId = routeWorkoutId;
 		const orderChanged = finalWorkoutExerciseIds.join('|') !== startedWorkoutExerciseIds.join('|');
 
 		if (target.hasPointerCapture(event.pointerId)) {
@@ -681,7 +607,7 @@
 				const isStillShowingOptimisticOrder =
 					getWorkoutExerciseIds().join('|') === finalWorkoutExerciseIds.join('|');
 
-				if (!isDisposed && selectedWorkoutId === workoutId && isStillShowingOptimisticOrder) {
+				if (!isDisposed && routeWorkoutId === workoutId && isStillShowingOptimisticOrder) {
 					orderWorkoutExercises(startedWorkoutExerciseIds);
 				}
 
@@ -699,7 +625,7 @@
 
 		event.preventDefault();
 
-		if (isSaving || !selectedWorkoutId) {
+		if (isSaving || !routeWorkoutId) {
 			return;
 		}
 
@@ -717,11 +643,7 @@
 			finalWorkoutExerciseIds[currentIndex]
 		];
 		orderWorkoutExercises(finalWorkoutExerciseIds);
-		persistWorkoutExerciseOrder(
-			selectedWorkoutId,
-			startedWorkoutExerciseIds,
-			finalWorkoutExerciseIds
-		);
+		persistWorkoutExerciseOrder(routeWorkoutId, startedWorkoutExerciseIds, finalWorkoutExerciseIds);
 	}
 
 	function handleDragPointerCancel(event: PointerEvent) {
@@ -763,7 +685,7 @@
 		<h1 class="mt-5 text-2xl font-semibold text-white">Loading workouts</h1>
 		<p class="mt-2 text-sm leading-6 text-zinc-400">Preparing your workout library.</p>
 	</section>
-{:else if pageMode === 'workouts'}
+{:else if !selectedWorkout}
 	<WorkoutListView
 		{workouts}
 		{isCreatingWorkout}

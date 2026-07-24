@@ -2,7 +2,6 @@ import { BASELINE_EXERCISE_BY_ID } from './exercises';
 import { supabase } from './supabase';
 import type {
 	Exercise,
-	ExerciseResetEvent,
 	SessionExercise,
 	SessionSet,
 	Workout,
@@ -25,7 +24,6 @@ type DatabaseCloudSyncDatabase = {
 	workoutSessions: DataTable<WorkoutSession>;
 	sessionExercises: DataTable<SessionExercise>;
 	sessionSets: DataTable<SessionSet>;
-	exerciseResetEvents: DataTable<ExerciseResetEvent>;
 };
 
 export type DatabaseCloudSyncDependencies = {
@@ -76,8 +74,7 @@ export type SupabaseTableName =
 	| 'workout_exercises'
 	| 'workout_sessions'
 	| 'session_exercises'
-	| 'session_sets'
-	| 'exercise_reset_events';
+	| 'session_sets';
 
 export type SupabaseSyncedRow = Record<string, unknown> & {
 	id: string;
@@ -217,10 +214,7 @@ function getGenericCompletenessScore(row: SyncableRow) {
 }
 
 function getRowTimestamp(row: SyncableRow) {
-	const rawTimestamp =
-		row.updatedAt ??
-		row.createdAt ??
-		('resetAt' in row && typeof row.resetAt === 'string' ? row.resetAt : undefined);
+	const rawTimestamp = row.updatedAt ?? row.createdAt;
 	const time = rawTimestamp ? new Date(rawTimestamp).getTime() : 0;
 
 	return Number.isFinite(time) ? time : 0;
@@ -329,8 +323,7 @@ const optionalSupabaseFieldsByTable: Record<SupabaseTableName, string[]> = {
 	workout_exercises: [],
 	workout_sessions: ['startedAt', 'completedAt'],
 	session_exercises: [],
-	session_sets: ['weightInput', 'repsInput', 'rirInput', 'weight', 'reps', 'rir'],
-	exercise_reset_events: []
+	session_sets: ['weightInput', 'repsInput', 'rirInput', 'weight', 'reps', 'rir']
 };
 
 function toSupabaseUpsertRow(userId: string, tableName: SupabaseTableName, row: SyncableRow) {
@@ -510,7 +503,7 @@ async function reconcileSupabaseDatabase(
 	options: ReconcileDatabaseOptions = {}
 ) {
 	assertSyncContextActive(deps, userId);
-	const totalTables = 7;
+	const totalTables = 6;
 	let completedTables = 0;
 
 	options.onProgress?.({ completedTables, totalTables });
@@ -553,10 +546,6 @@ async function reconcileSupabaseDatabase(
 			tableName: 'session_sets',
 			localTable: deps.db.sessionSets,
 			normalize: (row) => normalizeRemoteSessionSet(deps, row)
-		}),
-		await reconcileNextTable<ExerciseResetEvent>({
-			tableName: 'exercise_reset_events',
-			localTable: deps.db.exerciseResetEvents
 		})
 	];
 
@@ -655,10 +644,6 @@ function getSyncedTableConfigs(deps: DatabaseCloudSyncDependencies): SyncedTable
 				normalizeRemoteSessionSet(deps, row as SessionSet) as SyncableRow) as (
 				row: SyncableRow
 			) => SyncableRow
-		},
-		{
-			tableName: 'exercise_reset_events',
-			localTable: () => deps.db.exerciseResetEvents as unknown as DataTable<SyncableRow>
 		}
 	];
 }

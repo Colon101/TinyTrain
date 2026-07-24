@@ -731,9 +731,7 @@
 			return;
 		}
 
-		for (const exerciseId of exerciseIds) {
-			await dbApi.addExerciseToSession(overview.summary.id, exerciseId);
-		}
+		await dbApi.addExercisesToSession(overview.summary.id, exerciseIds);
 
 		closeExercisePicker();
 	}

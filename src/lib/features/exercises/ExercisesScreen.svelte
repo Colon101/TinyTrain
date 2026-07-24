@@ -12,13 +12,11 @@
 	import Icon from '$lib/ui/Icon.svelte';
 
 	type DatabaseApi = typeof import('$lib/db');
-	type DetailTab = 'summary' | 'history';
 
 	let { exerciseId = null }: { exerciseId?: string | null } = $props();
 	let api = $state<DatabaseApi | null>(null);
 	let items = $state<ExerciseListItem[]>([]);
 	let selectedDetail = $state<ExerciseDetail | null>(null);
-	let detailTab = $state<DetailTab>('summary');
 	let draftName = $state('');
 	let draftUnilateral = $state(false);
 	let isLoading = $state(true);
@@ -99,7 +97,6 @@
 
 				selectedDetail = nextDetail;
 				errorMessage = nextDetail ? '' : 'Exercise not found.';
-				detailTab = 'summary';
 				return;
 			}
 
@@ -181,32 +178,6 @@
 			}
 		}
 	}
-
-	async function resetExerciseForm() {
-		if (!api || !selectedDetail) {
-			return;
-		}
-
-		const targetExerciseId = selectedDetail.exercise.id;
-		isSaving = true;
-		errorMessage = '';
-
-		try {
-			await api.recordExerciseReset(targetExerciseId);
-
-			if (!isDisposed && (exerciseId || null) === targetExerciseId) {
-				await loadScreen(api, targetExerciseId);
-			}
-		} catch (error) {
-			if (!isDisposed && (exerciseId || null) === targetExerciseId) {
-				errorMessage = error instanceof Error ? error.message : 'Something went wrong.';
-			}
-		} finally {
-			if (!isDisposed) {
-				isSaving = false;
-			}
-		}
-	}
 </script>
 
 <section class="flex flex-1 flex-col">
@@ -248,24 +219,10 @@
 		</div>
 
 		<section class="border-y border-white/10 py-5">
-			<div class="flex items-center justify-between gap-3">
-				<div>
-					<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">Mode</p>
-					<h2 class="mt-2 text-xl font-semibold text-white">
-						{selectedDetail.exercise.unilateral ? 'Unilateral' : 'Bilateral'}
-					</h2>
-				</div>
-
-				<button
-					class="flex min-h-11 items-center gap-2 rounded-lg border border-white/10 px-3 text-sm font-semibold text-zinc-200"
-					type="button"
-					disabled={isSaving}
-					onclick={resetExerciseForm}
-				>
-					<Icon name="rotate-ccw" class="h-4 w-4" />
-					Reset form
-				</button>
-			</div>
+			<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">Mode</p>
+			<h2 class="mt-2 text-xl font-semibold text-white">
+				{selectedDetail.exercise.unilateral ? 'Unilateral' : 'Bilateral'}
+			</h2>
 
 			<div class="mt-4 grid grid-cols-2 gap-2">
 				<button
@@ -295,94 +252,47 @@
 			</div>
 		</section>
 
-		<div class="mt-5 grid grid-cols-2 gap-2">
-			<button
-				class={`min-h-11 rounded-lg px-3 text-sm font-semibold ${
-					detailTab === 'summary'
-						? 'bg-white text-zinc-950'
-						: 'border border-white/10 bg-white/[0.03] text-zinc-300'
-				}`}
-				type="button"
-				onclick={() => (detailTab = 'summary')}
+		<section class="mt-5 border-y border-white/10 py-5">
+			<p
+				class="flex items-center gap-2 text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase"
 			>
-				Summary
-			</button>
-			<button
-				class={`min-h-11 rounded-lg px-3 text-sm font-semibold ${
-					detailTab === 'history'
-						? 'bg-white text-zinc-950'
-						: 'border border-white/10 bg-white/[0.03] text-zinc-300'
-				}`}
-				type="button"
-				onclick={() => (detailTab = 'history')}
-			>
+				<Icon name="history" class="h-4 w-4" />
 				History
-			</button>
-		</div>
+			</p>
 
-		{#if detailTab === 'summary'}
-			<section class="mt-5 border-y border-white/10 py-5">
-				<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">
-					Reset events
-				</p>
-				{#if selectedDetail.resetEvents.length > 0}
-					<div class="mt-4 grid gap-3">
-						{#each selectedDetail.resetEvents as resetEvent (resetEvent.id)}
-							<div class="rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3">
-								<p class="text-sm font-medium text-white">Form reset recorded</p>
-								<p class="mt-1 text-sm text-zinc-400">
-									{new Date(resetEvent.resetAt).toLocaleString()}
-								</p>
+			{#if selectedDetail.history.length > 0}
+				<div class="mt-4 grid gap-3">
+					{#each selectedDetail.history as entry (entry.sessionId)}
+						<a
+							class="block rounded-lg border border-white/10 bg-white/[0.03] px-4 py-4 transition hover:border-accent/50"
+							href={resolve('/(app)/sessions/[sessionId]', { sessionId: entry.sessionId })}
+						>
+							<div class="flex items-start justify-between gap-3">
+								<div>
+									<p class="text-sm font-semibold text-white">{entry.workoutNameSnapshot}</p>
+									<p class="mt-1 text-sm text-zinc-400">{formatDayHeading(entry.dayKey)}</p>
+								</div>
+								<span class="text-xs font-medium text-zinc-400">
+									{formatSessionStatus(entry.status)}
+								</span>
 							</div>
-						{/each}
-					</div>
-				{:else}
-					<p class="mt-4 text-sm leading-6 text-zinc-400">No reset events recorded yet.</p>
-				{/if}
-			</section>
-		{:else}
-			<section class="mt-5 border-y border-white/10 py-5">
-				<p
-					class="flex items-center gap-2 text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase"
-				>
-					<Icon name="history" class="h-4 w-4" />
-					History
-				</p>
 
-				{#if selectedDetail.history.length > 0}
-					<div class="mt-4 grid gap-3">
-						{#each selectedDetail.history as entry (entry.sessionId)}
-							<a
-								class="block rounded-lg border border-white/10 bg-white/[0.03] px-4 py-4 transition hover:border-accent/50"
-								href={resolve('/(app)/sessions/[sessionId]', { sessionId: entry.sessionId })}
-							>
-								<div class="flex items-start justify-between gap-3">
-									<div>
-										<p class="text-sm font-semibold text-white">{entry.workoutNameSnapshot}</p>
-										<p class="mt-1 text-sm text-zinc-400">{formatDayHeading(entry.dayKey)}</p>
-									</div>
-									<span class="text-xs font-medium text-zinc-400">
-										{formatSessionStatus(entry.status)}
+							<div class="mt-3 flex flex-wrap gap-2">
+								{#each entry.sets as set (set.id)}
+									<span
+										class="rounded-full bg-white/[0.06] px-3 py-1 text-xs font-medium text-zinc-200"
+									>
+										{formatSetLine(set.weight, set.reps, set.rir)}
 									</span>
-								</div>
-
-								<div class="mt-3 flex flex-wrap gap-2">
-									{#each entry.sets as set (set.id)}
-										<span
-											class="rounded-full bg-white/[0.06] px-3 py-1 text-xs font-medium text-zinc-200"
-										>
-											{formatSetLine(set.weight, set.reps, set.rir)}
-										</span>
-									{/each}
-								</div>
-							</a>
-						{/each}
-					</div>
-				{:else}
-					<p class="mt-4 text-sm leading-6 text-zinc-400">No history for this exercise yet.</p>
-				{/if}
-			</section>
-		{/if}
+								{/each}
+							</div>
+						</a>
+					{/each}
+				</div>
+			{:else}
+				<p class="mt-4 text-sm leading-6 text-zinc-400">No history for this exercise yet.</p>
+			{/if}
+		</section>
 	{:else}
 		<div class="pb-5">
 			<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">TinyTrain</p>

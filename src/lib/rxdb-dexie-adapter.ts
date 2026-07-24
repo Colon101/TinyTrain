@@ -14,8 +14,7 @@ type TableName =
 	| 'workoutExercises'
 	| 'workoutSessions'
 	| 'sessionExercises'
-	| 'sessionSets'
-	| 'exerciseResetEvents';
+	| 'sessionSets';
 type ChangeListener = (tableName: TableName) => void;
 type TransactionCallback<T> = () => Promise<T> | T;
 
@@ -344,7 +343,6 @@ export type RxDexieLikeDatabase = {
 	workoutSessions: RxTableAdapter<PlainDoc>;
 	sessionExercises: RxTableAdapter<PlainDoc>;
 	sessionSets: RxTableAdapter<PlainDoc>;
-	exerciseResetEvents: RxTableAdapter<PlainDoc>;
 	transaction<T>(callback: TransactionCallback<T>): Promise<T>;
 };
 
@@ -416,11 +414,6 @@ async function createRxDexieLikeDatabase(
 			database.sessionSets as unknown as RxCollection<PlainDoc>,
 			userId,
 			'sessionSets'
-		),
-		exerciseResetEvents: new RxTableAdapter(
-			database.exerciseResetEvents as unknown as RxCollection<PlainDoc>,
-			userId,
-			'exerciseResetEvents'
 		),
 		async transaction<T>(callback: TransactionCallback<T>) {
 			// RxDB's Dexie storage uses one IndexedDB database per collection, so it cannot

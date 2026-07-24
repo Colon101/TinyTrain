@@ -4,7 +4,7 @@ import { db, requireLoggedInUser } from '../runtime';
 import { clearSessionInputDraft, removeSessionInputDraftSets } from '../session-drafts';
 import { compareSessionSetRows, createId, timestamp, withSessionSetDefaults } from '../shared';
 import { listWorkoutExercises } from '../workouts';
-import { updateSessionSetInputs } from './inputs';
+import { updateSessionSetInputValues } from './inputs';
 import { buildSeedSessionSetRows, buildSessionSeedSetRows } from './seeding';
 
 export async function reorderSessionExercises(
@@ -153,12 +153,6 @@ export async function removeSessionExercise(sessionExerciseId: string) {
 		);
 		await db.workoutSessions.update(sessionExercise.sessionId, { updatedAt: now });
 	});
-}
-
-export async function addExerciseToSession(sessionId: string, exerciseId: string) {
-	const [sessionExercise] = await addExercisesToSession(sessionId, [exerciseId]);
-
-	return sessionExercise;
 }
 
 export async function addExercisesToSession(sessionId: string, exerciseIds: string[]) {
@@ -376,7 +370,7 @@ export async function updateSessionSetInput(
 ) {
 	requireLoggedInUser();
 
-	return updateSessionSetInputs(sessionSetId, field, rawValue);
+	return (await updateSessionSetInputValues(sessionSetId, { [field]: rawValue })).sessionSet;
 }
 
 export async function resetSessionInputs(sessionId: string) {

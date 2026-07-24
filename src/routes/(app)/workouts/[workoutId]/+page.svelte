@@ -1,11 +1,12 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import WorkoutsScreen from '$lib/features/workouts/WorkoutsScreen.svelte';
-
-	let { data }: { data: { workoutId: string } } = $props();
 </script>
 
 <svelte:head>
 	<title>Workout Detail | TinyTrain</title>
 </svelte:head>
 
-<WorkoutsScreen routeWorkoutId={data.workoutId} />
+{#key page.params.workoutId}
+	<WorkoutsScreen routeWorkoutId={page.params.workoutId} />
+{/key}

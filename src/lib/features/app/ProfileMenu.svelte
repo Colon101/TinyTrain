@@ -17,7 +17,7 @@
 	let isManualSyncing = $state(false);
 	let isManualSyncOverlayOpen = $state(false);
 	let canDismissManualSync = $state(false);
-	let syncProgress = $state<SyncProgress>({ completedTables: 0, totalTables: 7 });
+	let syncProgress = $state<SyncProgress>({ completedTables: 0, totalTables: 6 });
 	let actionMessage = $state('');
 	let actionError = $state('');
 	let container = $state<HTMLElement | null>(null);
@@ -112,7 +112,7 @@
 			isManualSyncOverlayOpen = true;
 			canDismissManualSync = false;
 			manualSyncWasDismissed = false;
-			syncProgress = { completedTables: 0, totalTables: 7 };
+			syncProgress = { completedTables: 0, totalTables: 6 };
 			isOpen = false;
 			clearManualSyncDismissTimeout();
 			manualSyncDismissTimeout = setTimeout(() => {

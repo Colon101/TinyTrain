@@ -15,7 +15,6 @@ import { clearSessionInputDraft } from '../session-drafts';
 import {
 	createId,
 	getSessionActivityAt,
-	summarizeSession,
 	timestamp,
 	toDayKey,
 	type SessionActivityTimestamp
@@ -266,8 +265,6 @@ export async function scheduleWorkoutSession(workoutId: string, dayKey: string) 
 
 		await db.workouts.update(workoutId, { updatedAt: createdAt });
 	});
-
-	return summarizeSession(session, sessionExercises, sessionSets);
 }
 
 export async function startWorkoutSession(sessionId: string) {
@@ -342,26 +339,11 @@ export async function startWorkoutSession(sessionId: string) {
 		}
 	});
 
-	const nextSession = await db.workoutSessions.get(sessionId);
-	const nextSessionExercises = await db.sessionExercises
-		.where('sessionId')
-		.equals(sessionId)
-		.toArray();
-	const nextSessionSets = (await listSessionExerciseDetails(sessionId)).flatMap(
-		(sessionExercise) => sessionExercise.sets
-	);
-
-	if (!nextSession) {
-		throw new Error('Session not found.');
-	}
-
 	if (didStart) {
 		void syncNow().catch((error) => {
 			console.warn('Background Supabase sync failed.', error);
 		});
 	}
-
-	return summarizeSession(nextSession, nextSessionExercises, nextSessionSets);
 }
 
 export async function completeWorkoutSession(sessionId: string) {

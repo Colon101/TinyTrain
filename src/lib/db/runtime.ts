@@ -11,10 +11,9 @@ import {
 } from '../supabase';
 import type { RxDexieLikeDatabase } from '../rxdb-dexie-adapter';
 import { dbCloudSync, type SupabaseSyncedRow, type SyncProgress } from '../db-cloud-sync';
-import { summarizeSession, withExerciseDefaults, withSessionSetDefaults } from './shared';
+import { toDayKey, withExerciseDefaults, withSessionSetDefaults } from './shared';
 import type {
 	Exercise,
-	ExerciseResetEvent,
 	HydrateVisibleScopeInput,
 	SessionExercise,
 	SessionSet,
@@ -22,12 +21,6 @@ import type {
 	WorkoutExercise,
 	WorkoutSession
 } from './models';
-
-export {
-	SESSION_INACTIVITY_ABANDON_MS,
-	SESSION_INACTIVITY_CHECK_INTERVAL_MS,
-	SESSION_INACTIVITY_WARNING_MS
-} from '../session-inactivity';
 
 export type SubscriptionLike = {
 	unsubscribe(): void;
@@ -39,8 +32,7 @@ export type DatabaseTableKey =
 	| 'workoutExercises'
 	| 'workoutSessions'
 	| 'sessionExercises'
-	| 'sessionSets'
-	| 'exerciseResetEvents';
+	| 'sessionSets';
 export type DatabaseChangeSubscriber = (tables: DatabaseTableKey[]) => void;
 export type DatabaseChangeSubscribeOptions = {
 	debounceMs?: number;
@@ -109,7 +101,6 @@ export const currentUser = new ValueObservable<{
 	userId?: string;
 	name?: string;
 	email?: string;
-	claims?: Record<string, unknown>;
 	isLoggedIn?: boolean;
 	isLoading?: boolean;
 }>({ isLoading: true });
@@ -244,7 +235,6 @@ export function toSupabaseCloudUser() {
 					? user.user_metadata.full_name
 					: user.email,
 		email: user.email,
-		claims: user.user_metadata as Record<string, unknown>,
 		isLoggedIn: true,
 		isLoading: false
 	};
@@ -476,7 +466,6 @@ export type AppDatabase = {
 	workoutSessions: DataTable<WorkoutSession>;
 	sessionExercises: DataTable<SessionExercise>;
 	sessionSets: DataTable<SessionSet>;
-	exerciseResetEvents: DataTable<ExerciseResetEvent>;
 	transaction<T>(callback: () => Promise<T> | T): Promise<T>;
 };
 
@@ -1002,22 +991,6 @@ export async function hydrateVisibleScope(scope: HydrateVisibleScopeInput) {
 		return;
 	}
 
-	if (scope.type === 'day') {
-		const sessions = await dbCloudSync.fetchSupabaseRows<WorkoutSession>(
-			syncDeps,
-			'workout_sessions',
-			(query) => query.eq('dayKey', scope.dayKey).order('_modified', { ascending: false })
-		);
-		await dbCloudSync.putMergedRemoteRows(
-			syncDeps,
-			'workout_sessions',
-			context.database.workoutSessions,
-			sessions
-		);
-		await Promise.all(sessions.map((session) => hydrateSessionForContext(session.id, context)));
-		return;
-	}
-
 	const workouts = await dbCloudSync.fetchSupabaseRows<Workout>(syncDeps, 'workouts', (query) =>
 		query.order('_modified', { ascending: false }).limit(200)
 	);
@@ -1064,11 +1037,10 @@ export async function getSessionTimerSummary(sessionId: string) {
 		return null;
 	}
 
-	return summarizeSession(
-		session,
-		await db.sessionExercises.where('sessionId').equals(sessionId).toArray(),
-		[]
-	);
+	return {
+		...session,
+		dayKey: session.dayKey || toDayKey(session.startedAt ?? session.createdAt)
+	};
 }
 
 export function requireLoggedInUser() {

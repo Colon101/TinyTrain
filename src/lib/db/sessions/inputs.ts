@@ -132,13 +132,6 @@ export async function updateSessionSetInputValues(
 	return { sessionSet: nextSet, skippedFields };
 }
 
-export async function updateSessionSetInputs(
-	sessionSetId: string,
-	field: SessionInputField,
-	rawValue: string
-) {
-	return (await updateSessionSetInputValues(sessionSetId, { [field]: rawValue })).sessionSet;
-}
 export async function flushSessionInputDraft(
 	sessionId: string,
 	options: { clearDraft?: boolean } = {}

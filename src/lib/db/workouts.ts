@@ -118,12 +118,6 @@ export async function listWorkoutExercises(workoutId: string) {
 		);
 }
 
-export async function addExerciseToWorkout(workoutId: string, exerciseId: string) {
-	const [workoutExercise] = await addExercisesToWorkout(workoutId, [exerciseId]);
-
-	return workoutExercise;
-}
-
 export async function addExercisesToWorkout(workoutId: string, exerciseIds: string[]) {
 	requireLoggedInUser();
 	const uniqueExerciseIds = [...new Set(exerciseIds)];
