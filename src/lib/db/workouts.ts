@@ -55,7 +55,7 @@ export async function createWorkout(name: string) {
 		throw new Error('Workout name is required.');
 	}
 
-	return db.transaction<Workout>('rw', db.workouts, async () => {
+	return db.transaction<Workout>(async () => {
 		const existingWorkout = await db.workouts
 			.where('normalizedName')
 			.equals(normalizedName)
@@ -132,7 +132,7 @@ export async function addExercisesToWorkout(workoutId: string, exerciseIds: stri
 		return [];
 	}
 
-	return db.transaction<WorkoutExercise[]>('rw', db.workoutExercises, db.workouts, async () => {
+	return db.transaction<WorkoutExercise[]>(async () => {
 		const workoutExercises = await db.workoutExercises
 			.where('workoutId')
 			.equals(workoutId)
@@ -226,7 +226,7 @@ export async function reorderWorkoutExercises(
 ) {
 	requireLoggedInUser();
 
-	await db.transaction('rw', db.workoutExercises, db.workouts, async () => {
+	await db.transaction(async () => {
 		const workoutExercises = await db.workoutExercises
 			.where('workoutId')
 			.equals(workoutId)
@@ -255,43 +255,10 @@ export async function reorderWorkoutExercises(
 	});
 }
 
-export async function moveWorkoutExercise(workoutExerciseId: string, direction: 'up' | 'down') {
-	requireLoggedInUser();
-
-	await db.transaction('rw', db.workoutExercises, db.workouts, async () => {
-		const workoutExercise = await db.workoutExercises.get(workoutExerciseId);
-
-		if (!workoutExercise) {
-			return;
-		}
-
-		const workoutExercises = await db.workoutExercises
-			.where('workoutId')
-			.equals(workoutExercise.workoutId)
-			.sortBy('order');
-		const currentIndex = workoutExercises.findIndex((row) => row.id === workoutExerciseId);
-		const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
-
-		if (currentIndex < 0 || targetIndex < 0 || targetIndex >= workoutExercises.length) {
-			return;
-		}
-
-		const currentRow = workoutExercises[currentIndex];
-		const targetRow = workoutExercises[targetIndex];
-		const now = timestamp();
-
-		await Promise.all([
-			db.workoutExercises.update(currentRow.id, { order: targetRow.order, updatedAt: now }),
-			db.workoutExercises.update(targetRow.id, { order: currentRow.order, updatedAt: now }),
-			db.workouts.update(workoutExercise.workoutId, { updatedAt: now })
-		]);
-	});
-}
-
 export async function removeWorkoutExercise(workoutExerciseId: string) {
 	requireLoggedInUser();
 
-	await db.transaction('rw', db.workoutExercises, db.workouts, async () => {
+	await db.transaction(async () => {
 		const workoutExercise = await db.workoutExercises.get(workoutExerciseId);
 
 		if (!workoutExercise) {

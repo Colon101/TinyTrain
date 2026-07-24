@@ -29,15 +29,7 @@ const runtimeHarness = vi.hoisted(() => {
 		sessionSets,
 		sessionExercises,
 		workoutSessions,
-		transaction: vi.fn(async (_mode: string, ...args: unknown[]) => {
-			const callback = args.at(-1);
-
-			if (typeof callback !== 'function') {
-				throw new Error('Expected a transaction callback.');
-			}
-
-			return callback();
-		})
+		transaction: vi.fn(async (callback: () => Promise<unknown>) => callback())
 	};
 
 	return { db, state };

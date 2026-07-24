@@ -6,16 +6,13 @@
  */
 export * from './db/models';
 export {
+	currentUser,
 	db,
 	ensureDbOpen,
-	getLocalDatabaseStats,
-	getPersistentStorageStatus,
 	getSessionTimerSummary,
 	hydrateVisibleScope,
-	loginWithGoogle,
 	loginWithSupabaseGoogleForApp,
 	logoutFromCloud,
-	requestPersistentStorage,
 	runWithClosedDatabaseRetry,
 	subscribeToDatabaseChanges,
 	syncNow,
@@ -29,7 +26,6 @@ export {
 	createExercise,
 	getExercise,
 	getExerciseDetail,
-	listCustomExerciseItems,
 	listCustomExercises,
 	listExerciseHistory,
 	listExerciseItems,
@@ -47,7 +43,6 @@ export {
 	listWorkoutExercises,
 	listWorkoutSchedulingOptions,
 	listWorkouts,
-	moveWorkoutExercise,
 	removeWorkoutExercise,
 	reorderWorkoutExercises
 } from './db/workouts';

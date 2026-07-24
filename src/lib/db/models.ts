@@ -2,7 +2,6 @@ export type {
 	DatabaseTableUploadSummary,
 	DatabaseUploadMode,
 	DatabaseUploadSummary,
-	LocalDatabaseStats,
 	SyncProgress
 } from '../db-cloud-sync';
 
@@ -10,7 +9,6 @@ export type SessionStatus = 'planned' | 'in_progress' | 'completed' | 'abandoned
 export type ExerciseSource = 'baseline' | 'custom';
 export type SessionSetSide = 'bilateral' | 'left' | 'right';
 export type SessionInputField = 'weight' | 'reps' | 'rir';
-export type PersistentStorageStatus = 'persisted' | 'promptable' | 'denied' | 'unsupported';
 
 export type HydrateVisibleScopeInput =
 	| { type: 'session'; sessionId: string }

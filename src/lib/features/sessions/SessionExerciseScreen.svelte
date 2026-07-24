@@ -81,10 +81,6 @@
 	let isMenuOpen = $state(false);
 	let isExercisePickerOpen = $state(false);
 	let pickerMode = $state<PickerMode>('add');
-	let exerciseSearch = $state('');
-	let selectedPickerExerciseIds = $state<string[]>([]);
-	let newExerciseName = $state('');
-	let isNewExerciseUnilateral = $state(false);
 	let sessionSetEditorContainer = $state<HTMLElement | null>(null);
 	let inputVersions = new SvelteMap<string, number>();
 	let setInputSaveChains = new SvelteMap<string, Promise<void>>();
@@ -117,45 +113,6 @@
 	);
 	let selectedExerciseIds = $derived(
 		new Set((overview?.exercises ?? []).map((sessionExercise) => sessionExercise.exerciseId))
-	);
-	let selectedPickerExerciseIdSet = $derived(new Set(selectedPickerExerciseIds));
-	let cleanExerciseSearch = $derived(exerciseSearch.trim().replace(/\s+/g, ' '));
-	let normalizedExerciseSearch = $derived(cleanExerciseSearch.toLocaleLowerCase());
-	let exerciseUsageByNormalizedName = $derived(
-		new Map(exerciseUsagePreferences.map((preference) => [preference.normalizedName, preference]))
-	);
-	let exerciseUsageById = $derived(
-		new Map(
-			exerciseUsagePreferences.flatMap((preference) =>
-				preference.exerciseIds.map((exerciseId) => [exerciseId, preference] as const)
-			)
-		)
-	);
-	let filteredExercises = $derived(
-		(cleanExerciseSearch
-			? exercises.filter((exercise) => exercise.normalizedName.includes(normalizedExerciseSearch))
-			: exercises
-		).toSorted(compareExercisePickerPreference)
-	);
-	let visiblePickerExercises = $derived(filteredExercises.slice(0, cleanExerciseSearch ? 80 : 60));
-	let hiddenPickerExerciseCount = $derived(
-		Math.max(filteredExercises.length - visiblePickerExercises.length, 0)
-	);
-	let hasExactExerciseMatch = $derived(
-		Boolean(cleanExerciseSearch) &&
-			exercises.some((exercise) => exercise.normalizedName === normalizedExerciseSearch)
-	);
-	let canCreateCustomExercise = $derived(
-		Boolean(cleanExerciseSearch) && filteredExercises.length < 5 && !hasExactExerciseMatch
-	);
-	let addSelectedLabel = $derived(
-		pickerMode === 'swap'
-			? 'Swap exercise'
-			: selectedPickerExerciseIds.length === 0
-				? 'Add exercise(s)'
-				: `Add ${selectedPickerExerciseIds.length} exercise${
-						selectedPickerExerciseIds.length === 1 ? '' : 's'
-					}`
 	);
 
 	onMount(() => {
@@ -753,95 +710,12 @@
 
 	function openExercisePicker(mode: PickerMode) {
 		pickerMode = mode;
-		exerciseSearch = '';
-		selectedPickerExerciseIds = [];
-		newExerciseName = '';
-		isNewExerciseUnilateral = false;
 		isExercisePickerOpen = true;
 		isMenuOpen = false;
 	}
 
 	function closeExercisePicker() {
 		isExercisePickerOpen = false;
-		selectedPickerExerciseIds = [];
-		newExerciseName = '';
-		isNewExerciseUnilateral = false;
-	}
-
-	function handleExerciseSearchInput(event: Event) {
-		const target = event.currentTarget as HTMLInputElement;
-		exerciseSearch = target.value;
-
-		if (!newExerciseName) {
-			newExerciseName = target.value;
-		}
-	}
-
-	function handleCustomExerciseNameInput(value: string) {
-		newExerciseName = value;
-	}
-
-	function getExerciseUsagePreference(exercise: Exercise) {
-		return (
-			exerciseUsageById.get(exercise.id) ??
-			exerciseUsageByNormalizedName.get(exercise.normalizedName) ??
-			null
-		);
-	}
-
-	function isPreviouslyUsedExercise(exercise: Exercise) {
-		return Boolean(getExerciseUsagePreference(exercise));
-	}
-
-	function compareExercisePickerPreference(first: Exercise, second: Exercise) {
-		const firstUsage = getExerciseUsagePreference(first);
-		const secondUsage = getExerciseUsagePreference(second);
-
-		if (Boolean(firstUsage) !== Boolean(secondUsage)) {
-			return firstUsage ? -1 : 1;
-		}
-
-		if (firstUsage && secondUsage) {
-			return (
-				secondUsage.lastPerformedAt.localeCompare(firstUsage.lastPerformedAt) ||
-				secondUsage.sessionCount - firstUsage.sessionCount ||
-				first.name.localeCompare(second.name)
-			);
-		}
-
-		return first.name.localeCompare(second.name);
-	}
-
-	function togglePickerExercise(exerciseId: string) {
-		if (selectedExerciseIds.has(exerciseId)) {
-			return;
-		}
-
-		if (pickerMode === 'swap') {
-			selectedPickerExerciseIds = selectedPickerExerciseIdSet.has(exerciseId) ? [] : [exerciseId];
-			return;
-		}
-
-		if (selectedPickerExerciseIdSet.has(exerciseId)) {
-			selectedPickerExerciseIds = selectedPickerExerciseIds.filter((id) => id !== exerciseId);
-			return;
-		}
-
-		selectedPickerExerciseIds = [...selectedPickerExerciseIds, exerciseId];
-	}
-
-	function getPickerExercisePosition(exerciseId: string) {
-		if (!overview || pickerMode === 'swap') {
-			return null;
-		}
-
-		const queuedIndex = selectedPickerExerciseIds.indexOf(exerciseId);
-
-		if (queuedIndex >= 0) {
-			return overview.exercises.length + queuedIndex + 1;
-		}
-
-		return null;
 	}
 
 	async function applyPickedExercises(exerciseIds: string[]) {
@@ -864,8 +738,8 @@
 		closeExercisePicker();
 	}
 
-	function handleAddSelected() {
-		const pickedIds = [...selectedPickerExerciseIds];
+	function handleAddSelected(exerciseIds: string[]) {
+		const pickedIds = [...exerciseIds];
 
 		void runMutation(
 			async () => {
@@ -887,18 +761,10 @@
 		);
 	}
 
-	function handleCreateExercise(event: SubmitEvent) {
-		event.preventDefault();
-
-		const exerciseName = (newExerciseName || cleanExerciseSearch).trim();
-
-		if (!exerciseName) {
-			return;
-		}
-
+	function handleCreateExercise(exerciseName: string, unilateral: boolean) {
 		void runMutation(
 			async () => {
-				const exercise = await requireApi().createExercise(exerciseName, isNewExerciseUnilateral);
+				const exercise = await requireApi().createExercise(exerciseName, unilateral);
 				await applyPickedExercises([exercise.id]);
 			},
 			async () => {
@@ -1152,28 +1018,17 @@
 
 	{#if isExercisePickerOpen}
 		<ExercisePickerSheet
-			{exerciseSearch}
-			{newExerciseName}
-			{isNewExerciseUnilateral}
-			{visiblePickerExercises}
-			{hiddenPickerExerciseCount}
-			{selectedPickerExerciseIdSet}
-			{selectedExerciseIds}
-			{addSelectedLabel}
-			submitDisabled={selectedPickerExerciseIds.length === 0}
-			{canCreateCustomExercise}
+			{exercises}
+			{exerciseUsagePreferences}
+			disabledExerciseIds={selectedExerciseIds}
+			selectionMode={pickerMode === 'swap' ? 'single' : 'multiple'}
 			{isSaving}
 			sheetEyebrow={pickerMode === 'swap' ? 'Swap exercise' : 'Exercise picker'}
 			sheetTitle={pickerMode === 'swap' ? 'Pick a replacement' : 'Add exercises'}
+			actionLabel={pickerMode === 'swap' ? 'Swap exercise' : undefined}
 			onClose={closeExercisePicker}
-			onExerciseSearchInput={handleExerciseSearchInput}
-			onCustomExerciseNameInput={handleCustomExerciseNameInput}
-			onTogglePickerExercise={togglePickerExercise}
-			onToggleUnilateral={(nextValue) => (isNewExerciseUnilateral = nextValue)}
 			onCreateExercise={handleCreateExercise}
 			onAddSelected={handleAddSelected}
-			{isPreviouslyUsedExercise}
-			{getPickerExercisePosition}
 		/>
 	{/if}
 </section>

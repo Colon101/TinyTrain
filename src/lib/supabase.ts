@@ -67,13 +67,7 @@ type PostgrestFilterPatchTarget = {
 	is(column: string, value: boolean | null): unknown;
 };
 
-const reservedPostgrestFilterColumns = new Set(['order']);
-
-function quoteReservedPostgrestFilterColumn(column: string) {
-	return reservedPostgrestFilterColumns.has(column) ? `"${column}"` : column;
-}
-
-function patchReservedPostgrestFilterColumns() {
+function patchReservedPostgrestOrderFilter() {
 	const filterBuilderPrototype = Object.getPrototypeOf(
 		supabase.from('__tinytrain_filter_patch_probe__').select()
 	) as PostgrestFilterPatchTarget;
@@ -84,17 +78,18 @@ function patchReservedPostgrestFilterColumns() {
 
 	const originalEq = filterBuilderPrototype.eq;
 	const originalIs = filterBuilderPrototype.is;
+	const quoteOrder = (column: string) => (column === 'order' ? '"order"' : column);
 
 	filterBuilderPrototype.eq = function eq(column: string, value: unknown) {
-		return originalEq.call(this, quoteReservedPostgrestFilterColumn(column), value);
+		return originalEq.call(this, quoteOrder(column), value);
 	};
 	filterBuilderPrototype.is = function is(column: string, value: boolean | null) {
-		return originalIs.call(this, quoteReservedPostgrestFilterColumn(column), value);
+		return originalIs.call(this, quoteOrder(column), value);
 	};
 	filterBuilderPrototype.__tinytrainReservedColumnPatch = true;
 }
 
-patchReservedPostgrestFilterColumns();
+patchReservedPostgrestOrderFilter();
 
 export type SupabaseAuthSnapshot = {
 	session: Session | null;

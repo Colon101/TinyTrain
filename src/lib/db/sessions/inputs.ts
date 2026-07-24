@@ -23,7 +23,7 @@ export async function updateSessionSetInputValues(
 	let nextSet: SessionSet | null = null;
 	const skippedFields: SessionInputField[] = [];
 
-	await db.transaction('rw', db.sessionSets, db.sessionExercises, db.workoutSessions, async () => {
+	await db.transaction(async () => {
 		const sessionSet = await db.sessionSets.get(sessionSetId);
 
 		if (!sessionSet) {

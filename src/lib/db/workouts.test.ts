@@ -48,8 +48,7 @@ const runtimeHarness = vi.hoisted(() => {
 	const db = {
 		workouts,
 		workoutExercises,
-		transaction: vi.fn((_mode: string, ...args: unknown[]) => {
-			const callback = args.at(-1) as () => Promise<unknown>;
+		transaction: vi.fn((callback: () => Promise<unknown>) => {
 			const nextTransaction = state.transactionQueue.then(callback, callback);
 
 			state.transactionQueue = nextTransaction.then(

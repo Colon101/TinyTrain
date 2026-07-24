@@ -129,7 +129,7 @@ export async function ensureEditableSessionSeedRows(
 		return sessionExercises;
 	}
 
-	await db.transaction('rw', db.sessionSets, db.sessionExercises, db.workoutSessions, async () => {
+	await db.transaction(async () => {
 		const stillMissingSessionExerciseIds: string[] = [];
 
 		for (const sessionExerciseId of seededSessionExerciseIds) {

@@ -11,35 +11,11 @@ import type {
 } from './db/models';
 import { chooseSessionSetConflict } from './db/session-set-conflict';
 
-type QueryResult<T> = {
-	toArray(): Promise<T[]>;
-	first(): Promise<T | undefined>;
-	sortBy(field: string): Promise<T[]>;
-};
-
-type WhereClause<T> = {
-	equals(value: unknown): QueryResult<T>;
-	anyOf(values: unknown[]): QueryResult<T>;
-	between(
-		lower: unknown,
-		upper: unknown,
-		includeLower?: boolean,
-		includeUpper?: boolean
-	): QueryResult<T>;
-};
-
 type DataTable<T extends { id: string }> = {
 	toArray(): Promise<T[]>;
 	get(id: string): Promise<T | undefined>;
-	bulkGet(ids: string[]): Promise<(T | undefined)[]>;
-	add(doc: T): Promise<string>;
-	bulkAdd(docs: T[]): Promise<string[]>;
 	put(doc: T): Promise<string>;
-	bulkPut(docs: T[]): Promise<string[]>;
-	update(id: string, patch: Partial<T>): Promise<number>;
 	delete(id: string): Promise<void>;
-	bulkDelete(ids: string[]): Promise<void>;
-	where(field: string): WhereClause<T>;
 };
 
 type DatabaseCloudSyncDatabase = {
@@ -56,10 +32,8 @@ export type DatabaseCloudSyncDependencies = {
 	db: DatabaseCloudSyncDatabase;
 	getActiveSupabaseUserId(): string | null;
 	markSupabaseCacheHydrated(userId: string): void;
-	markRecentBackfillComplete(userId: string): void;
 	withExerciseDefaults(exercise: Exercise): Exercise;
 	withSessionSetDefaults(sessionSet: SessionSet): SessionSet;
-	hasInputValue(value?: string): boolean;
 };
 
 export type DatabaseUploadMode = 'local-preferred' | 'richest';
@@ -88,16 +62,6 @@ export type DatabaseUploadSummary = {
 	uploadedRows: number;
 	localWins: number;
 	remoteWins: number;
-};
-
-export type LocalDatabaseStats = {
-	workouts: number;
-	customExercises: number;
-	previousWorkouts: number;
-	sessionExercises: number;
-	sessionSets: number;
-	filledSessionSets: number;
-	lastWorkoutAt?: string;
 };
 
 export type SyncableRow = {
@@ -808,7 +772,6 @@ async function backfillRecentRows(
 	}
 
 	assertSyncContextActive(deps, userId);
-	deps.markRecentBackfillComplete(userId);
 	deps.markSupabaseCacheHydrated(userId);
 }
 

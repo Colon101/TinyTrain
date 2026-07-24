@@ -49,7 +49,7 @@ export function isSessionInactive(
 }
 
 export async function abandonStoredInactiveSession(sessionId: string, nowMs: number) {
-	return db.transaction('rw', db.workoutSessions, db.sessionExercises, db.sessionSets, async () => {
+	return db.transaction(async () => {
 		const session = await db.workoutSessions.get(sessionId);
 
 		if (!session || session.status !== 'in_progress') {
@@ -168,7 +168,7 @@ export async function cleanupStaleSessions(todayDayKey = toDayKey(new Date())) {
 
 	stalePlannedSessions = plannedSessions.filter((session) => session.dayKey < todayDayKey);
 
-	await db.transaction('rw', db.workoutSessions, db.sessionExercises, db.sessionSets, async () => {
+	await db.transaction(async () => {
 		for (const stalePlannedSession of stalePlannedSessions) {
 			const currentSession = await db.workoutSessions.get(stalePlannedSession.id);
 
@@ -245,34 +245,27 @@ export async function scheduleWorkoutSession(workoutId: string, dayKey: string) 
 		)
 	).flat();
 
-	await db.transaction(
-		'rw',
-		db.workoutSessions,
-		db.sessionExercises,
-		db.sessionSets,
-		db.workouts,
-		async () => {
-			const conflictingSession = (
-				await db.workoutSessions.where('dayKey').equals(dayKey).toArray()
-			).find((candidate) => candidate.id !== session.id);
+	await db.transaction(async () => {
+		const conflictingSession = (
+			await db.workoutSessions.where('dayKey').equals(dayKey).toArray()
+		).find((candidate) => candidate.id !== session.id);
 
-			if (conflictingSession) {
-				throw new Error('A session already exists for today.');
-			}
-
-			await db.workoutSessions.add(session);
-
-			if (sessionExercises.length > 0) {
-				await db.sessionExercises.bulkAdd(sessionExercises);
-			}
-
-			if (sessionSets.length > 0) {
-				await db.sessionSets.bulkAdd(sessionSets);
-			}
-
-			await db.workouts.update(workoutId, { updatedAt: createdAt });
+		if (conflictingSession) {
+			throw new Error('A session already exists for today.');
 		}
-	);
+
+		await db.workoutSessions.add(session);
+
+		if (sessionExercises.length > 0) {
+			await db.sessionExercises.bulkAdd(sessionExercises);
+		}
+
+		if (sessionSets.length > 0) {
+			await db.sessionSets.bulkAdd(sessionSets);
+		}
+
+		await db.workouts.update(workoutId, { updatedAt: createdAt });
+	});
 
 	return summarizeSession(session, sessionExercises, sessionSets);
 }
@@ -283,7 +276,7 @@ export async function startWorkoutSession(sessionId: string) {
 	const now = timestamp();
 	let didStart = false;
 
-	await db.transaction('rw', db.workoutSessions, db.sessionExercises, async () => {
+	await db.transaction(async () => {
 		const currentSession = await db.workoutSessions.get(sessionId);
 
 		if (!currentSession) {
@@ -389,37 +382,30 @@ export async function completeWorkoutSession(sessionId: string) {
 	const now = timestamp();
 	let didComplete = false;
 
-	await db.transaction(
-		'rw',
-		db.workoutSessions,
-		db.sessionExercises,
-		db.workoutExercises,
-		db.workouts,
-		async () => {
-			const currentSession = await db.workoutSessions.get(sessionId);
+	await db.transaction(async () => {
+		const currentSession = await db.workoutSessions.get(sessionId);
 
-			if (!currentSession) {
-				throw new Error('Session not found.');
-			}
-
-			if (currentSession.status === 'completed' || currentSession.status === 'abandoned') {
-				return;
-			}
-
-			if (currentSession.status !== 'in_progress') {
-				throw new Error('Start the session before completing it.');
-			}
-
-			await syncWorkoutExercisesFromSession(sessionId, now);
-			await db.workoutSessions.update(sessionId, {
-				status: 'completed',
-				startedAt: currentSession.startedAt ?? now,
-				completedAt: now,
-				updatedAt: now
-			});
-			didComplete = true;
+		if (!currentSession) {
+			throw new Error('Session not found.');
 		}
-	);
+
+		if (currentSession.status === 'completed' || currentSession.status === 'abandoned') {
+			return;
+		}
+
+		if (currentSession.status !== 'in_progress') {
+			throw new Error('Start the session before completing it.');
+		}
+
+		await syncWorkoutExercisesFromSession(sessionId, now);
+		await db.workoutSessions.update(sessionId, {
+			status: 'completed',
+			startedAt: currentSession.startedAt ?? now,
+			completedAt: now,
+			updatedAt: now
+		});
+		didComplete = true;
+	});
 
 	if (!didComplete) {
 		return;
@@ -470,7 +456,7 @@ export async function updateWorkoutSessionTiming(
 
 	const now = timestamp();
 
-	await db.transaction('rw', db.workoutSessions, db.sessionExercises, async () => {
+	await db.transaction(async () => {
 		const currentSession = await db.workoutSessions.get(sessionId);
 
 		if (!currentSession) {
@@ -554,20 +540,13 @@ export async function getEditableSession(sessionId: string) {
 export async function deleteWorkoutSession(sessionId: string) {
 	requireLoggedInUser();
 
-	await db.transaction(
-		'rw',
-		db.workoutSessions,
-		db.sessionExercises,
-		db.sessionSets,
-		db.workouts,
-		async () => {
-			const session = await deleteWorkoutSessionRows(sessionId);
+	await db.transaction(async () => {
+		const session = await deleteWorkoutSessionRows(sessionId);
 
-			if (!session) {
-				return;
-			}
-
-			await db.workouts.update(session.workoutId, { updatedAt: timestamp() });
+		if (!session) {
+			return;
 		}
-	);
+
+		await db.workouts.update(session.workoutId, { updatedAt: timestamp() });
+	});
 }

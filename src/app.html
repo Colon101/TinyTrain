@@ -79,129 +79,6 @@
 
 			if ('serviceWorker' in navigator) {
 				const rootScope = new URL('/', window.location.origin).href;
-				const updateLogPrefix = '[TinyTrain update check]';
-				// Keep this list synchronized with `AUTH_CACHE_PARAM_NAMES` in src/service-worker.ts.
-				// This inline script is not bundled with that module, so the compiler cannot enforce it.
-				const authCacheParamNames = new Set([
-					'code',
-					'state',
-					'error',
-					'error_description',
-					'access_token',
-					'refresh_token',
-					'provider_token',
-					'provider_refresh_token'
-				]);
-
-				function logServiceWorkerUpdateCheck(data) {
-					if (!data || data.type !== 'TINYTRAIN_CACHE_UPDATE_CHECK') {
-						return;
-					}
-
-					const labels = {
-						checking: 'checking cache update',
-						current: 'cache is current',
-						newer: 'newer deployment found',
-						failed: 'check failed; trusting cache',
-						'precache-skipped': 'precache incomplete; keeping the current app version'
-					};
-
-					console.info(`${updateLogPrefix} ${labels[data.status] || data.status}`, data);
-				}
-
-				navigator.serviceWorker.addEventListener('message', (event) => {
-					logServiceWorkerUpdateCheck(event.data);
-				});
-
-				function hasAuthCacheParams(url) {
-					for (const paramName of authCacheParamNames) {
-						if (url.searchParams.has(paramName)) {
-							return true;
-						}
-					}
-
-					const hashParams = new URLSearchParams(url.hash.startsWith('#') ? url.hash.slice(1) : '');
-
-					for (const paramName of authCacheParamNames) {
-						if (hashParams.has(paramName)) {
-							return true;
-						}
-					}
-
-					return false;
-				}
-
-				function getCacheableUrl(urlValue) {
-					try {
-						const url = new URL(urlValue, window.location.origin);
-
-						if (url.origin !== window.location.origin || hasAuthCacheParams(url)) {
-							return null;
-						}
-
-						return url.href;
-					} catch {
-						return null;
-					}
-				}
-
-				function getCurrentPageCacheUrls() {
-					const urls = [rootScope];
-					const currentPageUrl = getCacheableUrl(window.location.href);
-
-					if (currentPageUrl) {
-						urls.push(currentPageUrl);
-					}
-
-					for (const entry of performance.getEntriesByType('resource')) {
-						const resourceUrl = getCacheableUrl(entry.name);
-
-						if (resourceUrl) {
-							urls.push(resourceUrl);
-						}
-					}
-
-					return [...new Set(urls)];
-				}
-
-				function warmServiceWorkerCache(registration) {
-					const worker = registration.active || navigator.serviceWorker.controller;
-
-					if (!worker) {
-						return;
-					}
-
-					worker.postMessage({
-						type: 'CACHE_URLS',
-						urls: getCurrentPageCacheUrls()
-					});
-				}
-
-				function requestLastUpdateCheckStatus(registration) {
-					const worker = registration.active || navigator.serviceWorker.controller;
-
-					if (!worker) {
-						return;
-					}
-
-					worker.postMessage({ type: 'GET_CACHE_UPDATE_STATUS' });
-				}
-
-				function showVisibleUpdateCheckRequest() {
-					fetch(`/deployment.json?tinytrain-visible-update-check=${Date.now()}`, {
-						cache: 'no-store'
-					})
-						.then(async (response) => {
-							const manifest = response.ok ? await response.json() : null;
-							console.info(`${updateLogPrefix} visible network request finished`, {
-								status: response.status,
-								deploymentId: manifest && manifest.id
-							});
-						})
-						.catch((error) => {
-							console.info(`${updateLogPrefix} visible network request failed`, error);
-						});
-				}
 
 				window.addEventListener('load', () => {
 					navigator.serviceWorker
@@ -218,17 +95,7 @@
 								type: 'module'
 							});
 						})
-						.then((registration) => {
-							registration.update();
-							requestLastUpdateCheckStatus(registration);
-							warmServiceWorkerCache(registration);
-							return navigator.serviceWorker.ready;
-						})
-						.then((registration) => {
-							requestLastUpdateCheckStatus(registration);
-							warmServiceWorkerCache(registration);
-							showVisibleUpdateCheckRequest();
-						})
+						.then((registration) => registration.update())
 						.catch(() => undefined);
 				});
 			}

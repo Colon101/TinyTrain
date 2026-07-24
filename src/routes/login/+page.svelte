@@ -32,7 +32,7 @@
 		if (disposed) return;
 
 		api = dbApi;
-		currentUserSubscription ??= dbApi.db.cloud.currentUser.subscribe((nextUser) => {
+		currentUserSubscription ??= dbApi.currentUser.subscribe((nextUser) => {
 			if (nextUser.isLoggedIn) {
 				void goto(resolve('/'), { replaceState: true });
 			}

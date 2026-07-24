@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbCloudSync, type DatabaseCloudSyncDependencies, type SyncableRow } from './db-cloud-sync';
 import type { DataTable } from './db/runtime';
 import type { SessionSet } from './db/models';
-import { hasInputValue, withExerciseDefaults, withSessionSetDefaults } from './db/shared';
+import { withExerciseDefaults, withSessionSetDefaults } from './db/shared';
 
 type SupabaseMockRow = SyncableRow & {
 	user_id: string;
@@ -121,10 +121,8 @@ const dependencies: DatabaseCloudSyncDependencies = {
 	db: {} as DatabaseCloudSyncDependencies['db'],
 	getActiveSupabaseUserId: () => 'user-1',
 	markSupabaseCacheHydrated: () => undefined,
-	markRecentBackfillComplete: () => undefined,
 	withExerciseDefaults,
-	withSessionSetDefaults,
-	hasInputValue
+	withSessionSetDefaults
 };
 
 function createLocalTable<T extends SyncableRow>(initialRow?: T) {
@@ -183,7 +181,7 @@ function createReconcileDependencies(workout: SyncableRow) {
 				sessionExercises: sessionExercises.table,
 				sessionSets: sessionSets.table,
 				exerciseResetEvents: exerciseResetEvents.table
-			} as DatabaseCloudSyncDependencies['db']
+			} as unknown as DatabaseCloudSyncDependencies['db']
 		}
 	};
 }

@@ -1,5 +1,6 @@
 import { strFromU8, Unzip, UnzipInflate } from 'fflate';
 import {
+	currentUser,
 	db,
 	ensureDbOpen,
 	normalizeName,
@@ -137,7 +138,7 @@ export async function importTrackedArchive(
 
 	await ensureDbOpen();
 
-	if (!db.cloud.currentUser.value?.isLoggedIn) {
+	if (!currentUser.value?.isLoggedIn) {
 		throw new Error('Sign in with Google before importing from Tracked.');
 	}
 
@@ -648,50 +649,41 @@ async function writeImportPlan(
 		summary.sessionSetsImported += setRowsForSession.length;
 	}
 
-	await db.transaction(
-		'rw',
-		db.exercises,
-		db.workouts,
-		db.workoutExercises,
-		db.workoutSessions,
-		db.sessionExercises,
-		db.sessionSets,
-		async () => {
-			if (exercises.toAdd.length > 0) {
-				await db.exercises.bulkAdd(exercises.toAdd);
-			}
-
-			if (workouts.toAdd.length > 0) {
-				await db.workouts.bulkAdd(workouts.toAdd);
-			}
-
-			if (sessionsToAdd.length > 0) {
-				await db.workoutSessions.bulkAdd(sessionsToAdd);
-			}
-
-			if (sessionExercisesToAdd.length > 0) {
-				await db.sessionExercises.bulkAdd(sessionExercisesToAdd);
-			}
-
-			if (sessionSetsToAdd.length > 0) {
-				await db.sessionSets.bulkAdd(sessionSetsToAdd);
-			}
-
-			const workoutExerciseRewrite = await buildWorkoutExerciseRewrite(
-				latestWorkoutTemplateByWorkoutId,
-				workouts.byId,
-				now
-			);
-
-			if (workoutExerciseRewrite.idsToDelete.length > 0) {
-				await db.workoutExercises.bulkDelete(workoutExerciseRewrite.idsToDelete);
-			}
-
-			if (workoutExerciseRewrite.rows.length > 0) {
-				await db.workoutExercises.bulkPut(workoutExerciseRewrite.rows);
-			}
+	await db.transaction(async () => {
+		if (exercises.toAdd.length > 0) {
+			await db.exercises.bulkAdd(exercises.toAdd);
 		}
-	);
+
+		if (workouts.toAdd.length > 0) {
+			await db.workouts.bulkAdd(workouts.toAdd);
+		}
+
+		if (sessionsToAdd.length > 0) {
+			await db.workoutSessions.bulkAdd(sessionsToAdd);
+		}
+
+		if (sessionExercisesToAdd.length > 0) {
+			await db.sessionExercises.bulkAdd(sessionExercisesToAdd);
+		}
+
+		if (sessionSetsToAdd.length > 0) {
+			await db.sessionSets.bulkAdd(sessionSetsToAdd);
+		}
+
+		const workoutExerciseRewrite = await buildWorkoutExerciseRewrite(
+			latestWorkoutTemplateByWorkoutId,
+			workouts.byId,
+			now
+		);
+
+		if (workoutExerciseRewrite.idsToDelete.length > 0) {
+			await db.workoutExercises.bulkDelete(workoutExerciseRewrite.idsToDelete);
+		}
+
+		if (workoutExerciseRewrite.rows.length > 0) {
+			await db.workoutExercises.bulkPut(workoutExerciseRewrite.rows);
+		}
+	});
 
 	return summary;
 }

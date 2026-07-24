@@ -345,61 +345,6 @@ export async function listCustomExercises() {
 		.sort((first, second) => first.name.localeCompare(second.name));
 }
 
-export async function listCustomExerciseItems(): Promise<ExerciseListItem[]> {
-	const exercises = await listCustomExercises();
-	const exerciseIds = exercises.map((exercise) => exercise.id);
-
-	if (exerciseIds.length === 0) {
-		return [];
-	}
-
-	const [sessionExercises, resetEvents] = await Promise.all([
-		db.sessionExercises.where('exerciseId').anyOf(exerciseIds).toArray(),
-		db.exerciseResetEvents.where('exerciseId').anyOf(exerciseIds).toArray()
-	]);
-	const sessionIds = [
-		...new Set(sessionExercises.map((sessionExercise) => sessionExercise.sessionId))
-	];
-	const sessions = sessionIds.length === 0 ? [] : await db.workoutSessions.bulkGet(sessionIds);
-	const sessionById = new Map(sessions.filter(isDefined).map((session) => [session.id, session]));
-	const performedSessionExerciseIds = await getPerformedSessionExerciseIdSet(sessionExercises);
-
-	const historyByExerciseId = new Map<string, Set<string>>();
-	const lastPerformedAtByExerciseId = new Map<string, string>();
-	const latestResetAtByExerciseId = buildLatestResetAtByExerciseId(resetEvents);
-
-	for (const sessionExercise of sessionExercises) {
-		const session = sessionById.get(sessionExercise.sessionId);
-
-		if (
-			!session ||
-			session.status === 'planned' ||
-			!performedSessionExerciseIds.has(sessionExercise.id)
-		) {
-			continue;
-		}
-
-		const historySessions =
-			historyByExerciseId.get(sessionExercise.exerciseId) ?? new Set<string>();
-		historySessions.add(sessionExercise.sessionId);
-		historyByExerciseId.set(sessionExercise.exerciseId, historySessions);
-
-		const currentValue = lastPerformedAtByExerciseId.get(sessionExercise.exerciseId);
-		const performedAt = getSessionExercisePerformedAt(session, sessionExercise);
-
-		if (!currentValue || currentValue < performedAt) {
-			lastPerformedAtByExerciseId.set(sessionExercise.exerciseId, performedAt);
-		}
-	}
-
-	return exercises.map((exercise) => ({
-		exercise,
-		historyCount: historyByExerciseId.get(exercise.id)?.size ?? 0,
-		lastPerformedAt: lastPerformedAtByExerciseId.get(exercise.id),
-		latestResetAt: latestResetAtByExerciseId.get(exercise.id)
-	}));
-}
-
 export async function listExerciseItems(): Promise<ExerciseListItem[]> {
 	const [customExercises, sessionExercises] = await Promise.all([
 		listCustomExercises(),

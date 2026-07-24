@@ -48,10 +48,6 @@
 	let isCreatingWorkout = $state(false);
 	let newWorkoutName = $state('');
 	let isExercisePickerOpen = $state(false);
-	let exerciseSearch = $state('');
-	let selectedPickerExerciseIds = $state<string[]>([]);
-	let newExerciseName = $state('');
-	let isNewExerciseUnilateral = $state(false);
 	let draggedWorkoutExerciseId = $state('');
 	let dragStartWorkoutExerciseIds = $state<string[]>([]);
 	let dragPreview = $state<DragPreview | null>(null);
@@ -70,43 +66,6 @@
 	);
 	let selectedExerciseIds = $derived(
 		new Set(workoutExercises.map((workoutExercise) => workoutExercise.exercise.id))
-	);
-	let selectedPickerExerciseIdSet = $derived(new Set(selectedPickerExerciseIds));
-	let cleanExerciseSearch = $derived(exerciseSearch.trim().replace(/\s+/g, ' '));
-	let normalizedExerciseSearch = $derived(cleanExerciseSearch.toLocaleLowerCase());
-	let exerciseUsageByNormalizedName = $derived(
-		new Map(exerciseUsagePreferences.map((preference) => [preference.normalizedName, preference]))
-	);
-	let exerciseUsageById = $derived(
-		new Map(
-			exerciseUsagePreferences.flatMap((preference) =>
-				preference.exerciseIds.map((exerciseId) => [exerciseId, preference] as const)
-			)
-		)
-	);
-	let filteredExercises = $derived(
-		(cleanExerciseSearch
-			? exercises.filter((exercise) => exercise.normalizedName.includes(normalizedExerciseSearch))
-			: exercises
-		).toSorted(compareExercisePickerPreference)
-	);
-	let visiblePickerExercises = $derived(filteredExercises.slice(0, cleanExerciseSearch ? 80 : 60));
-	let hiddenPickerExerciseCount = $derived(
-		Math.max(filteredExercises.length - visiblePickerExercises.length, 0)
-	);
-	let hasExactExerciseMatch = $derived(
-		Boolean(cleanExerciseSearch) &&
-			exercises.some((exercise) => exercise.normalizedName === normalizedExerciseSearch)
-	);
-	let canCreateCustomExercise = $derived(
-		Boolean(cleanExerciseSearch) && filteredExercises.length < 5 && !hasExactExerciseMatch
-	);
-	let workoutExerciseCount = $derived(workoutExercises.length);
-	let selectedPickerCount = $derived(selectedPickerExerciseIds.length);
-	let addSelectedLabel = $derived(
-		selectedPickerCount === 0
-			? 'Add exercise(s)'
-			: `Add ${selectedPickerCount} exercise${selectedPickerCount === 1 ? '' : 's'}`
 	);
 	let draggedWorkoutExercise = $derived(
 		workoutExercises.find((workoutExercise) => workoutExercise.id === draggedWorkoutExerciseId) ??
@@ -216,37 +175,6 @@
 		}
 
 		return dbApi;
-	}
-
-	function getExerciseUsagePreference(exercise: Exercise) {
-		return (
-			exerciseUsageById.get(exercise.id) ??
-			exerciseUsageByNormalizedName.get(exercise.normalizedName) ??
-			null
-		);
-	}
-
-	function isPreviouslyUsedExercise(exercise: Exercise) {
-		return Boolean(getExerciseUsagePreference(exercise));
-	}
-
-	function compareExercisePickerPreference(first: Exercise, second: Exercise) {
-		const firstUsage = getExerciseUsagePreference(first);
-		const secondUsage = getExerciseUsagePreference(second);
-
-		if (Boolean(firstUsage) !== Boolean(secondUsage)) {
-			return firstUsage ? -1 : 1;
-		}
-
-		if (firstUsage && secondUsage) {
-			return (
-				secondUsage.lastPerformedAt.localeCompare(firstUsage.lastPerformedAt) ||
-				secondUsage.sessionCount - firstUsage.sessionCount ||
-				first.name.localeCompare(second.name)
-			);
-		}
-
-		return first.name.localeCompare(second.name);
 	}
 
 	function invalidatePageDataLoads() {
@@ -489,66 +417,19 @@
 			return;
 		}
 
-		exerciseSearch = '';
-		selectedPickerExerciseIds = [];
-		newExerciseName = '';
-		isNewExerciseUnilateral = false;
 		isExercisePickerOpen = true;
 	}
 
 	function closeExercisePicker() {
 		isExercisePickerOpen = false;
-		selectedPickerExerciseIds = [];
-		newExerciseName = '';
-		isNewExerciseUnilateral = false;
 	}
 
-	function handleExerciseSearchInput(event: Event) {
-		const target = event.currentTarget as HTMLInputElement;
-		exerciseSearch = target.value;
-
-		if (!newExerciseName) {
-			newExerciseName = target.value;
-		}
-	}
-
-	function handleCustomExerciseNameInput(value: string) {
-		newExerciseName = value;
-	}
-
-	function togglePickerExercise(exerciseId: string) {
-		if (selectedExerciseIds.has(exerciseId)) {
+	function addSelectedExercises(exerciseIds: string[]) {
+		if (!selectedWorkoutId || exerciseIds.length === 0) {
 			return;
 		}
 
-		if (selectedPickerExerciseIdSet.has(exerciseId)) {
-			selectedPickerExerciseIds = selectedPickerExerciseIds.filter((id) => id !== exerciseId);
-			return;
-		}
-
-		selectedPickerExerciseIds = [...selectedPickerExerciseIds, exerciseId];
-	}
-
-	function getPickerExercisePosition(exerciseId: string) {
-		const queuedIndex = selectedPickerExerciseIds.indexOf(exerciseId);
-
-		if (queuedIndex >= 0) {
-			return workoutExerciseCount + queuedIndex + 1;
-		}
-
-		const existingIndex = workoutExercises.findIndex(
-			(workoutExercise) => workoutExercise.exercise.id === exerciseId
-		);
-
-		return existingIndex >= 0 ? existingIndex + 1 : null;
-	}
-
-	function addSelectedExercises() {
-		if (!selectedWorkoutId || selectedPickerExerciseIds.length === 0) {
-			return;
-		}
-
-		const exerciseIdsToAdd = selectedPickerExerciseIds.filter((id) => !selectedExerciseIds.has(id));
+		const exerciseIdsToAdd = exerciseIds.filter((id) => !selectedExerciseIds.has(id));
 
 		if (exerciseIdsToAdd.length === 0) {
 			return;
@@ -563,26 +444,17 @@
 		});
 	}
 
-	function handleCreateExercise(event: SubmitEvent) {
-		event.preventDefault();
-
+	function handleCreateExercise(exerciseName: string, unilateral: boolean) {
 		if (!selectedWorkoutId) {
-			return;
-		}
-
-		const exerciseName = (newExerciseName || cleanExerciseSearch).trim();
-
-		if (!exerciseName) {
 			return;
 		}
 
 		void runMutation(async () => {
 			const api = requireDbApi();
-			const exercise = await api.createExercise(exerciseName, isNewExerciseUnilateral);
+			const exercise = await api.createExercise(exerciseName, unilateral);
 
 			await api.addExerciseToWorkout(selectedWorkoutId, exercise.id);
 			closeExercisePicker();
-			exerciseSearch = '';
 			await loadPageData(selectedWorkoutId);
 		});
 	}
@@ -921,26 +793,13 @@
 	>
 		{#if isExercisePickerOpen}
 			<ExercisePickerSheet
-				{exerciseSearch}
-				{newExerciseName}
-				{isNewExerciseUnilateral}
-				{visiblePickerExercises}
-				{hiddenPickerExerciseCount}
-				{selectedPickerExerciseIdSet}
-				{selectedExerciseIds}
-				{addSelectedLabel}
-				submitDisabled={selectedPickerCount === 0}
-				{canCreateCustomExercise}
+				{exercises}
+				{exerciseUsagePreferences}
+				disabledExerciseIds={selectedExerciseIds}
 				{isSaving}
 				onClose={closeExercisePicker}
-				onExerciseSearchInput={handleExerciseSearchInput}
-				onCustomExerciseNameInput={handleCustomExerciseNameInput}
-				onTogglePickerExercise={togglePickerExercise}
-				onToggleUnilateral={(nextValue) => (isNewExerciseUnilateral = nextValue)}
 				onCreateExercise={handleCreateExercise}
 				onAddSelected={addSelectedExercises}
-				{isPreviouslyUsedExercise}
-				{getPickerExercisePosition}
 			/>
 		{/if}
 	</WorkoutDetailView>
