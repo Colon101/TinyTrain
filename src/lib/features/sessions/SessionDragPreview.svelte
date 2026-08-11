@@ -16,7 +16,7 @@
 		draggedSessionExercise,
 		dragPreviewElement = $bindable(null)
 	}: {
-		dragPreview: DragPreview;
+		dragPreview: Pick<DragPreview, 'x' | 'y' | 'width'>;
 		draggedSessionExercise: SessionExerciseOverview;
 		dragPreviewElement: HTMLDivElement | null;
 	} = $props();

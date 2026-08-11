@@ -99,12 +99,57 @@ type ImportPlan = {
 	setRows: CsvRow[];
 };
 
+type CsvParseBudget = {
+	rows: number;
+	fields: number;
+};
+
+type ImportCollectionName =
+	| 'exercises'
+	| 'workouts'
+	| 'workoutExercises'
+	| 'workoutSessions'
+	| 'sessionExercises'
+	| 'sessionSets';
+
+type ImportDocument =
+	Exercise | Workout | WorkoutExercise | WorkoutSession | SessionExercise | SessionSet;
+
+type WorkoutExerciseRewrite = {
+	rows: WorkoutExercise[];
+	idsToDelete: string[];
+	previousRows: WorkoutExercise[];
+};
+
+type ImportWriteSet = {
+	exercises: Exercise[];
+	workouts: Workout[];
+	workoutExercises: WorkoutExerciseRewrite;
+	workoutSessions: WorkoutSession[];
+	sessionExercises: SessionExercise[];
+	sessionSets: SessionSet[];
+};
+
+type ImportDataTable<T extends { id: string }> = {
+	bulkGet(ids: string[]): Promise<(T | undefined)[]>;
+	bulkDelete(ids: string[]): Promise<void>;
+	bulkPut(docs: T[]): Promise<string[]>;
+};
+
 const REQUIRED_FILES = ['sessions.csv', 'sets.csv', 'exercises.csv'];
 const OPTIONAL_FILES = ['workouts.csv', 'workout_groups.csv'];
 const MAX_ARCHIVE_BYTES = 20 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES = 64;
 const MAX_CSV_BYTES = 12 * 1024 * 1024;
 const MAX_TOTAL_CSV_BYTES = 32 * 1024 * 1024;
+const MAX_CSV_ROWS = 50_000;
+const MAX_TOTAL_CSV_ROWS = 100_000;
+const MAX_CSV_COLUMNS = 32;
+const MAX_CSV_FIELD_CHARACTERS = 16_384;
+const MAX_CSV_FIELDS = 500_000;
+const MAX_TOTAL_CSV_FIELDS = 1_000_000;
+const MAX_DOCUMENT_STRING_CHARACTERS = 500;
+const MAX_DOCUMENT_TIMESTAMP_CHARACTERS = 80;
 const UNSUPPORTED_CATEGORIES = [
 	'bodyweight',
 	'daily steps',
@@ -137,12 +182,14 @@ export async function importTrackedArchive(
 
 	await ensureDbOpen();
 
-	if (!db.cloud.currentUser.value?.isLoggedIn) {
+	const currentUser = db.cloud.currentUser.value;
+
+	if (!currentUser?.isLoggedIn || !currentUser.userId) {
 		throw new Error('Sign in with Google before importing from Tracked.');
 	}
 
 	options.onProgress?.('writing');
-	const importedSummary = await writeImportPlan(plan, options);
+	const importedSummary = await writeImportPlan(plan, options, currentUser.userId);
 
 	try {
 		options.onProgress?.('syncing');
@@ -189,12 +236,17 @@ async function readTrackedArchive(file: File): Promise<TrackedArchive> {
 		.filter((fileName) => !REQUIRED_FILES.includes(fileName) && !OPTIONAL_FILES.includes(fileName))
 		.sort();
 
+	const parseBudget: CsvParseBudget = { rows: 0, fields: 0 };
 	const rows = {
-		exercises: parseCsvFile(files.get('exercises.csv') ?? '', 'exercises.csv'),
-		workoutGroups: parseCsvFile(files.get('workout_groups.csv') ?? 'id,name', 'workout_groups.csv'),
-		workouts: parseCsvFile(files.get('workouts.csv') ?? 'id,name', 'workouts.csv'),
-		sessions: parseCsvFile(files.get('sessions.csv') ?? '', 'sessions.csv'),
-		sets: parseCsvFile(files.get('sets.csv') ?? '', 'sets.csv')
+		exercises: parseCsvFile(files.get('exercises.csv') ?? '', 'exercises.csv', parseBudget),
+		workoutGroups: parseCsvFile(
+			files.get('workout_groups.csv') ?? 'id,name',
+			'workout_groups.csv',
+			parseBudget
+		),
+		workouts: parseCsvFile(files.get('workouts.csv') ?? 'id,name', 'workouts.csv', parseBudget),
+		sessions: parseCsvFile(files.get('sessions.csv') ?? '', 'sessions.csv', parseBudget),
+		sets: parseCsvFile(files.get('sets.csv') ?? '', 'sets.csv', parseBudget)
 	};
 
 	assertCsvColumns('exercises.csv', rows.exercises, ['id', 'name']);
@@ -532,19 +584,26 @@ async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
 
 async function writeImportPlan(
 	plan: ImportPlan,
-	options: TrackedImportOptions
+	options: TrackedImportOptions,
+	ownerId: string
 ): Promise<TrackedImportSummary> {
+	assertImportOwner(ownerId);
+
 	const now = timestamp();
 	const summary = { ...plan.summary, warnings: [...plan.summary.warnings] };
-	const exercises = await upsertImportedExercises(plan, now);
-	const workouts = await upsertImportedWorkouts(plan, now);
+	const exercises = await upsertImportedExercises(plan, now, ownerId);
+	const workouts = await upsertImportedWorkouts(plan, now, ownerId);
 	const setRowsBySessionId = groupBy(plan.setRows, (set) => set.sessionId);
-	const existingSessionIds = new Set(
-		(
-			await db.workoutSessions.bulkGet(
-				plan.sessionRows.map((session) => toTrackedId('session', session.id))
-			)
+	const sessionIdCandidates = [
+		...new Set(
+			plan.sessionRows.flatMap((session) => [
+				toTrackedId(ownerId, 'session', session.id),
+				toLegacyTrackedId('session', session.id)
+			])
 		)
+	];
+	const existingSessionIds = new Set(
+		(await db.workoutSessions.bulkGet(sessionIdCandidates))
 			.filter(isDefined)
 			.map((session) => session.id)
 	);
@@ -567,7 +626,8 @@ async function writeImportPlan(
 	}));
 
 	for (const sessionRow of plan.sessionRows) {
-		const sessionId = toTrackedId('session', sessionRow.id);
+		const sessionId = toTrackedId(ownerId, 'session', sessionRow.id);
+		const legacySessionId = toLegacyTrackedId('session', sessionRow.id);
 		const sessionSetRows = setRowsBySessionId.get(sessionRow.id) ?? [];
 
 		const workoutName = getWorkoutName(sessionRow, plan.workoutNameByTrackedId);
@@ -604,7 +664,7 @@ async function writeImportPlan(
 			});
 		}
 
-		if (existingSessionIds.has(sessionId)) {
+		if (existingSessionIds.has(sessionId) || existingSessionIds.has(legacySessionId)) {
 			summary.sessionsSkipped += 1;
 			summary.sessionSetsSkipped += countImportedSetRows(sessionSetRows);
 			continue;
@@ -628,9 +688,10 @@ async function writeImportPlan(
 			plan.exercisesByTrackedId,
 			completedAt
 		);
+		const sessionExerciseIdPrefix = `${session.id}:exercise:`;
 		const sessionExerciseByTrackedExerciseId = new Map(
 			exerciseRowsForSession.map((sessionExercise) => [
-				sessionExercise.id.split(':exercise:').at(-1) ?? '',
+				sessionExercise.id.slice(sessionExerciseIdPrefix.length),
 				sessionExercise
 			])
 		);
@@ -657,38 +718,39 @@ async function writeImportPlan(
 		db.sessionExercises,
 		db.sessionSets,
 		async () => {
-			if (exercises.toAdd.length > 0) {
-				await db.exercises.bulkAdd(exercises.toAdd);
-			}
-
-			if (workouts.toAdd.length > 0) {
-				await db.workouts.bulkAdd(workouts.toAdd);
-			}
-
-			if (sessionsToAdd.length > 0) {
-				await db.workoutSessions.bulkAdd(sessionsToAdd);
-			}
-
-			if (sessionExercisesToAdd.length > 0) {
-				await db.sessionExercises.bulkAdd(sessionExercisesToAdd);
-			}
-
-			if (sessionSetsToAdd.length > 0) {
-				await db.sessionSets.bulkAdd(sessionSetsToAdd);
-			}
+			assertImportOwner(ownerId);
 
 			const workoutExerciseRewrite = await buildWorkoutExerciseRewrite(
 				latestWorkoutTemplateByWorkoutId,
 				workouts.byId,
 				now
 			);
+			const writeSet: ImportWriteSet = {
+				exercises: exercises.toAdd,
+				workouts: workouts.toAdd,
+				workoutExercises: workoutExerciseRewrite,
+				workoutSessions: sessionsToAdd,
+				sessionExercises: sessionExercisesToAdd,
+				sessionSets: sessionSetsToAdd
+			};
 
-			if (workoutExerciseRewrite.idsToDelete.length > 0) {
-				await db.workoutExercises.bulkDelete(workoutExerciseRewrite.idsToDelete);
-			}
+			assertValidImportWriteSet(ownerId, writeSet);
+			await assertNewImportIdsAvailable(writeSet);
 
-			if (workoutExerciseRewrite.rows.length > 0) {
-				await db.workoutExercises.bulkPut(workoutExerciseRewrite.rows);
+			try {
+				await applyImportWriteSet(writeSet);
+			} catch (error) {
+				try {
+					await rollbackImportWriteSet(writeSet);
+				} catch (rollbackError) {
+					throw new AggregateError(
+						[error, rollbackError],
+						'Tracked import failed and its database rollback could not be verified.',
+						{ cause: rollbackError }
+					);
+				}
+
+				throw error;
 			}
 		}
 	);
@@ -696,7 +758,328 @@ async function writeImportPlan(
 	return summary;
 }
 
-async function upsertImportedExercises(plan: ImportPlan, now: string) {
+const REQUIRED_IMPORT_STRING_FIELDS: Record<ImportCollectionName, readonly string[]> = {
+	exercises: ['id', 'name', 'normalizedName', 'source', 'createdAt', 'updatedAt'],
+	workouts: ['id', 'name', 'normalizedName', 'createdAt', 'updatedAt'],
+	workoutExercises: ['id', 'workoutId', 'exerciseId', 'createdAt', 'updatedAt'],
+	workoutSessions: [
+		'id',
+		'workoutId',
+		'workoutNameSnapshot',
+		'dayKey',
+		'status',
+		'createdAt',
+		'updatedAt'
+	],
+	sessionExercises: [
+		'id',
+		'sessionId',
+		'workoutId',
+		'exerciseId',
+		'exerciseNameSnapshot',
+		'performedAt',
+		'createdAt',
+		'updatedAt'
+	],
+	sessionSets: ['id', 'sessionExerciseId', 'exerciseId', 'side', 'createdAt', 'updatedAt']
+};
+
+const IMPORT_TIMESTAMP_FIELDS = new Set([
+	'startedAt',
+	'completedAt',
+	'performedAt',
+	'createdAt',
+	'updatedAt'
+]);
+
+function assertImportOwner(ownerId: string) {
+	const currentUser = db.cloud.currentUser.value;
+
+	if (!currentUser?.isLoggedIn || currentUser.userId !== ownerId) {
+		throw new Error('The signed-in account changed during the Tracked import.');
+	}
+}
+
+function assertValidImportWriteSet(ownerId: string, writeSet: ImportWriteSet) {
+	if (!ownerId || ownerId.length > MAX_DOCUMENT_STRING_CHARACTERS) {
+		throw new Error('The authenticated owner ID is invalid for import.');
+	}
+
+	assertValidImportDocuments('exercises', writeSet.exercises);
+	assertValidImportDocuments('workouts', writeSet.workouts);
+	assertValidImportDocuments('workoutExercises', writeSet.workoutExercises.rows);
+	assertValidImportDocuments('workoutSessions', writeSet.workoutSessions);
+	assertValidImportDocuments('sessionExercises', writeSet.sessionExercises);
+	assertValidImportDocuments('sessionSets', writeSet.sessionSets);
+}
+
+function assertValidImportDocuments(
+	collectionName: ImportCollectionName,
+	documents: ImportDocument[]
+) {
+	const ids = new Set<string>();
+
+	for (const document of documents) {
+		const values = document as unknown as Record<string, unknown>;
+
+		for (const fieldName of REQUIRED_IMPORT_STRING_FIELDS[collectionName]) {
+			if (typeof values[fieldName] !== 'string') {
+				throw new Error(`${collectionName} import document ${fieldName} must be a string.`);
+			}
+		}
+
+		if (!values.id) {
+			throw new Error(`${collectionName} import document id cannot be empty.`);
+		}
+
+		for (const [fieldName, value] of Object.entries(values)) {
+			if (value === undefined) {
+				continue;
+			}
+
+			if (typeof value === 'string') {
+				const limit = IMPORT_TIMESTAMP_FIELDS.has(fieldName)
+					? MAX_DOCUMENT_TIMESTAMP_CHARACTERS
+					: MAX_DOCUMENT_STRING_CHARACTERS;
+
+				if (value.length > limit) {
+					throw new Error(
+						`${collectionName} import document ${fieldName} exceeds ${limit} characters.`
+					);
+				}
+
+				if (IMPORT_TIMESTAMP_FIELDS.has(fieldName) && Number.isNaN(Date.parse(value))) {
+					throw new Error(
+						`${collectionName} import document ${fieldName} is not a valid timestamp.`
+					);
+				}
+
+				continue;
+			}
+
+			if (typeof value === 'number') {
+				if (!Number.isFinite(value)) {
+					throw new Error(
+						`${collectionName} import document ${fieldName} must be a finite number.`
+					);
+				}
+				continue;
+			}
+
+			if (typeof value !== 'boolean') {
+				throw new Error(`${collectionName} import document ${fieldName} has an unsupported value.`);
+			}
+		}
+
+		const id = values.id as string;
+
+		if (ids.has(id)) {
+			throw new Error(`${collectionName} import contains duplicate document IDs.`);
+		}
+		ids.add(id);
+
+		if ('order' in values) {
+			const order = values.order;
+
+			if (typeof order !== 'number' || !Number.isInteger(order) || order < 0) {
+				throw new Error(`${collectionName} import document order must be a non-negative integer.`);
+			}
+		}
+
+		if (collectionName === 'exercises') {
+			if (typeof values.unilateral !== 'boolean' || typeof values.archived !== 'boolean') {
+				throw new Error('exercises import document flags must be boolean.');
+			}
+			if (values.source !== 'baseline' && values.source !== 'custom') {
+				throw new Error('exercises import document source is invalid.');
+			}
+		} else if (collectionName === 'workouts') {
+			if (typeof values.archived !== 'boolean') {
+				throw new Error('workouts import document archived flag must be boolean.');
+			}
+		} else if (collectionName === 'workoutSessions') {
+			if (values.status !== 'completed' && values.status !== 'abandoned') {
+				throw new Error('workoutSessions import document status is invalid.');
+			}
+		} else if (collectionName === 'sessionSets') {
+			if (values.side !== 'bilateral' && values.side !== 'left' && values.side !== 'right') {
+				throw new Error('sessionSets import document side is invalid.');
+			}
+		}
+	}
+}
+
+async function assertNewImportIdsAvailable(writeSet: ImportWriteSet) {
+	await Promise.all([
+		assertIdsAvailable('exercises', db.exercises, writeSet.exercises),
+		assertIdsAvailable('workouts', db.workouts, writeSet.workouts),
+		assertIdsAvailable('workoutSessions', db.workoutSessions, writeSet.workoutSessions),
+		assertIdsAvailable('sessionExercises', db.sessionExercises, writeSet.sessionExercises),
+		assertIdsAvailable('sessionSets', db.sessionSets, writeSet.sessionSets)
+	]);
+}
+
+async function assertIdsAvailable<T extends { id: string }>(
+	collectionName: ImportCollectionName,
+	table: ImportDataTable<T>,
+	documents: T[]
+) {
+	if (documents.length === 0) {
+		return;
+	}
+
+	const existingDocuments = await table.bulkGet(documents.map((document) => document.id));
+
+	if (existingDocuments.some(isDefined)) {
+		throw new Error(`${collectionName} import IDs conflict with existing data.`);
+	}
+}
+
+async function applyImportWriteSet(writeSet: ImportWriteSet) {
+	if (writeSet.exercises.length > 0) {
+		await db.exercises.bulkAdd(writeSet.exercises);
+	}
+
+	if (writeSet.workouts.length > 0) {
+		await db.workouts.bulkAdd(writeSet.workouts);
+	}
+
+	if (writeSet.workoutSessions.length > 0) {
+		await db.workoutSessions.bulkAdd(writeSet.workoutSessions);
+	}
+
+	if (writeSet.sessionExercises.length > 0) {
+		await db.sessionExercises.bulkAdd(writeSet.sessionExercises);
+	}
+
+	if (writeSet.sessionSets.length > 0) {
+		await db.sessionSets.bulkAdd(writeSet.sessionSets);
+	}
+
+	if (writeSet.workoutExercises.idsToDelete.length > 0) {
+		await db.workoutExercises.bulkDelete(writeSet.workoutExercises.idsToDelete);
+	}
+
+	if (writeSet.workoutExercises.rows.length > 0) {
+		await db.workoutExercises.bulkPut(writeSet.workoutExercises.rows);
+	}
+}
+
+async function rollbackImportWriteSet(writeSet: ImportWriteSet) {
+	const affectedWorkoutExerciseIds = [
+		...new Set([
+			...writeSet.workoutExercises.rows.map((document) => document.id),
+			...writeSet.workoutExercises.idsToDelete
+		])
+	];
+	const rollbackErrors: unknown[] = [];
+	const attempt = async (operation: () => Promise<unknown>) => {
+		try {
+			await operation();
+		} catch (error) {
+			rollbackErrors.push(error);
+		}
+	};
+
+	if (affectedWorkoutExerciseIds.length > 0) {
+		await attempt(() => db.workoutExercises.bulkDelete(affectedWorkoutExerciseIds));
+	}
+	if (writeSet.workoutExercises.previousRows.length > 0) {
+		await attempt(() => db.workoutExercises.bulkPut(writeSet.workoutExercises.previousRows));
+	}
+	if (writeSet.sessionSets.length > 0) {
+		await attempt(() => db.sessionSets.bulkDelete(writeSet.sessionSets.map(({ id }) => id)));
+	}
+	if (writeSet.sessionExercises.length > 0) {
+		await attempt(() =>
+			db.sessionExercises.bulkDelete(writeSet.sessionExercises.map(({ id }) => id))
+		);
+	}
+	if (writeSet.workoutSessions.length > 0) {
+		await attempt(() =>
+			db.workoutSessions.bulkDelete(writeSet.workoutSessions.map(({ id }) => id))
+		);
+	}
+	if (writeSet.workouts.length > 0) {
+		await attempt(() => db.workouts.bulkDelete(writeSet.workouts.map(({ id }) => id)));
+	}
+	if (writeSet.exercises.length > 0) {
+		await attempt(() => db.exercises.bulkDelete(writeSet.exercises.map(({ id }) => id)));
+	}
+
+	try {
+		await verifyImportRollback(writeSet, affectedWorkoutExerciseIds);
+	} catch (error) {
+		throw new AggregateError(
+			[...rollbackErrors, error],
+			'Tracked import rollback did not restore the original database state.',
+			{ cause: error }
+		);
+	}
+}
+
+async function verifyImportRollback(
+	writeSet: ImportWriteSet,
+	affectedWorkoutExerciseIds: string[]
+) {
+	await Promise.all([
+		assertDocumentsAbsent('exercises', db.exercises, writeSet.exercises),
+		assertDocumentsAbsent('workouts', db.workouts, writeSet.workouts),
+		assertDocumentsAbsent('workoutSessions', db.workoutSessions, writeSet.workoutSessions),
+		assertDocumentsAbsent('sessionExercises', db.sessionExercises, writeSet.sessionExercises),
+		assertDocumentsAbsent('sessionSets', db.sessionSets, writeSet.sessionSets)
+	]);
+
+	if (affectedWorkoutExerciseIds.length === 0) {
+		return;
+	}
+
+	const actualRows = (await db.workoutExercises.bulkGet(affectedWorkoutExerciseIds)).filter(
+		isDefined
+	);
+	const expectedRowsById = new Map(
+		writeSet.workoutExercises.previousRows.map((document) => [document.id, document])
+	);
+
+	if (actualRows.length !== expectedRowsById.size) {
+		throw new Error('workoutExercises rollback row count did not match the original state.');
+	}
+
+	for (const actualRow of actualRows) {
+		const expectedRow = expectedRowsById.get(actualRow.id);
+
+		if (!expectedRow || !flatDocumentsEqual(actualRow, expectedRow)) {
+			throw new Error('workoutExercises rollback did not restore the original rows.');
+		}
+	}
+}
+
+async function assertDocumentsAbsent<T extends { id: string }>(
+	collectionName: ImportCollectionName,
+	table: ImportDataTable<T>,
+	documents: T[]
+) {
+	if (documents.length === 0) {
+		return;
+	}
+
+	const remainingDocuments = await table.bulkGet(documents.map(({ id }) => id));
+
+	if (remainingDocuments.some(isDefined)) {
+		throw new Error(`${collectionName} rollback left imported documents behind.`);
+	}
+}
+
+function flatDocumentsEqual(first: { id: string }, second: { id: string }) {
+	const normalize = (document: { id: string }) =>
+		Object.entries(document)
+			.filter(([, value]) => value !== undefined)
+			.sort(([firstKey], [secondKey]) => firstKey.localeCompare(secondKey));
+
+	return JSON.stringify(normalize(first)) === JSON.stringify(normalize(second));
+}
+
+async function upsertImportedExercises(plan: ImportPlan, now: string, ownerId: string) {
 	const existingExercises = await db.exercises.toArray();
 	const existingByNormalizedName = new Map<string, Exercise>();
 	const toAdd: Exercise[] = [];
@@ -725,7 +1108,7 @@ async function upsertImportedExercises(plan: ImportPlan, now: string) {
 		}
 
 		const exercise: Exercise = {
-			id: toTrackedId('exercise', plannedExercise.normalizedName),
+			id: toTrackedId(ownerId, 'exercise', plannedExercise.normalizedName),
 			name: plannedExercise.displayName,
 			normalizedName: plannedExercise.normalizedName,
 			unilateral: plannedExercise.unilateral,
@@ -751,7 +1134,7 @@ async function upsertImportedExercises(plan: ImportPlan, now: string) {
 	return { toAdd, byNormalizedName: existingByNormalizedName, matched, merged, created };
 }
 
-async function upsertImportedWorkouts(plan: ImportPlan, now: string) {
+async function upsertImportedWorkouts(plan: ImportPlan, now: string, ownerId: string) {
 	const existingWorkouts = await db.workouts.toArray();
 	const byName = new Map<string, Workout>();
 	const byId = new Map<string, Workout>();
@@ -785,7 +1168,7 @@ async function upsertImportedWorkouts(plan: ImportPlan, now: string) {
 		}
 
 		const workout: Workout = {
-			id: toTrackedId('workout', normalizedName),
+			id: toTrackedId(ownerId, 'workout', normalizedName),
 			name,
 			normalizedName,
 			archived: false,
@@ -924,12 +1307,13 @@ async function buildWorkoutExerciseRewrite(
 ) {
 	const rows: WorkoutExercise[] = [];
 	const idsToDelete: string[] = [];
+	const previousRows: WorkoutExercise[] = [];
 	const workoutIds = [...latestWorkoutTemplateByWorkoutId.keys()].filter((workoutId) =>
 		workoutById.has(workoutId)
 	);
 
 	if (workoutIds.length === 0) {
-		return { rows, idsToDelete };
+		return { rows, idsToDelete, previousRows };
 	}
 
 	const persistedSessions = await db.workoutSessions.where('workoutId').anyOf(workoutIds).toArray();
@@ -954,7 +1338,7 @@ async function buildWorkoutExerciseRewrite(
 	);
 
 	if (templatesToRewrite.length === 0) {
-		return { rows, idsToDelete };
+		return { rows, idsToDelete, previousRows };
 	}
 
 	const existingRowsByWorkoutId = groupBy(
@@ -964,6 +1348,10 @@ async function buildWorkoutExerciseRewrite(
 			.toArray(),
 		(workoutExercise) => workoutExercise.workoutId
 	);
+
+	for (const existingRows of existingRowsByWorkoutId.values()) {
+		previousRows.push(...existingRows);
+	}
 
 	for (const [workoutId, template] of templatesToRewrite) {
 		const workout = workoutById.get(workoutId);
@@ -1000,11 +1388,11 @@ async function buildWorkoutExerciseRewrite(
 		);
 	}
 
-	return { rows, idsToDelete };
+	return { rows, idsToDelete, previousRows };
 }
 
-function parseCsvFile(contents: string, fileName: string): CsvRow[] {
-	const rows = parseCsv(contents, fileName);
+function parseCsvFile(contents: string, fileName: string, parseBudget: CsvParseBudget): CsvRow[] {
+	const rows = parseCsv(contents, fileName, parseBudget);
 
 	if (rows.length === 0) {
 		return [];
@@ -1037,23 +1425,70 @@ function assertCsvColumns(fileName: string, rows: CsvRow[], requiredColumns: str
 	}
 }
 
-function parseCsv(contents: string, fileName: string) {
+function parseCsv(contents: string, fileName: string, parseBudget: CsvParseBudget) {
 	const rows: string[][] = [];
 	let row: string[] = [];
 	let field = '';
 	let quoted = false;
+	let fileRowCount = 0;
+	let fileFieldCount = 0;
+	const appendFieldCharacter = (character: string) => {
+		if (field.length + character.length > MAX_CSV_FIELD_CHARACTERS) {
+			throw new Error(
+				`${fileName} contains a field longer than ${MAX_CSV_FIELD_CHARACTERS.toLocaleString('en-US')} characters.`
+			);
+		}
+		field += character;
+	};
+	const pushField = () => {
+		if (row.length >= MAX_CSV_COLUMNS) {
+			throw new Error(
+				`${fileName} exceeds the ${MAX_CSV_COLUMNS.toLocaleString('en-US')}-column limit.`
+			);
+		}
+		if (fileFieldCount >= MAX_CSV_FIELDS) {
+			throw new Error(
+				`${fileName} exceeds the ${MAX_CSV_FIELDS.toLocaleString('en-US')}-field limit.`
+			);
+		}
+		if (parseBudget.fields >= MAX_TOTAL_CSV_FIELDS) {
+			throw new Error(
+				`Tracked CSV files exceed the ${MAX_TOTAL_CSV_FIELDS.toLocaleString('en-US')}-field aggregate limit.`
+			);
+		}
+
+		row.push(field);
+		fileFieldCount += 1;
+		parseBudget.fields += 1;
+		field = '';
+	};
+	const pushRow = () => {
+		if (fileRowCount >= MAX_CSV_ROWS) {
+			throw new Error(`${fileName} exceeds the ${MAX_CSV_ROWS.toLocaleString('en-US')}-row limit.`);
+		}
+		if (parseBudget.rows >= MAX_TOTAL_CSV_ROWS) {
+			throw new Error(
+				`Tracked CSV files exceed the ${MAX_TOTAL_CSV_ROWS.toLocaleString('en-US')}-row aggregate limit.`
+			);
+		}
+
+		rows.push(row);
+		fileRowCount += 1;
+		parseBudget.rows += 1;
+		row = [];
+	};
 
 	for (let index = 0; index < contents.length; index += 1) {
 		const character = contents[index];
 
 		if (quoted) {
 			if (character === '"' && contents[index + 1] === '"') {
-				field += '"';
+				appendFieldCharacter('"');
 				index += 1;
 			} else if (character === '"') {
 				quoted = false;
 			} else {
-				field += character;
+				appendFieldCharacter(character);
 			}
 			continue;
 		}
@@ -1061,25 +1496,22 @@ function parseCsv(contents: string, fileName: string) {
 		if (character === '"') {
 			quoted = true;
 		} else if (character === ',') {
-			row.push(field);
-			field = '';
+			pushField();
 		} else if (character === '\n') {
-			row.push(field);
-			rows.push(row);
-			row = [];
-			field = '';
+			pushField();
+			pushRow();
 		} else if (character !== '\r') {
-			field += character;
+			appendFieldCharacter(character);
 		}
-	}
-
-	if (field || row.length > 0) {
-		row.push(field);
-		rows.push(row);
 	}
 
 	if (quoted) {
 		throw new Error(`${fileName} has an unterminated quoted field.`);
+	}
+
+	if (field || row.length > 0) {
+		pushField();
+		pushRow();
 	}
 
 	return rows;
@@ -1121,7 +1553,11 @@ function resolveSetExerciseName(set: CsvRow, trackedExercise: CsvRow | undefined
 	return cleanDisplayName(trackedExercise?.name || set.exerciseName);
 }
 
-function toTrackedId(kind: string, id: string) {
+function toTrackedId(ownerId: string, kind: string, id: string) {
+	return `tracked:${ownerId}:${kind}:${id || 'unknown'}`;
+}
+
+function toLegacyTrackedId(kind: string, id: string) {
 	return `tracked:${kind}:${id || 'unknown'}`;
 }
 
