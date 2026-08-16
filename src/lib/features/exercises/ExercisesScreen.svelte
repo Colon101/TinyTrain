@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import type { ExerciseDetail, ExerciseListItem } from '$lib/db';
 	import {
 		formatDayHeading,
@@ -65,7 +65,7 @@
 			return;
 		}
 
-		void loadScreen(dbApi, nextExerciseId);
+		void untrack(() => loadScreen(dbApi, nextExerciseId));
 	});
 
 	function isCurrentLoad(generation: number, requestedExerciseId: string | null) {
