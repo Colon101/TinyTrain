@@ -1,13 +1,12 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import SessionOverviewScreen from '$lib/features/sessions/SessionOverviewScreen.svelte';
-
-	let { data }: { data: { sessionId: string } } = $props();
 </script>
 
 <svelte:head>
 	<title>Session Overview | TinyTrain</title>
 </svelte:head>
 
-{#key data.sessionId}
-	<SessionOverviewScreen sessionId={data.sessionId} />
+{#key page.params.sessionId}
+	<SessionOverviewScreen sessionId={page.params.sessionId!} />
 {/key}

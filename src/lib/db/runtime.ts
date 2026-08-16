@@ -10,28 +10,11 @@ import {
 	supabase
 } from '../supabase';
 import type { RxDexieLikeDatabase } from '../rxdb-dexie-adapter';
-import {
-	dbCloudSync,
-	type DatabaseUploadMode,
-	type DatabaseUploadSummary,
-	type LocalDatabaseStats,
-	type SupabaseSyncedRow,
-	type SupabaseTableName,
-	type SyncableRow,
-	type SyncProgress
-} from '../db-cloud-sync';
-import {
-	hasAnySetValue,
-	hasInputValue,
-	summarizeSession,
-	withExerciseDefaults,
-	withSessionSetDefaults
-} from './shared';
+import { dbCloudSync, type SupabaseSyncedRow, type SyncProgress } from '../db-cloud-sync';
+import { toDayKey, withExerciseDefaults, withSessionSetDefaults } from './shared';
 import type {
 	Exercise,
-	ExerciseResetEvent,
 	HydrateVisibleScopeInput,
-	PersistentStorageStatus,
 	SessionExercise,
 	SessionSet,
 	Workout,
@@ -39,30 +22,17 @@ import type {
 	WorkoutSession
 } from './models';
 
-export {
-	SESSION_INACTIVITY_ABANDON_MS,
-	SESSION_INACTIVITY_CHECK_INTERVAL_MS,
-	SESSION_INACTIVITY_WARNING_MS
-} from '../session-inactivity';
-
 export type SubscriptionLike = {
 	unsubscribe(): void;
 };
 
-export type SyncStateLike = {
-	phase?: string;
-	status?: string;
-	progress?: number;
-	error?: Error;
-};
 export type DatabaseTableKey =
 	| 'exercises'
 	| 'workouts'
 	| 'workoutExercises'
 	| 'workoutSessions'
 	| 'sessionExercises'
-	| 'sessionSets'
-	| 'exerciseResetEvents';
+	| 'sessionSets';
 export type DatabaseChangeSubscriber = (tables: DatabaseTableKey[]) => void;
 export type DatabaseChangeSubscribeOptions = {
 	debounceMs?: number;
@@ -127,20 +97,14 @@ export type DataTable<T extends { id: string }> = {
 	where(field: string): WhereClause<T>;
 };
 
-const activeUser = new ValueObservable<{
+export const currentUser = new ValueObservable<{
 	userId?: string;
 	name?: string;
 	email?: string;
-	claims?: Record<string, unknown>;
 	isLoggedIn?: boolean;
 	isLoading?: boolean;
 }>({ isLoading: true });
-const activeSyncState = new ValueObservable<SyncStateLike>({
-	phase: 'initial',
-	status: 'not-started'
-});
 const supabaseHydratedPrefix = 'tinytrain:supabase-rxdb-hydrated:';
-const progressiveBackfillPrefix = 'tinytrain:supabase-rxdb-backfilled:';
 const recentBackfillDays = 90;
 
 let rxDataDb: RxDexieLikeDatabase | null = null;
@@ -212,18 +176,8 @@ function isActiveRuntimeContext(context: ActiveRuntimeContext) {
 	);
 }
 
-function isActiveSupabaseUser(userId: string) {
-	return activeSupabaseUserId === userId && requestedSupabaseUserId === userId;
-}
-
-function setSyncStateForUser(userId: string, state: SyncStateLike) {
-	if (isActiveSupabaseUser(userId)) {
-		activeSyncState.set(state);
-	}
-}
-
 export function getActiveCloudUser() {
-	return activeUser.value;
+	return currentUser.value;
 }
 
 export function wasStaleSessionCleanupCompleted(cleanupKey: string) {
@@ -254,7 +208,6 @@ export async function confirmSessionCleanupIsFresh() {
 		}
 
 		markSupabaseCacheHydrated(context.userId);
-		setSyncStateForUser(context.userId, { phase: 'in-sync', status: 'synced' });
 		return true;
 	} catch (error) {
 		console.warn('Skipping stale-session cleanup until cloud sync is current.', error);
@@ -282,7 +235,6 @@ export function toSupabaseCloudUser() {
 					? user.user_metadata.full_name
 					: user.email,
 		email: user.email,
-		claims: user.user_metadata as Record<string, unknown>,
 		isLoggedIn: true,
 		isLoading: false
 	};
@@ -298,18 +250,6 @@ export function markSupabaseCacheHydrated(userId: string) {
 	}
 
 	localStorage.setItem(`${supabaseHydratedPrefix}${userId}`, 'true');
-}
-
-export function getProgressiveBackfillKey(userId: string) {
-	return `${progressiveBackfillPrefix}${userId}`;
-}
-
-export function markRecentBackfillComplete(userId: string) {
-	if (!browser) {
-		return;
-	}
-
-	localStorage.setItem(getProgressiveBackfillKey(userId), 'true');
 }
 
 export function emitDatabaseChange(tableName: DatabaseTableKey) {
@@ -373,11 +313,11 @@ export function startAuthBridge() {
 				clearSupabaseRuntimeState();
 			}
 
-			activeUser.set(toSupabaseCloudUser());
+			currentUser.set(toSupabaseCloudUser());
 			return;
 		}
 
-		activeUser.set(toSupabaseCloudUser());
+		currentUser.set(toSupabaseCloudUser());
 
 		if (
 			activeSupabaseUserId !== snapshot.user.id &&
@@ -386,16 +326,9 @@ export function startAuthBridge() {
 				isCurrentRuntimeRequest(supabaseBackendActivationAttempt)
 			)
 		) {
-			activeUser.set({ isLoading: true });
+			currentUser.set({ isLoading: true });
 			dbOpenPromise = null;
 			void activateSupabaseBackend(snapshot.user.id).catch((error) => {
-				if (requestedSupabaseUserId === snapshot.user?.id) {
-					activeSyncState.set({
-						phase: 'error',
-						status: 'error',
-						error: error instanceof Error ? error : new Error('Supabase sync failed.')
-					});
-				}
 				console.warn('Supabase backend activation failed.', error);
 			});
 		}
@@ -412,7 +345,6 @@ export function clearSupabaseRuntimeState() {
 	activeSupabaseUserId = null;
 	rxDataDb = null;
 	dbOpenPromise = null;
-	activeSyncState.set({ phase: 'initial', status: 'not-started' });
 
 	if (!previousUserId) {
 		return;
@@ -448,12 +380,11 @@ async function openSupabaseRuntimeForRequest(identity: RuntimeIdentity) {
 	}
 
 	activeSupabaseUserId = identity.userId;
-	activeSyncState.set({ phase: 'pulling', status: 'syncing' });
 	rxDataDb = database;
 	rxChangeSubscription ??= adapter.subscribeToRxDexieChanges((tableName) => {
 		emitDatabaseChange(tableName as DatabaseTableKey);
 	});
-	activeUser.set(toSupabaseCloudUser());
+	currentUser.set(toSupabaseCloudUser());
 	startProgressiveSync(identity.userId, identity.generation);
 
 	if (hasHydratedSupabaseCache(identity.userId)) {
@@ -462,18 +393,10 @@ async function openSupabaseRuntimeForRequest(identity: RuntimeIdentity) {
 			.then(() => {
 				if (isActiveRuntimeIdentity(identity)) {
 					markSupabaseCacheHydrated(identity.userId);
-					activeSyncState.set({ phase: 'in-sync', status: 'synced' });
 				}
 			})
 			.catch((error) => {
 				console.warn('Background Supabase sync failed.', error);
-				if (isActiveRuntimeIdentity(identity)) {
-					activeSyncState.set({
-						phase: 'error',
-						status: 'error',
-						error: error instanceof Error ? error : new Error('Supabase sync failed.')
-					});
-				}
 			});
 		return;
 	}
@@ -499,7 +422,6 @@ async function activateSupabaseBackend(userId: string) {
 	rxDataDb = null;
 	dbOpenPromise = null;
 	backgroundSyncAttempt = null;
-	activeSyncState.set({ phase: 'initial', status: 'not-started' });
 
 	if (previousUserId && previousUserId !== userId) {
 		void getRxRuntime()
@@ -526,7 +448,7 @@ export async function selectBackend() {
 
 	if (!currentAuthUser) {
 		clearSupabaseRuntimeState();
-		activeUser.set(toSupabaseCloudUser());
+		currentUser.set(toSupabaseCloudUser());
 		return;
 	}
 
@@ -537,14 +459,6 @@ export async function selectBackend() {
 	await activateSupabaseBackend(currentAuthUser.id);
 }
 
-const cloudCompat = {
-	currentUser: activeUser,
-	syncState: activeSyncState,
-	async sync() {
-		await syncNow();
-	}
-};
-
 export type AppDatabase = {
 	exercises: DataTable<Exercise>;
 	workouts: DataTable<Workout>;
@@ -552,10 +466,7 @@ export type AppDatabase = {
 	workoutSessions: DataTable<WorkoutSession>;
 	sessionExercises: DataTable<SessionExercise>;
 	sessionSets: DataTable<SessionSet>;
-	exerciseResetEvents: DataTable<ExerciseResetEvent>;
-	cloud: typeof cloudCompat;
-	open(): Promise<AppDatabase>;
-	transaction<T>(mode: string, ...args: unknown[]): Promise<T>;
+	transaction<T>(callback: () => Promise<T> | T): Promise<T>;
 };
 
 export type RxDataTableKey = Exclude<keyof RxDexieLikeDatabase, 'transaction'>;
@@ -687,10 +598,6 @@ export const db = new Proxy(
 	{},
 	{
 		get(_target, prop) {
-			if (prop === 'cloud') {
-				return cloudCompat;
-			}
-
 			if (prop === 'transaction' && rxDataDb) {
 				return rxDataDb.transaction.bind(rxDataDb);
 			}
@@ -702,38 +609,10 @@ export const db = new Proxy(
 				);
 			}
 
-			if (prop === 'open') {
-				return ensureDbOpen;
-			}
-
 			return undefined;
 		}
 	}
 ) as AppDatabase;
-
-export async function getPersistentStorageStatus(): Promise<PersistentStorageStatus> {
-	if (!globalThis.navigator?.storage?.persisted) {
-		return 'unsupported';
-	}
-
-	return (await navigator.storage.persisted()) ? 'persisted' : 'promptable';
-}
-
-export async function requestPersistentStorage(): Promise<PersistentStorageStatus> {
-	if (!globalThis.navigator?.storage?.persisted || !globalThis.navigator.storage.persist) {
-		return 'unsupported';
-	}
-
-	if (await navigator.storage.persisted()) {
-		return 'persisted';
-	}
-
-	return (await navigator.storage.persist()) ? 'persisted' : 'denied';
-}
-
-export async function loginWithGoogle(redirectPath = '/') {
-	await loginWithSupabaseGoogleForApp(redirectPath);
-}
 
 export async function loginWithSupabaseGoogleForApp(redirectPath = '/') {
 	await startSupabaseGoogleLogin(redirectPath);
@@ -780,7 +659,6 @@ export async function recoverClosedDatabase() {
 	const promise = (async () => {
 		const { adapter } = await getRxRuntime();
 
-		activeSyncState.set({ phase: 'pulling', status: 'syncing' });
 		const database = await adapter.reopenRxDexieLikeDatabase(context.userId);
 
 		if (!isActiveRuntimeContext(context)) {
@@ -790,7 +668,7 @@ export async function recoverClosedDatabase() {
 		rxDataDb = database;
 		dbOpenPromise = Promise.resolve(db);
 		backgroundSyncAttempt = null;
-		activeUser.set(toSupabaseCloudUser());
+		currentUser.set(toSupabaseCloudUser());
 		startProgressiveSync(context.userId, context.generation);
 
 		return true;
@@ -826,7 +704,7 @@ export async function logoutFromCloud() {
 	await ensureDbOpen();
 	await logoutFromSupabase();
 	clearSupabaseRuntimeState();
-	activeUser.set(toSupabaseCloudUser());
+	currentUser.set(toSupabaseCloudUser());
 }
 
 export async function syncNow(options: SyncNowOptions = {}) {
@@ -838,37 +716,21 @@ export async function syncNow(options: SyncNowOptions = {}) {
 		return;
 	}
 
-	setSyncStateForUser(context.userId, { phase: 'pushing', status: 'syncing' });
+	const summary = await dbCloudSync.reconcileSupabaseDatabase(
+		getCloudSyncDeps(context),
+		context.userId,
+		'richest',
+		{ onProgress: options.onProgress }
+	);
+	const { rxdb } = await getRxRuntime();
 
-	try {
-		const summary = await dbCloudSync.reconcileSupabaseDatabase(
-			getCloudSyncDeps(context),
-			context.userId,
-			'richest',
-			{ onProgress: options.onProgress }
-		);
-		const { rxdb } = await getRxRuntime();
-
-		if (isActiveRuntimeContext(context)) {
-			void rxdb.awaitSupabaseInSync(context.userId, { timeoutMs: 15000 }).catch((error) => {
-				console.warn('Background Supabase sync confirmation failed.', error);
-			});
-		}
-
-		if (isActiveRuntimeContext(context)) {
-			setSyncStateForUser(context.userId, { phase: 'in-sync', status: 'synced' });
-		}
-		return summary;
-	} catch (error) {
-		if (isActiveRuntimeContext(context)) {
-			setSyncStateForUser(context.userId, {
-				phase: 'error',
-				status: 'error',
-				error: error instanceof Error ? error : new Error('Cloud sync failed.')
-			});
-		}
-		throw error;
+	if (isActiveRuntimeContext(context)) {
+		void rxdb.awaitSupabaseInSync(context.userId, { timeoutMs: 15000 }).catch((error) => {
+			console.warn('Background Supabase sync confirmation failed.', error);
+		});
 	}
+
+	return summary;
 }
 
 export type SyncNowOptions = {
@@ -881,10 +743,8 @@ function getCloudSyncDeps(context: ActiveRuntimeContext | null = null) {
 		getActiveSupabaseUserId: () =>
 			context ? (isActiveRuntimeContext(context) ? context.userId : null) : activeSupabaseUserId,
 		markSupabaseCacheHydrated,
-		markRecentBackfillComplete,
 		withExerciseDefaults,
-		withSessionSetDefaults,
-		hasInputValue
+		withSessionSetDefaults
 	};
 }
 
@@ -892,73 +752,8 @@ export function normalizeRemoteSessionSet(row: SessionSet): SessionSet {
 	return dbCloudSync.normalizeRemoteSessionSet(getCloudSyncDeps(), row);
 }
 
-export function shouldSyncExercise(exercise: Exercise) {
-	return dbCloudSync.shouldSyncExercise(getCloudSyncDeps(), exercise);
-}
-
-export function getRowTimestamp(row: SyncableRow) {
-	return dbCloudSync.getRowTimestamp(row);
-}
-
 export function stripSupabaseSyncFields<T extends { id: string }>(row: SupabaseSyncedRow): T {
 	return dbCloudSync.stripSupabaseSyncFields<T>(row);
-}
-
-export async function reconcileSupabaseDatabase(
-	userId: string,
-	mode: DatabaseUploadMode,
-	options: SyncNowOptions = {}
-): Promise<DatabaseUploadSummary> {
-	return dbCloudSync.reconcileSupabaseDatabase(
-		getCloudSyncDeps(getActiveRuntimeContext()),
-		userId,
-		mode,
-		options
-	);
-}
-
-export async function putMergedRemoteRow<T extends SyncableRow>(
-	tableName: SupabaseTableName,
-	table: DataTable<T>,
-	row: T,
-	normalize: (row: T) => T = (nextRow) => nextRow
-) {
-	return dbCloudSync.putMergedRemoteRow(
-		getCloudSyncDeps(getActiveRuntimeContext()),
-		tableName,
-		table,
-		row,
-		normalize
-	);
-}
-
-export async function putMergedRemoteRows<T extends SyncableRow>(
-	tableName: SupabaseTableName,
-	table: DataTable<T>,
-	rows: T[],
-	normalize: (row: T) => T = (nextRow) => nextRow
-) {
-	return dbCloudSync.putMergedRemoteRows(
-		getCloudSyncDeps(getActiveRuntimeContext()),
-		tableName,
-		table,
-		rows,
-		normalize
-	);
-}
-
-export async function fetchSupabaseRows<T extends SyncableRow>(
-	tableName: SupabaseTableName,
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	buildQuery: (query: any) => PromiseLike<{ data: unknown; error: unknown }>,
-	normalize: (row: T) => T = (row) => row
-) {
-	return dbCloudSync.fetchSupabaseRows(
-		getCloudSyncDeps(getActiveRuntimeContext()),
-		tableName,
-		buildQuery,
-		normalize
-	);
 }
 
 export async function backfillRecentRows(userId: string, days = recentBackfillDays) {
@@ -992,8 +787,6 @@ export function startProgressiveSync(userId: string, generation = runtimeGenerat
 				return;
 			}
 
-			setSyncStateForUser(userId, { phase: 'pulling', status: 'syncing', progress: 0.25 });
-
 			try {
 				await backfillRecentRows(userId);
 			} catch (error) {
@@ -1006,25 +799,15 @@ export function startProgressiveSync(userId: string, generation = runtimeGenerat
 				return;
 			}
 
-			setSyncStateForUser(userId, { phase: 'pulling', status: 'syncing', progress: 0.75 });
 			await rxdb.awaitSupabaseInitialReplication(userId);
 			await rxdb.awaitSupabaseInSync(userId, { timeoutMs: 15000 });
 
 			if (isActiveRuntimeIdentity(attempt)) {
 				markSupabaseCacheHydrated(userId);
-				setSyncStateForUser(userId, { phase: 'in-sync', status: 'synced' });
 			}
 		} catch (error) {
 			shouldReleaseGuard = true;
 			console.warn('Background Supabase sync failed.', error);
-
-			if (isActiveRuntimeIdentity(attempt)) {
-				setSyncStateForUser(userId, {
-					phase: 'error',
-					status: 'error',
-					error: error instanceof Error ? error : new Error('Supabase sync failed.')
-				});
-			}
 		} finally {
 			if (shouldReleaseGuard && backgroundSyncAttempt === attempt) {
 				backgroundSyncAttempt = null;
@@ -1059,64 +842,11 @@ export async function uploadLocalDatabaseToCloud() {
 		throw new Error('Sign in with Google to upload this device.');
 	}
 
-	setSyncStateForUser(context.userId, { phase: 'pushing', status: 'syncing' });
-
-	try {
-		const summary = await dbCloudSync.reconcileSupabaseDatabase(
-			getCloudSyncDeps(context),
-			context.userId,
-			'local-preferred'
-		);
-		if (isActiveRuntimeContext(context)) {
-			setSyncStateForUser(context.userId, { phase: 'in-sync', status: 'synced' });
-		}
-		return summary;
-	} catch (error) {
-		if (isActiveRuntimeContext(context)) {
-			setSyncStateForUser(context.userId, {
-				phase: 'error',
-				status: 'error',
-				error: error instanceof Error ? error : new Error('Local upload failed.')
-			});
-		}
-		throw error;
-	}
-}
-
-export async function getLocalDatabaseStats(): Promise<LocalDatabaseStats> {
-	await ensureDbOpen();
-
-	const [workouts, exercises, sessions, sessionExercises, sessionSets] = await Promise.all([
-		db.workouts.toArray(),
-		db.exercises.toArray(),
-		db.workoutSessions.toArray(),
-		db.sessionExercises.toArray(),
-		db.sessionSets.toArray()
-	]);
-	const completedSessions = sessions.filter((session) => session.status === 'completed');
-	const lastWorkout = [...completedSessions].sort(
-		(first, second) => getRowTimestamp(second) - getRowTimestamp(first)
-	)[0];
-
-	return {
-		workouts: workouts.length,
-		customExercises: exercises.filter(shouldSyncExercise).length,
-		previousWorkouts: completedSessions.length,
-		sessionExercises: sessionExercises.length,
-		sessionSets: sessionSets.length,
-		filledSessionSets: sessionSets.filter(hasAnySetValue).length,
-		lastWorkoutAt: lastWorkout?.completedAt ?? lastWorkout?.startedAt ?? lastWorkout?.createdAt
-	};
-}
-
-export async function hydrateSessionFromSupabase(sessionId: string) {
-	const context = getActiveRuntimeContext();
-
-	if (!context) {
-		return;
-	}
-
-	await hydrateSessionForContext(sessionId, context);
+	return dbCloudSync.reconcileSupabaseDatabase(
+		getCloudSyncDeps(context),
+		context.userId,
+		'local-preferred'
+	);
 }
 
 async function hydrateSessionForContext(sessionId: string, context: ActiveRuntimeContext) {
@@ -1261,22 +991,6 @@ export async function hydrateVisibleScope(scope: HydrateVisibleScopeInput) {
 		return;
 	}
 
-	if (scope.type === 'day') {
-		const sessions = await dbCloudSync.fetchSupabaseRows<WorkoutSession>(
-			syncDeps,
-			'workout_sessions',
-			(query) => query.eq('dayKey', scope.dayKey).order('_modified', { ascending: false })
-		);
-		await dbCloudSync.putMergedRemoteRows(
-			syncDeps,
-			'workout_sessions',
-			context.database.workoutSessions,
-			sessions
-		);
-		await Promise.all(sessions.map((session) => hydrateSessionForContext(session.id, context)));
-		return;
-	}
-
 	const workouts = await dbCloudSync.fetchSupabaseRows<Workout>(syncDeps, 'workouts', (query) =>
 		query.order('_modified', { ascending: false }).limit(200)
 	);
@@ -1323,11 +1037,10 @@ export async function getSessionTimerSummary(sessionId: string) {
 		return null;
 	}
 
-	return summarizeSession(
-		session,
-		await db.sessionExercises.where('sessionId').equals(sessionId).toArray(),
-		[]
-	);
+	return {
+		...session,
+		dayKey: session.dayKey || toDayKey(session.startedAt ?? session.createdAt)
+	};
 }
 
 export function requireLoggedInUser() {

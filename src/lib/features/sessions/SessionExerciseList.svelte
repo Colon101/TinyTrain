@@ -39,8 +39,9 @@
 	} = $props();
 
 	let sectionClass = $derived(hideHeading ? 'pb-4' : 'py-4');
-	let editableListClass = $derived(hideHeading ? 'grid gap-2.5' : 'mt-3 grid gap-2.5');
-	let readonlyListClass = $derived(hideHeading ? 'grid gap-3' : 'mt-4 grid gap-3');
+	let listClass = $derived(
+		`${hideHeading ? '' : isEditable ? 'mt-3 ' : 'mt-4 '}${isEditable ? 'grid gap-2.5' : 'grid gap-3'}`
+	);
 </script>
 
 <section class={sectionClass}>
@@ -48,29 +49,29 @@
 		<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">Exercises</p>
 	{/if}
 
-	{#if isEditable}
-		<div class={editableListClass}>
-			{#each overview.exercises as sessionExercise (sessionExercise.id)}
-				<SessionExerciseCard
-					{sessionId}
-					{sessionExercise}
-					status={overview.summary.status}
-					{isEditMode}
-					{isEditable}
-					{isSaving}
-					isMenuOpen={openExerciseMenuId === sessionExercise.id}
-					performedSets={getPerformedSets(sessionExercise)}
-					onToggleMenu={onToggleExerciseMenu}
-					{onSwapExercise}
-					{onRemoveExercise}
-					{onDragPointerDown}
-					{onDragPointerMove}
-					{onDragPointerUp}
-					{onDragPointerCancel}
-				/>
-			{/each}
-		</div>
+	<div class={listClass}>
+		{#each overview.exercises as sessionExercise (sessionExercise.id)}
+			<SessionExerciseCard
+				{sessionId}
+				{sessionExercise}
+				status={overview.summary.status}
+				{isEditMode}
+				{isEditable}
+				{isSaving}
+				isMenuOpen={isEditable && openExerciseMenuId === sessionExercise.id}
+				performedSets={getPerformedSets(sessionExercise)}
+				onToggleMenu={onToggleExerciseMenu}
+				{onSwapExercise}
+				{onRemoveExercise}
+				{onDragPointerDown}
+				{onDragPointerMove}
+				{onDragPointerUp}
+				{onDragPointerCancel}
+			/>
+		{/each}
+	</div>
 
+	{#if isEditable}
 		<button
 			class="mt-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-4 text-base font-semibold text-white disabled:text-zinc-500"
 			type="button"
@@ -80,27 +81,5 @@
 			<Icon name="plus" class="h-4 w-4" />
 			Add exercise
 		</button>
-	{:else}
-		<div class={readonlyListClass}>
-			{#each overview.exercises as sessionExercise (sessionExercise.id)}
-				<SessionExerciseCard
-					{sessionId}
-					{sessionExercise}
-					status={overview.summary.status}
-					{isEditMode}
-					{isEditable}
-					{isSaving}
-					isMenuOpen={false}
-					performedSets={getPerformedSets(sessionExercise)}
-					onToggleMenu={onToggleExerciseMenu}
-					{onSwapExercise}
-					{onRemoveExercise}
-					{onDragPointerDown}
-					{onDragPointerMove}
-					{onDragPointerUp}
-					{onDragPointerCancel}
-				/>
-			{/each}
-		</div>
 	{/if}
 </section>

@@ -23,7 +23,7 @@ export async function updateSessionSetInputValues(
 	let nextSet: SessionSet | null = null;
 	const skippedFields: SessionInputField[] = [];
 
-	await db.transaction('rw', db.sessionSets, db.sessionExercises, db.workoutSessions, async () => {
+	await db.transaction(async () => {
 		const sessionSet = await db.sessionSets.get(sessionSetId);
 
 		if (!sessionSet) {
@@ -132,13 +132,6 @@ export async function updateSessionSetInputValues(
 	return { sessionSet: nextSet, skippedFields };
 }
 
-export async function updateSessionSetInputs(
-	sessionSetId: string,
-	field: SessionInputField,
-	rawValue: string
-) {
-	return (await updateSessionSetInputValues(sessionSetId, { [field]: rawValue })).sessionSet;
-}
 export async function flushSessionInputDraft(
 	sessionId: string,
 	options: { clearDraft?: boolean } = {}

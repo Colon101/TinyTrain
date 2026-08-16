@@ -18,13 +18,7 @@ const self = globalThis.self as unknown as ServiceWorkerGlobalScope;
 // Create a unique cache name for this deployment
 const CACHE = `cache-${version}`;
 const APP_SHELL = '/';
-const DEPLOYMENT_MANIFEST = '/deployment.json';
 const DEV = import.meta.env.DEV;
-const LOG_PREFIX = '[TinyTrain service worker]';
-const CACHE_UPDATE_MESSAGE = 'TINYTRAIN_CACHE_UPDATE_CHECK';
-const DEPLOYMENT_CHECK_TTL_MS = 60_000;
-// Keep this list synchronized with `authCacheParamNames` in src/app.html. That inline script
-// is not bundled with this module, so the compiler cannot enforce that they match.
 const AUTH_CACHE_PARAM_NAMES = [
 	'code',
 	'state',
@@ -44,32 +38,6 @@ const ASSETS = [
 const CACHEABLE_ASSET_PATHS = new Set(
 	ASSETS.map((asset) => new URL(asset, self.location.origin).pathname)
 );
-
-type DeploymentManifest = {
-	id?: unknown;
-};
-
-type CacheUrlsMessage = {
-	type?: unknown;
-	urls?: unknown;
-};
-
-type CacheUpdateMessage = {
-	type: typeof CACHE_UPDATE_MESSAGE;
-	status: 'checking' | 'current' | 'newer' | 'failed' | 'precache-skipped';
-	cachedId?: string;
-	latestId?: string;
-	error?: string;
-	failedAssets?: string[];
-};
-
-type DeploymentCheck = {
-	promise: Promise<boolean>;
-	expiresAt: number;
-};
-
-let currentDeploymentCheck: DeploymentCheck | undefined;
-let lastCacheUpdateMessage: CacheUpdateMessage | undefined;
 
 async function fetchFresh(request: Request | string) {
 	const response = await fetch(request, { cache: 'no-store' });
@@ -96,37 +64,6 @@ async function getCachedResponse(
 			? await cache.match(APP_SHELL)
 			: undefined)
 	);
-}
-
-async function readDeploymentId(response: Response | undefined) {
-	if (!response?.ok) return undefined;
-
-	try {
-		const manifest = (await response.clone().json()) as DeploymentManifest;
-		return typeof manifest.id === 'string' ? manifest.id : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-function getErrorMessage(error: unknown) {
-	return error instanceof Error ? error.message : String(error);
-}
-
-function announceCacheUpdate(message: Omit<CacheUpdateMessage, 'type'>) {
-	const cacheUpdateMessage = { type: CACHE_UPDATE_MESSAGE, ...message };
-	lastCacheUpdateMessage = cacheUpdateMessage;
-
-	console.info(`${LOG_PREFIX} ${message.status}`, message);
-
-	return self.clients
-		.matchAll({ includeUncontrolled: true, type: 'window' })
-		.then((clients) => {
-			for (const client of clients) {
-				client.postMessage(cacheUpdateMessage);
-			}
-		})
-		.catch(() => undefined);
 }
 
 function hasAuthCacheParams(url: URL) {
@@ -164,52 +101,6 @@ function canStoreResponse(request: Request, response: Response) {
 	return !cacheControl.includes('no-store') && !cacheControl.includes('private');
 }
 
-async function hasCurrentDeployment(cache: Cache) {
-	announceCacheUpdate({ status: 'checking' });
-
-	const [cachedResponse, latestResponse] = await Promise.all([
-		cache.match(DEPLOYMENT_MANIFEST),
-		fetchFresh(`${DEPLOYMENT_MANIFEST}?sw-update=${Date.now()}`)
-	]);
-
-	const cachedId = await readDeploymentId(cachedResponse);
-	const latestId = await readDeploymentId(latestResponse);
-
-	const hasCurrentDeployment = Boolean(cachedId && latestId && cachedId === latestId);
-
-	announceCacheUpdate({
-		status: hasCurrentDeployment ? 'current' : 'newer',
-		cachedId,
-		latestId
-	});
-
-	return hasCurrentDeployment;
-}
-
-function hasVerifiedCurrentDeployment(cache: Cache) {
-	if (!currentDeploymentCheck || Date.now() >= currentDeploymentCheck.expiresAt) {
-		const nextCheck: DeploymentCheck = {
-			promise: Promise.resolve(true),
-			expiresAt: Number.POSITIVE_INFINITY
-		};
-		nextCheck.promise = hasCurrentDeployment(cache)
-			.catch((error: unknown) => {
-				announceCacheUpdate({
-					status: 'failed',
-					error: getErrorMessage(error)
-				});
-
-				return true;
-			})
-			.finally(() => {
-				nextCheck.expiresAt = Date.now() + DEPLOYMENT_CHECK_TTL_MS;
-			});
-		currentDeploymentCheck = nextCheck;
-	}
-
-	return currentDeploymentCheck.promise;
-}
-
 function cacheResponse(event: FetchEvent, cache: Cache, request: Request, response: Response) {
 	if (
 		CACHEABLE_ASSET_PATHS.has(new URL(request.url).pathname) &&
@@ -217,38 +108,6 @@ function cacheResponse(event: FetchEvent, cache: Cache, request: Request, respon
 	) {
 		event.waitUntil(cache.put(request, response.clone()).catch(() => undefined));
 	}
-}
-
-async function cacheUrls(urls: unknown) {
-	if (!Array.isArray(urls)) {
-		return;
-	}
-
-	const cache = await caches.open(CACHE);
-
-	await Promise.all(
-		urls.map(async (url) => {
-			if (typeof url !== 'string') {
-				return;
-			}
-
-			try {
-				const parsedUrl = new URL(url, self.location.origin);
-
-				if (!isSafeSameOriginUrl(parsedUrl) || !CACHEABLE_ASSET_PATHS.has(parsedUrl.pathname)) {
-					return;
-				}
-
-				const response = await fetchFresh(parsedUrl.href);
-
-				if (response.status === 200) {
-					await cache.put(parsedUrl.href, response);
-				}
-			} catch {
-				// Best-effort cache warming only.
-			}
-		})
-	);
 }
 
 async function addFilesToCache(cache: Cache) {
@@ -264,11 +123,6 @@ async function addFilesToCache(cache: Cache) {
 		.filter((asset): asset is string => Boolean(asset));
 
 	if (failedAssets.length > 0) {
-		await announceCacheUpdate({
-			status: 'precache-skipped',
-			failedAssets
-		});
-
 		throw new Error(`Unable to precache ${failedAssets.length} required asset(s).`);
 	}
 }
@@ -301,18 +155,6 @@ self.addEventListener('activate', (event) => {
 	}
 
 	event.waitUntil(deleteOldCaches());
-});
-
-self.addEventListener('message', (event) => {
-	const data = event.data as CacheUrlsMessage;
-
-	if (data?.type === 'CACHE_URLS') {
-		event.waitUntil(cacheUrls(data.urls));
-	}
-
-	if (data?.type === 'GET_CACHE_UPDATE_STATUS' && lastCacheUpdateMessage) {
-		event.source?.postMessage(lastCacheUpdateMessage);
-	}
 });
 
 self.addEventListener('fetch', (event) => {
@@ -357,14 +199,9 @@ self.addEventListener('fetch', (event) => {
 			return fetchFresh(event.request);
 		}
 
-		if (url.pathname === DEPLOYMENT_MANIFEST) {
-			return fetchFresh(event.request);
-		}
-
 		const cached = await getCachedResponse(cache, event.request, url);
 
 		if (cached) {
-			event.waitUntil(hasVerifiedCurrentDeployment(cache).catch(() => true));
 			return cached;
 		}
 

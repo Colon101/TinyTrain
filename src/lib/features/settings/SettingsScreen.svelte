@@ -4,22 +4,13 @@
 		DatabaseUploadSummary,
 		Exercise,
 		ExerciseMergeOption,
-		ExerciseMergeResult,
-		LocalDatabaseStats
+		ExerciseMergeResult
 	} from '$lib/db';
 	import type {
 		TrackedImportPhase,
 		TrackedImportSummary,
 		TrackedLimbPriority
 	} from '$lib/tracked-import';
-	import {
-		DEFAULT_PROGRESS_INDICATOR_POSITION,
-		PROGRESS_INDICATOR_POSITIONS,
-		initializeProgressIndicatorPreference,
-		progressIndicatorPosition,
-		saveProgressIndicatorPosition,
-		type ProgressIndicatorPosition
-	} from '$lib/progress-indicator-preference';
 	import AccentThemePicker from '$lib/features/settings/AccentThemePicker.svelte';
 	import ExercisePickerSheet from '$lib/features/workouts/ExercisePickerSheet.svelte';
 	import Icon from '$lib/ui/Icon.svelte';
@@ -29,7 +20,6 @@
 
 	let api = $state<DatabaseApi | null>(null);
 	let trackedImportApi = $state<TrackedImportApi | null>(null);
-	let stats = $state<LocalDatabaseStats | null>(null);
 	let summary = $state<DatabaseUploadSummary | null>(null);
 	let mergeOptions = $state<ExerciseMergeOption[]>([]);
 	let mergeResult = $state<ExerciseMergeResult | null>(null);
@@ -40,8 +30,6 @@
 	let secondaryMergeExerciseId = $state('');
 	let mergeExerciseName = $state('');
 	let mergePickerTarget = $state<'main' | 'secondary' | null>(null);
-	let mergeExerciseSearch = $state('');
-	let selectedMergePickerExerciseIds = $state<string[]>([]);
 	let isLoading = $state(true);
 	let isUploading = $state(false);
 	let isMergingExercises = $state(false);
@@ -51,11 +39,7 @@
 	let errorMessage = $state('');
 	let statusMessage = $state('');
 	let mergeStatusMessage = $state('');
-	let preferenceErrorMessage = $state('');
 	let isDataOperationRunning = $derived(isUploading || isMergingExercises || isImportingTracked);
-	let selectedProgressIndicatorPosition = $derived(
-		$progressIndicatorPosition ?? DEFAULT_PROGRESS_INDICATOR_POSITION
-	);
 
 	let selectedMainMergeOption = $derived(
 		mergeOptions.find((option) => option.exercise.id === mainMergeExerciseId) ?? null
@@ -64,35 +48,13 @@
 		mergeOptions.find((option) => option.exercise.id === secondaryMergeExerciseId) ?? null
 	);
 	let mergeExerciseOptions = $derived(mergeOptions.map((option) => option.exercise));
-	let cleanMergeExerciseSearch = $derived(mergeExerciseSearch.trim().replace(/\s+/g, ' '));
-	let normalizedMergeExerciseSearch = $derived(cleanMergeExerciseSearch.toLocaleLowerCase());
 	let mergeOptionByExerciseId = $derived(
 		new Map(mergeOptions.map((option) => [option.exercise.id, option]))
 	);
-	let filteredMergePickerExercises = $derived(
-		(cleanMergeExerciseSearch
-			? mergeExerciseOptions.filter((exercise) =>
-					exercise.normalizedName.includes(normalizedMergeExerciseSearch)
-				)
+	let mergePickerExercises = $derived(
+		mergePickerTarget === 'secondary'
+			? mergeExerciseOptions.filter((exercise) => exercise.id !== mainMergeExerciseId)
 			: mergeExerciseOptions
-		)
-			.filter((exercise) =>
-				mergePickerTarget === 'secondary' ? exercise.id !== mainMergeExerciseId : true
-			)
-			.toSorted(compareMergeExercisePreference)
-	);
-	let visibleMergePickerExercises = $derived(
-		filteredMergePickerExercises.slice(0, cleanMergeExerciseSearch ? 80 : 60)
-	);
-	let hiddenMergePickerExerciseCount = $derived(
-		Math.max(filteredMergePickerExercises.length - visibleMergePickerExercises.length, 0)
-	);
-	let selectedMergePickerExerciseIdSet = $derived(new Set(selectedMergePickerExerciseIds));
-	let disabledMergePickerExerciseIds = $derived(
-		new Set(mergePickerTarget === 'secondary' && mainMergeExerciseId ? [mainMergeExerciseId] : [])
-	);
-	let mergePickerSubmitLabel = $derived(
-		mergePickerTarget === 'main' ? 'Use as main exercise' : 'Use as secondary exercise'
 	);
 	let hasValidMergeExerciseName = $derived(
 		!selectedMainMergeOption?.canRename || Boolean(mergeExerciseName.trim())
@@ -110,7 +72,6 @@
 
 	onMount(() => {
 		let disposed = false;
-		initializeProgressIndicatorPreference();
 
 		void (async () => {
 			try {
@@ -128,10 +89,7 @@
 				await dbApi.ensureDbOpen();
 
 				if (!disposed) {
-					[stats, mergeOptions] = await Promise.all([
-						dbApi.getLocalDatabaseStats(),
-						dbApi.listExerciseMergeOptions()
-					]);
+					mergeOptions = await dbApi.listExerciseMergeOptions();
 				}
 			} catch (error) {
 				if (!disposed) {
@@ -148,30 +106,6 @@
 			disposed = true;
 		};
 	});
-
-	function selectProgressIndicatorPosition(position: ProgressIndicatorPosition) {
-		preferenceErrorMessage = saveProgressIndicatorPosition(position)
-			? ''
-			: 'The preview changed, but this browser could not save the preference.';
-	}
-
-	function getPreviewDeltaPositionClass(position: ProgressIndicatorPosition) {
-		switch (position) {
-			case 'top-left':
-				return 'top-1 left-1.5 text-left';
-			case 'top-center':
-				return 'top-1 left-1/2 -translate-x-1/2 text-center';
-			case 'top-right':
-				return 'top-1 right-1.5 text-right';
-			case 'bottom-center':
-				return 'bottom-1 left-1/2 -translate-x-1/2 text-center';
-			case 'bottom-right':
-				return 'right-1.5 bottom-1 text-right';
-			case 'bottom-left':
-			default:
-				return 'bottom-1 left-1.5 text-left';
-		}
-	}
 
 	async function uploadLocalDatabase() {
 		if (!api || isDataOperationRunning) {
@@ -191,21 +125,11 @@
 		statusMessage = 'Uploading this device.';
 
 		try {
-			try {
-				summary = await api.uploadLocalDatabaseToCloud();
-				statusMessage = 'Upload finished.';
-			} catch (error) {
-				errorMessage = error instanceof Error ? error.message : 'Upload failed.';
-				statusMessage = '';
-				return;
-			}
-
-			try {
-				stats = await api.getLocalDatabaseStats();
-			} catch (error) {
-				const refreshError = error instanceof Error ? `: ${error.message}` : '';
-				errorMessage = `Upload finished, but database statistics could not be refreshed${refreshError}`;
-			}
+			summary = await api.uploadLocalDatabaseToCloud();
+			statusMessage = 'Upload finished.';
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Upload failed.';
+			statusMessage = '';
 		} finally {
 			isUploading = false;
 		}
@@ -232,40 +156,14 @@
 
 	function openMergeExercisePicker(target: 'main' | 'secondary') {
 		mergePickerTarget = target;
-		mergeExerciseSearch = '';
-		selectedMergePickerExerciseIds =
-			target === 'main'
-				? mainMergeExerciseId
-					? [mainMergeExerciseId]
-					: []
-				: secondaryMergeExerciseId
-					? [secondaryMergeExerciseId]
-					: [];
 	}
 
 	function closeMergeExercisePicker() {
 		mergePickerTarget = null;
-		mergeExerciseSearch = '';
-		selectedMergePickerExerciseIds = [];
 	}
 
-	function handleMergeExerciseSearchInput(event: Event) {
-		const target = event.currentTarget as HTMLInputElement;
-		mergeExerciseSearch = target.value;
-	}
-
-	function toggleMergePickerExercise(exerciseId: string) {
-		if (disabledMergePickerExerciseIds.has(exerciseId)) {
-			return;
-		}
-
-		selectedMergePickerExerciseIds = selectedMergePickerExerciseIdSet.has(exerciseId)
-			? []
-			: [exerciseId];
-	}
-
-	function applyMergePickerExercise() {
-		const selectedExerciseId = selectedMergePickerExerciseIds[0];
+	function applyMergePickerExercise(exerciseIds: string[]) {
+		const selectedExerciseId = exerciseIds[0];
 
 		if (!selectedExerciseId || !mergePickerTarget) {
 			return;
@@ -311,10 +209,7 @@
 			}
 
 			try {
-				[stats, mergeOptions] = await Promise.all([
-					api.getLocalDatabaseStats(),
-					api.listExerciseMergeOptions()
-				]);
+				mergeOptions = await api.listExerciseMergeOptions();
 			} catch (error) {
 				const refreshError = error instanceof Error ? `: ${error.message}` : '';
 				errorMessage = `Exercise history was merged, but settings data could not be refreshed${refreshError}`;
@@ -390,15 +285,6 @@
 				statusMessage = '';
 				return;
 			}
-
-			if (api) {
-				try {
-					stats = await api.getLocalDatabaseStats();
-				} catch (error) {
-					const refreshError = error instanceof Error ? `: ${error.message}` : '';
-					errorMessage = `Tracked import finished, but database statistics could not be refreshed${refreshError}`;
-				}
-			}
 		} finally {
 			isImportingTracked = false;
 		}
@@ -461,10 +347,6 @@
 			(secondOption?.historyCount ?? 0) - (firstOption?.historyCount ?? 0) ||
 			first.name.localeCompare(second.name)
 		);
-	}
-
-	function getMergePickerExercisePosition(exerciseId: string) {
-		return selectedMergePickerExerciseIdSet.has(exerciseId) ? 1 : null;
 	}
 
 	function formatFileList(files: string[]) {
@@ -567,74 +449,6 @@
 		</div>
 
 		<AccentThemePicker />
-
-		<div class="h-px bg-white/10"></div>
-
-		<fieldset class="grid gap-3">
-			<legend class="text-sm font-semibold text-white">Comparison indicator position</legend>
-			<p class="text-xs font-medium text-accent-soft">
-				Current: {PROGRESS_INDICATOR_POSITIONS.find(
-					(position) => position.value === selectedProgressIndicatorPosition
-				)?.label ?? 'Bottom left'}
-			</p>
-
-			<div class="grid grid-cols-3 gap-2">
-				{#each PROGRESS_INDICATOR_POSITIONS as position (position.value)}
-					<label class="relative min-w-0 cursor-pointer">
-						<input
-							class="peer sr-only"
-							type="radio"
-							name="progress-indicator-position"
-							value={position.value}
-							checked={selectedProgressIndicatorPosition === position.value}
-							onchange={() => selectProgressIndicatorPosition(position.value)}
-						/>
-						<span
-							class={`grid min-h-24 gap-2 rounded-lg border p-2 transition peer-focus-visible:ring-2 peer-focus-visible:ring-accent-soft peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-surface-app ${
-								selectedProgressIndicatorPosition === position.value
-									? 'border-accent/60 bg-accent/10'
-									: 'border-white/10 bg-black/20 hover:border-white/20'
-							}`}
-						>
-							<span class="flex min-h-8 min-w-0 items-start justify-between gap-1">
-								<span class="text-[10px] leading-4 font-semibold text-zinc-200">
-									{position.label}
-								</span>
-								{#if selectedProgressIndicatorPosition === position.value}
-									<span
-										class="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-accent text-on-accent"
-									>
-										<Icon name="check" class="h-2.5 w-2.5" />
-									</span>
-								{/if}
-							</span>
-							<span
-								class="relative block h-11 min-w-0 overflow-hidden rounded-md border-2 border-positive-border bg-white text-black"
-								aria-hidden="true"
-							>
-								<strong
-									class="absolute inset-0 grid place-items-center text-base font-bold tabular-nums"
-								>
-									10
-								</strong>
-								<span
-									class={`absolute z-10 max-w-[calc(100%-0.75rem)] overflow-hidden text-[9px] leading-none font-bold text-ellipsis whitespace-nowrap text-positive-on-light tabular-nums ${getPreviewDeltaPositionClass(position.value)}`}
-								>
-									+2
-								</span>
-							</span>
-						</span>
-					</label>
-				{/each}
-			</div>
-		</fieldset>
-
-		<p class="text-xs leading-5 text-zinc-500">
-			Saved automatically on this device. Default: Bottom left.
-		</p>
-		{#if preferenceErrorMessage}
-			<p class="text-xs leading-5 text-red-200" role="alert">{preferenceErrorMessage}</p>
-		{/if}
 	</section>
 
 	<div class="flex items-center gap-3 pt-1">
@@ -657,58 +471,6 @@
 			<h2 class="mt-5 text-2xl font-semibold text-white">Loading</h2>
 		</section>
 	{:else}
-		<section class="grid gap-3">
-			<div class="grid grid-cols-2 gap-3">
-				<div class="rounded-lg border border-white/10 bg-white/[0.04] p-4">
-					<p class="text-xs font-semibold tracking-[0.18em] text-zinc-500 uppercase">
-						Previous workouts
-					</p>
-					<p class="mt-3 text-3xl font-semibold text-white">
-						{formatNumber(stats?.previousWorkouts ?? 0)}
-					</p>
-				</div>
-				<div class="rounded-lg border border-white/10 bg-white/[0.04] p-4">
-					<p class="text-xs font-semibold tracking-[0.18em] text-zinc-500 uppercase">Filled sets</p>
-					<p class="mt-3 text-3xl font-semibold text-white">
-						{formatNumber(stats?.filledSessionSets ?? 0)}
-					</p>
-				</div>
-			</div>
-
-			<div class="rounded-lg border border-white/10 bg-white/[0.04] p-4">
-				<dl class="grid gap-3 text-sm">
-					<div class="flex items-center justify-between gap-4">
-						<dt class="text-zinc-400">Splits</dt>
-						<dd class="font-semibold text-white">{formatNumber(stats?.workouts ?? 0)}</dd>
-					</div>
-					<div class="flex items-center justify-between gap-4">
-						<dt class="text-zinc-400">Completed workouts</dt>
-						<dd class="font-semibold text-white">
-							{formatNumber(stats?.previousWorkouts ?? 0)}
-						</dd>
-					</div>
-					<div class="flex items-center justify-between gap-4">
-						<dt class="text-zinc-400">Custom exercises</dt>
-						<dd class="font-semibold text-white">{formatNumber(stats?.customExercises ?? 0)}</dd>
-					</div>
-					<div class="flex items-center justify-between gap-4">
-						<dt class="text-zinc-400">Session exercises</dt>
-						<dd class="font-semibold text-white">
-							{formatNumber(stats?.sessionExercises ?? 0)}
-						</dd>
-					</div>
-					<div class="flex items-center justify-between gap-4">
-						<dt class="text-zinc-400">Session sets</dt>
-						<dd class="font-semibold text-white">{formatNumber(stats?.sessionSets ?? 0)}</dd>
-					</div>
-					<div class="flex items-center justify-between gap-4">
-						<dt class="text-zinc-400">Last workout</dt>
-						<dd class="font-semibold text-white">{formatLastWorkout(stats?.lastWorkoutAt)}</dd>
-					</div>
-				</dl>
-			</div>
-		</section>
-
 		<section
 			class="grid min-w-0 gap-3 overflow-hidden rounded-lg border border-white/10 bg-white/[0.04] p-4"
 		>
@@ -1086,29 +848,26 @@
 
 {#if mergePickerTarget}
 	<ExercisePickerSheet
-		exerciseSearch={mergeExerciseSearch}
-		newExerciseName=""
-		isNewExerciseUnilateral={false}
-		visiblePickerExercises={visibleMergePickerExercises}
-		hiddenPickerExerciseCount={hiddenMergePickerExerciseCount}
-		selectedPickerExerciseIdSet={selectedMergePickerExerciseIdSet}
-		selectedExerciseIds={disabledMergePickerExerciseIds}
-		addSelectedLabel={mergePickerSubmitLabel}
-		submitDisabled={selectedMergePickerExerciseIds.length !== 1}
-		canCreateCustomExercise={false}
+		exercises={mergePickerExercises}
+		initialSelectedExerciseIds={mergePickerTarget === 'main'
+			? mainMergeExerciseId
+				? [mainMergeExerciseId]
+				: []
+			: secondaryMergeExerciseId
+				? [secondaryMergeExerciseId]
+				: []}
+		selectionMode="single"
+		allowCreate={false}
 		isSaving={isDataOperationRunning}
 		sheetEyebrow={mergePickerTarget === 'main' ? 'Main exercise' : 'Secondary exercise'}
 		sheetTitle={mergePickerTarget === 'main' ? 'Pick the head exercise' : 'Pick history to copy'}
+		actionLabel={mergePickerTarget === 'main'
+			? 'Use as main exercise'
+			: 'Use as secondary exercise'}
 		onClose={closeMergeExercisePicker}
-		onExerciseSearchInput={handleMergeExerciseSearchInput}
-		onCustomExerciseNameInput={() => {}}
-		onTogglePickerExercise={toggleMergePickerExercise}
-		onToggleUnilateral={() => {}}
-		onCreateExercise={(event) => event.preventDefault()}
 		onAddSelected={applyMergePickerExercise}
-		isPreviouslyUsedExercise={(exercise) =>
-			(mergeOptionByExerciseId.get(exercise.id)?.historyCount ?? 0) > 0}
-		getPickerExercisePosition={getMergePickerExercisePosition}
+		compareExercises={compareMergeExercisePreference}
+		previouslyUsed={(exercise) => (mergeOptionByExerciseId.get(exercise.id)?.historyCount ?? 0) > 0}
 		getExerciseMetadata={formatExerciseMergeMetadata}
 	/>
 {/if}

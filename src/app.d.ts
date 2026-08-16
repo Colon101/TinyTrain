@@ -10,14 +10,6 @@ declare global {
 	interface Window {
 		__tinytrainInstallPrompt?: BeforeInstallPromptEvent | null;
 	}
-
-	namespace App {
-		// interface Error {}
-		// interface Locals {}
-		// interface PageData {}
-		// interface PageState {}
-		// interface Platform {}
-	}
 }
 
 export {};

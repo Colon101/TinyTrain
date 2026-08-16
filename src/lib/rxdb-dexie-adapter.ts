@@ -14,8 +14,7 @@ type TableName =
 	| 'workoutExercises'
 	| 'workoutSessions'
 	| 'sessionExercises'
-	| 'sessionSets'
-	| 'exerciseResetEvents';
+	| 'sessionSets';
 type ChangeListener = (tableName: TableName) => void;
 type TransactionCallback<T> = () => Promise<T> | T;
 
@@ -344,8 +343,7 @@ export type RxDexieLikeDatabase = {
 	workoutSessions: RxTableAdapter<PlainDoc>;
 	sessionExercises: RxTableAdapter<PlainDoc>;
 	sessionSets: RxTableAdapter<PlainDoc>;
-	exerciseResetEvents: RxTableAdapter<PlainDoc>;
-	transaction<T>(mode: string, ...args: unknown[]): Promise<T>;
+	transaction<T>(callback: TransactionCallback<T>): Promise<T>;
 };
 
 const adaptersByUserId = new Map<string, Promise<RxDexieLikeDatabase>>();
@@ -417,22 +415,11 @@ async function createRxDexieLikeDatabase(
 			userId,
 			'sessionSets'
 		),
-		exerciseResetEvents: new RxTableAdapter(
-			database.exerciseResetEvents as unknown as RxCollection<PlainDoc>,
-			userId,
-			'exerciseResetEvents'
-		),
-		async transaction<T>(_mode: string, ...args: unknown[]) {
-			const callback = args.at(-1);
-
-			if (typeof callback !== 'function') {
-				return undefined as T;
-			}
-
+		async transaction<T>(callback: TransactionCallback<T>) {
 			// RxDB's Dexie storage uses one IndexedDB database per collection, so it cannot
 			// provide a real cross-collection transaction here. Serializing these sections
 			// at least preserves app-level write ordering for multi-table mutations.
-			return runSerializedTransaction(callback as TransactionCallback<T>);
+			return runSerializedTransaction(callback);
 		}
 	};
 }

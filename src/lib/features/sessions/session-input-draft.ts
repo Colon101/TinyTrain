@@ -1,9 +1,5 @@
-import type {
-	SessionFieldDelta,
-	SessionInputField,
-	SessionOverview,
-	SessionSetOverview
-} from '$lib/db';
+import type { SessionInputField, SessionOverview, SessionSetOverview } from '$lib/db';
+import { createFieldDelta } from '$lib/db/shared';
 import {
 	clearSessionInputDraft,
 	createEmptySessionInputDraft,
@@ -67,9 +63,9 @@ export function rebuildSessionSetOverview(
 
 	return {
 		...nextSet,
-		weightDelta: createSessionFieldDelta(nextSet.weight, nextSet.previousReference?.weight),
-		repsDelta: createSessionFieldDelta(nextSet.reps, nextSet.previousReference?.reps),
-		rirDelta: createSessionFieldDelta(nextSet.rir, nextSet.previousReference?.rir)
+		weightDelta: createFieldDelta(nextSet.weight, nextSet.previousReference?.weight),
+		repsDelta: createFieldDelta(nextSet.reps, nextSet.previousReference?.reps),
+		rirDelta: createFieldDelta(nextSet.rir, nextSet.previousReference?.rir)
 	};
 }
 
@@ -127,43 +123,4 @@ function applyDraftToSessionSet(sessionSet: SessionSetOverview, draft: SessionIn
 	return Object.keys(overrides).length > 0
 		? rebuildSessionSetOverview(sessionSet, overrides)
 		: sessionSet;
-}
-
-function formatSignedDelta(diff: number) {
-	return `${diff > 0 ? '+' : ''}${Number(diff.toFixed(2))}`;
-}
-
-function createSessionFieldDelta(current?: number, previous?: number): SessionFieldDelta {
-	if (
-		typeof current !== 'number' ||
-		!Number.isFinite(current) ||
-		typeof previous !== 'number' ||
-		!Number.isFinite(previous)
-	) {
-		return {
-			state: 'empty',
-			label: ''
-		};
-	}
-
-	const diff = Number((current - previous).toFixed(2));
-
-	if (diff > 0) {
-		return {
-			state: 'improved',
-			label: formatSignedDelta(diff)
-		};
-	}
-
-	if (diff < 0) {
-		return {
-			state: 'regressed',
-			label: formatSignedDelta(diff)
-		};
-	}
-
-	return {
-		state: 'matched',
-		label: ''
-	};
 }

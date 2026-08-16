@@ -115,7 +115,7 @@
 					return;
 				}
 
-				currentUserSubscription = api.db.cloud.currentUser.subscribe((nextUser) => {
+				currentUserSubscription = api.currentUser.subscribe((nextUser) => {
 					currentUser = nextUser;
 
 					if (nextUser.isLoading) {
@@ -380,10 +380,6 @@
 	function getParentPath(pathname: string): string {
 		if (pathname === '/workouts' || pathname === '/exercises') {
 			return getHomePath(page.url.searchParams.get('date') ?? undefined);
-		}
-
-		if (pathname === '/workouts/new') {
-			return '/workouts';
 		}
 
 		const exerciseDetailMatch = pathname.match(/^\/exercises\/.+$/);

@@ -7,11 +7,9 @@ import {
 } from '$lib/auth-owned-state';
 
 type SessionDataCacheEntry = {
-	sessionId: string;
 	overview: SessionOverview | null;
 	exercises: Exercise[];
 	exerciseUsagePreferences: ExerciseUsagePreference[];
-	updatedAt: number;
 	ownerId: string;
 	authGeneration: number;
 };
@@ -45,7 +43,7 @@ export function readSessionDataCache(sessionId: string) {
 
 export function writeSessionDataCache(
 	sessionId: string,
-	entry: Omit<SessionDataCacheEntry, 'sessionId' | 'updatedAt' | 'ownerId' | 'authGeneration'>,
+	entry: Omit<SessionDataCacheEntry, 'ownerId' | 'authGeneration'>,
 	ownerIdentity: AuthOwnedStateIdentity
 ) {
 	const identity = getAuthOwnedStateIdentity();
@@ -61,10 +59,8 @@ export function writeSessionDataCache(
 	sessionDataCache.delete(sessionId);
 	sessionDataCache.set(sessionId, {
 		...entry,
-		sessionId,
 		ownerId: identity.ownerId,
-		authGeneration: identity.generation,
-		updatedAt: Date.now()
+		authGeneration: identity.generation
 	});
 
 	while (sessionDataCache.size > SESSION_DATA_CACHE_MAX_ENTRIES) {

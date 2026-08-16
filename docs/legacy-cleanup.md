@@ -18,9 +18,9 @@ The following unlinked routes were available only in development builds:
 
 - `/testing/backfill` manually created completed historical sessions and carried demo workout seed helpers in the production database module.
 - `/testing/recovery` repaired timestamps produced by an older version of the Tracked importer.
-- `/testing/customization` was the interactive prototype for comparison-indicator placement. The supported version now lives in Settings.
+- `/testing/customization` was the interactive prototype for comparison-indicator placement.
 
-The routes, their three feature components, and their private database/import APIs have been removed. The supported Tracked import flow remains in Settings, and normal session creation and editing are unchanged.
+The routes, their three feature components, and their private database/import APIs have been removed. The later six-position customization was also removed; comparison deltas remain in their standard position. The supported Tracked import flow remains in Settings, and normal session creation and editing are unchanged.
 
 ### Supabase bootstrap scaffolding
 
@@ -36,9 +36,8 @@ Those files were removed to prevent destructive or already-applied setup SQL fro
 
 These items may look historical but still protect active users or current installs:
 
-- The RxDB workout-session schema migration converts old `startedAt: null` values to an omitted optional field. Removing it can prevent an existing browser database from opening.
-- The `tinytrain-testing-delta-position` preference read migrates a value from the former customization prototype into the supported versioned preference. It is a bounded, one-time client-data migration.
-- The service worker deployment manifest and generated deployment ID drive visible update detection and cache refreshes; they are current PWA infrastructure, not deployment leftovers.
+- The RxDB workout-session identity migration lets existing version-0 browser databases advance to the current schema. Removing it can prevent an existing browser database from opening.
+- The Supabase client quotes the schema's reserved `order` field because RxDB replication builds conflict filters from every document field.
 - Progressive “backfill” in `db-cloud-sync.ts` hydrates recent cloud rows into the local-first cache. Despite the name, it is part of current sync behavior and is unrelated to the removed manual backfill screen.
 - `rxdb-dexie-adapter.ts` uses Dexie as RxDB's IndexedDB storage adapter. It does not restore the removed Dexie Cloud backend.
 

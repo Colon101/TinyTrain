@@ -2,7 +2,6 @@ export type {
 	DatabaseTableUploadSummary,
 	DatabaseUploadMode,
 	DatabaseUploadSummary,
-	LocalDatabaseStats,
 	SyncProgress
 } from '../db-cloud-sync';
 
@@ -10,12 +9,10 @@ export type SessionStatus = 'planned' | 'in_progress' | 'completed' | 'abandoned
 export type ExerciseSource = 'baseline' | 'custom';
 export type SessionSetSide = 'bilateral' | 'left' | 'right';
 export type SessionInputField = 'weight' | 'reps' | 'rir';
-export type PersistentStorageStatus = 'persisted' | 'promptable' | 'denied' | 'unsupported';
 
 export type HydrateVisibleScopeInput =
 	| { type: 'session'; sessionId: string }
 	| { type: 'week'; weekStartDayKey: string; weekEndDayKey: string }
-	| { type: 'day'; dayKey: string }
 	| { type: 'workouts' };
 
 export interface Exercise {
@@ -87,13 +84,6 @@ export interface SessionSet {
 	updatedAt: string;
 }
 
-export interface ExerciseResetEvent {
-	id: string;
-	exerciseId: string;
-	resetAt: string;
-	createdAt: string;
-}
-
 export type WorkoutExerciseWithExercise = WorkoutExercise & {
 	exercise: Exercise;
 };
@@ -108,7 +98,6 @@ export type SessionSummary = WorkoutSession & {
 };
 
 export type DayOverview = {
-	dayKey: string;
 	session: SessionSummary | null;
 };
 
@@ -116,7 +105,6 @@ export type ExerciseListItem = {
 	exercise: Exercise;
 	historyCount: number;
 	lastPerformedAt?: string;
-	latestResetAt?: string;
 };
 
 export type ExerciseMergeOption = {
@@ -134,7 +122,6 @@ export type ExerciseMergeInput = {
 
 export type ExerciseMergeResult = {
 	mainExercise: Exercise;
-	secondaryExercise: Exercise;
 	copiedSessionExercises: number;
 	copiedSessionSets: number;
 	skippedConflicts: number;
@@ -152,7 +139,6 @@ export type ExerciseUsagePreference = {
 
 export type ExerciseHistoryEntry = {
 	sessionId: string;
-	workoutId: string;
 	workoutNameSnapshot: string;
 	dayKey: string;
 	performedAt?: string;
@@ -174,11 +160,6 @@ export type SessionFieldDelta = {
 };
 
 export type SessionSetReference = {
-	sessionId: string;
-	startedAt?: string;
-	completedAt?: string;
-	order: number;
-	side: SessionSetSide;
 	weight?: number;
 	reps?: number;
 	rir?: number;
@@ -192,33 +173,18 @@ export type SessionSetOverview = SessionSet & {
 	rirDelta: SessionFieldDelta;
 };
 
-export type SessionExerciseProgressStatus = 'new' | 'matched' | 'improved' | 'regressed' | 'mixed';
-
 export type SessionExerciseOverview = SessionExerciseDetail & {
 	exercise: Exercise | null;
-	previousPerformance: ExerciseHistoryEntry | null;
-	progressStatus: SessionExerciseProgressStatus;
-	progressSummary: string;
 	sets: SessionSetOverview[];
-};
-
-export type SessionProgressSummary = {
-	improvedExercises: number;
-	matchedExercises: number;
-	regressedExercises: number;
-	mixedExercises: number;
-	newExercises: number;
 };
 
 export type SessionOverview = {
 	summary: SessionSummary;
 	previousSummary: SessionSummary | null;
-	progress: SessionProgressSummary | null;
 	exercises: SessionExerciseOverview[];
 };
 
 export type ExerciseDetail = {
 	exercise: Exercise;
 	history: ExerciseHistoryEntry[];
-	resetEvents: ExerciseResetEvent[];
 };

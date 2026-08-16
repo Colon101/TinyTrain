@@ -19,7 +19,6 @@
 		| 'pencil'
 		| 'plus'
 		| 'refresh-cw'
-		| 'rotate-ccw'
 		| 'settings'
 		| 'share-2'
 		| 'shield-alert'
@@ -119,9 +118,6 @@
 		<path d="M3 3v5h5" />
 		<path d="M3 12a9 9 0 0 0 15.5 6.4L21 16" />
 		<path d="M16 16h5v5" />
-	{:else if name === 'rotate-ccw'}
-		<path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
-		<path d="M3 3v5h5" />
 	{:else if name === 'settings'}
 		<path
 			fill="currentColor"

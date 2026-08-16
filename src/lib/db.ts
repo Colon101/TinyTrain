@@ -6,48 +6,34 @@
  */
 export * from './db/models';
 export {
+	currentUser,
 	db,
 	ensureDbOpen,
-	getLocalDatabaseStats,
-	getPersistentStorageStatus,
 	getSessionTimerSummary,
 	hydrateVisibleScope,
-	loginWithGoogle,
 	loginWithSupabaseGoogleForApp,
 	logoutFromCloud,
-	requestPersistentStorage,
 	runWithClosedDatabaseRetry,
 	subscribeToDatabaseChanges,
 	syncNow,
-	uploadLocalDatabaseToCloud,
-	SESSION_INACTIVITY_ABANDON_MS,
-	SESSION_INACTIVITY_CHECK_INTERVAL_MS,
-	SESSION_INACTIVITY_WARNING_MS
+	uploadLocalDatabaseToCloud
 } from './db/runtime';
 export {
 	createCustomExercise,
 	createExercise,
-	getExercise,
 	getExerciseDetail,
-	listCustomExerciseItems,
-	listCustomExercises,
-	listExerciseHistory,
 	listExerciseItems,
-	listExerciseResetEvents,
 	listExercises,
 	listExerciseUsagePreferences,
-	recordExerciseReset,
 	setExerciseUnilateral
 } from './db/exercises';
 export { listExerciseMergeOptions, mergeExerciseHistory } from './db/exercise-merge';
 export {
-	addExerciseToWorkout,
 	addExercisesToWorkout,
 	createWorkout,
 	listWorkoutExercises,
 	listWorkoutSchedulingOptions,
 	listWorkouts,
-	moveWorkoutExercise,
 	removeWorkoutExercise,
 	reorderWorkoutExercises
 } from './db/workouts';

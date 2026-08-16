@@ -1,11 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import type { SessionInputField, SessionSetOverview, SessionSetSide } from '$lib/db';
-	import {
-		DEFAULT_PROGRESS_INDICATOR_POSITION,
-		initializeProgressIndicatorPreference,
-		progressIndicatorPosition
-	} from '$lib/progress-indicator-preference';
 	import Icon from '$lib/ui/Icon.svelte';
 	import SessionSetFieldInput from './SessionSetFieldInput.svelte';
 
@@ -30,10 +24,6 @@
 		onAddSet: () => void;
 		onRemoveSet: (sessionSetId: string) => void;
 	} = $props();
-
-	onMount(() => {
-		initializeProgressIndicatorPreference();
-	});
 
 	function formatSetBadgeValue(side: SessionSetSide, order: number) {
 		const paddedOrder = String(order).padStart(2, '0');
@@ -68,8 +58,6 @@
 
 		<div class="grid gap-1.5">
 			{#each sets as set (set.id)}
-				{@const indicatorPosition =
-					$progressIndicatorPosition ?? DEFAULT_PROGRESS_INDICATOR_POSITION}
 				<div
 					class={`${setEditorGridClass} items-center rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2`}
 				>
@@ -97,7 +85,6 @@
 						value={set.weightInput ?? ''}
 						previousValue={set.previousReference?.weight}
 						delta={set.weightDelta}
-						{indicatorPosition}
 						disabled={isSaving}
 						onInput={(event) => onSetInput(set.id, 'weight', event)}
 						onKeydown={onSetInputKeydown}
@@ -112,7 +99,6 @@
 						value={set.repsInput ?? ''}
 						previousValue={set.previousReference?.reps}
 						delta={set.repsDelta}
-						{indicatorPosition}
 						disabled={isSaving}
 						onInput={(event) => onSetInput(set.id, 'reps', event)}
 						onKeydown={onSetInputKeydown}
@@ -127,7 +113,6 @@
 						value={set.rirInput ?? ''}
 						previousValue={set.previousReference?.rir}
 						delta={set.rirDelta}
-						{indicatorPosition}
 						disabled={isSaving}
 						onInput={(event) => onSetInput(set.id, 'rir', event)}
 						onKeydown={onSetInputKeydown}

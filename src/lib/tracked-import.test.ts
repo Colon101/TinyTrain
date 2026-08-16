@@ -25,8 +25,8 @@ vi.mock('./db', async () => {
 		await vi.importActual<typeof import('./db/shared')>('./db/shared');
 
 	return {
+		currentUser: { value: dbMock.currentUser },
 		db: {
-			cloud: { currentUser: { value: dbMock.currentUser } },
 			exercises: {
 				toArray: dbMock.exercisesToArray,
 				bulkAdd: dbMock.exercisesBulkAdd
@@ -161,13 +161,7 @@ describe('Tracked archive', () => {
 		dbMock.workoutSessionsBulkAdd.mockResolvedValue([]);
 		dbMock.sessionExercisesBulkAdd.mockResolvedValue([]);
 		dbMock.sessionSetsBulkAdd.mockResolvedValue([]);
-		dbMock.transaction.mockImplementation(async (...args: unknown[]) => {
-			const callback = args.at(-1);
-
-			if (typeof callback === 'function') {
-				return callback();
-			}
-		});
+		dbMock.transaction.mockImplementation(async (callback: () => Promise<unknown>) => callback());
 		dbMock.syncNow.mockResolvedValue(undefined);
 	});
 
