@@ -6,6 +6,7 @@
  */
 export * from './db/models';
 export {
+	acquireActiveDatabaseLease,
 	currentUser,
 	db,
 	ensureDbOpen,
@@ -18,6 +19,7 @@ export {
 	syncNow,
 	uploadLocalDatabaseToCloud
 } from './db/runtime';
+export type { ActiveDatabaseLease, AppDatabase, VersionedDocument } from './db/runtime';
 export {
 	createCustomExercise,
 	createExercise,

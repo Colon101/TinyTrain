@@ -13,6 +13,7 @@ import type { RxDexieLikeDatabase } from '../rxdb-dexie-adapter';
 import { dbCloudSync, type SupabaseSyncedRow, type SyncProgress } from '../db-cloud-sync';
 import { toDayKey, withExerciseDefaults, withSessionSetDefaults } from './shared';
 import type {
+	DatabaseUploadSummary,
 	Exercise,
 	HydrateVisibleScopeInput,
 	SessionExercise,
@@ -87,14 +88,22 @@ export type DataTable<T extends { id: string }> = {
 	toArray(): Promise<T[]>;
 	get(id: string): Promise<T | undefined>;
 	bulkGet(ids: string[]): Promise<(T | undefined)[]>;
+	bulkGetVersioned(ids: string[]): Promise<(VersionedDocument<T> | undefined)[]>;
 	add(doc: T): Promise<string>;
 	bulkAdd(docs: T[]): Promise<string[]>;
 	put(doc: T): Promise<string>;
 	bulkPut(docs: T[]): Promise<string[]>;
+	compareAndPut(expectedVersion: string | undefined, doc: T): Promise<boolean>;
 	update(id: string, patch: Partial<T>): Promise<number>;
 	delete(id: string): Promise<void>;
 	bulkDelete(ids: string[]): Promise<void>;
+	compareAndDelete(expectedVersion: string, id: string): Promise<boolean>;
 	where(field: string): WhereClause<T>;
+};
+
+export type VersionedDocument<T> = {
+	document: T;
+	version: string;
 };
 
 export const currentUser = new ValueObservable<{
@@ -469,6 +478,43 @@ export type AppDatabase = {
 	transaction<T>(callback: () => Promise<T> | T): Promise<T>;
 };
 
+export type ActiveDatabaseLease = {
+	userId: string;
+	database: AppDatabase;
+	assertActive(): void;
+	syncNow(options?: SyncNowOptions): Promise<DatabaseUploadSummary | undefined>;
+};
+
+export function acquireActiveDatabaseLease(expectedUserId: string): ActiveDatabaseLease {
+	const context = getActiveRuntimeContext();
+
+	if (!context || context.userId !== expectedUserId) {
+		throw new Error('The active database no longer belongs to the signed-in account.');
+	}
+
+	const assertActive = () => {
+		if (
+			!isActiveRuntimeContext(context) ||
+			!currentUser.value.isLoggedIn ||
+			currentUser.value.userId !== expectedUserId
+		) {
+			throw new Error('The signed-in account changed during the database operation.');
+		}
+	};
+
+	return {
+		userId: context.userId,
+		database: context.database,
+		assertActive,
+		async syncNow(options = {}) {
+			assertActive();
+			const summary = await syncRuntimeContext(context, options);
+			assertActive();
+			return summary;
+		}
+	};
+}
+
 export type RxDataTableKey = Exclude<keyof RxDexieLikeDatabase, 'transaction'>;
 
 export function getRxDataTable(tableName: RxDataTableKey) {
@@ -716,6 +762,10 @@ export async function syncNow(options: SyncNowOptions = {}) {
 		return;
 	}
 
+	return syncRuntimeContext(context, options);
+}
+
+async function syncRuntimeContext(context: ActiveRuntimeContext, options: SyncNowOptions) {
 	const summary = await dbCloudSync.reconcileSupabaseDatabase(
 		getCloudSyncDeps(context),
 		context.userId,

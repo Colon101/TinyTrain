@@ -48,6 +48,88 @@ function createTable(values: Array<number | string>) {
 	return new RxTableAdapter<TestDoc>(createCollection(rows), 'user-1', 'workouts');
 }
 
+function createVersionedCollection(
+	initial?: TestDoc & { user_id?: string },
+	initialVersion = '1-initial'
+) {
+	let state = initial ? { ...initial } : undefined;
+	let version = initialVersion;
+	const controls = {
+		insertConflict: false,
+		modifyConflict: false,
+		removeConflict: false,
+		revisionChangesBeforeModifier: false,
+		revisionless: false
+	};
+	const conflict = () => Object.assign(new Error('write conflict'), { code: 'CONFLICT' });
+	const modify = vi.fn(async (modifier: (document: TestDoc) => TestDoc | Promise<TestDoc>) => {
+		if (controls.modifyConflict) {
+			throw conflict();
+		}
+		if (controls.revisionChangesBeforeModifier) {
+			version = '2-concurrent';
+		}
+
+		state = { ...(await modifier({ ...state! })) };
+		version = '2-modified';
+		return getDocument();
+	});
+	const remove = vi.fn(async () => {
+		if (controls.removeConflict) {
+			throw conflict();
+		}
+
+		state = undefined;
+	});
+	const getDocument = () =>
+		state
+			? {
+					get revision() {
+						return controls.revisionless ? undefined : version;
+					},
+					toMutableJSON: () => ({
+						...state,
+						_rev: version,
+						_meta: { lwt: 1 },
+						_attachments: {},
+						_deleted: false
+					}),
+					modify,
+					remove
+				}
+			: undefined;
+	const insert = vi.fn(async (document: TestDoc) => {
+		if (state || controls.insertConflict) {
+			throw conflict();
+		}
+
+		state = { ...document };
+		version = '1-inserted';
+		return getDocument();
+	});
+	const collection = {
+		$: { subscribe: vi.fn() },
+		findByIds: vi.fn((ids: string[]) => ({
+			exec: async () =>
+				new Map(ids.flatMap((id) => (state?.id === id ? [[id, getDocument()]] : [])))
+		})),
+		findOne: vi.fn((id: string) => ({
+			exec: async () => (state?.id === id ? getDocument() : undefined)
+		})),
+		insert
+	};
+
+	return {
+		collection: collection as unknown as RxCollection<TestDoc>,
+		controls,
+		getState: () => state,
+		getVersion: () => version,
+		insert,
+		modify,
+		remove
+	};
+}
+
 function createDeferred<T>() {
 	let resolve!: (value: T | PromiseLike<T>) => void;
 	let reject!: (reason?: unknown) => void;
@@ -103,6 +185,92 @@ describe('RxTableAdapter range queries', () => {
 			expect(result.map((row) => row.value)).toEqual(expected);
 		}
 	);
+});
+
+describe('RxTableAdapter conditional writes', () => {
+	it('returns revision-bearing public rows without RxDB or tenant metadata', async () => {
+		const fixture = createVersionedCollection({
+			id: 'row-1',
+			value: 1,
+			user_id: 'user-1'
+		});
+		const table = new RxTableAdapter<TestDoc>(fixture.collection, 'user-1', 'workoutExercises');
+
+		await expect(table.bulkGetVersioned(['row-1'])).resolves.toEqual([
+			{ document: { id: 'row-1', value: 1 }, version: '1-initial' }
+		]);
+	});
+
+	it('inserts only when the expected state is absent and forces the lease tenant', async () => {
+		const fixture = createVersionedCollection();
+		const table = new RxTableAdapter<TestDoc>(fixture.collection, 'user-1', 'workoutExercises');
+
+		await expect(
+			table.compareAndPut(undefined, { id: 'row-1', value: 2, user_id: 'attacker' })
+		).resolves.toBe(true);
+		expect(fixture.getState()).toEqual({ id: 'row-1', value: 2, user_id: 'user-1' });
+		await expect(table.compareAndPut(undefined, { id: 'row-1', value: 3 })).resolves.toBe(false);
+	});
+
+	it('returns false when a concurrent insert wins after the absence check', async () => {
+		const fixture = createVersionedCollection();
+		fixture.controls.insertConflict = true;
+		const table = new RxTableAdapter<TestDoc>(fixture.collection, 'user-1', 'workoutExercises');
+
+		await expect(table.compareAndPut(undefined, { id: 'row-1', value: 2 })).resolves.toBe(false);
+		expect(fixture.getState()).toBeUndefined();
+	});
+
+	it('updates only the exact expected revision and surfaces concurrent conflicts as false', async () => {
+		const fixture = createVersionedCollection({ id: 'row-1', value: 1, user_id: 'user-1' });
+		const table = new RxTableAdapter<TestDoc>(fixture.collection, 'user-1', 'workoutExercises');
+
+		await expect(table.compareAndPut('stale', { id: 'row-1', value: 2 })).resolves.toBe(false);
+		expect(fixture.modify).not.toHaveBeenCalled();
+
+		fixture.controls.modifyConflict = true;
+		await expect(table.compareAndPut('1-initial', { id: 'row-1', value: 2 })).resolves.toBe(false);
+		expect(fixture.getState()?.value).toBe(1);
+
+		fixture.controls.modifyConflict = false;
+		await expect(table.compareAndPut('1-initial', { id: 'row-1', value: 2 })).resolves.toBe(true);
+		expect(fixture.getState()).toEqual({ id: 'row-1', value: 2, user_id: 'user-1' });
+	});
+
+	it('rejects a revision change between the outer check and modify callback', async () => {
+		const fixture = createVersionedCollection({ id: 'row-1', value: 1, user_id: 'user-1' });
+		fixture.controls.revisionChangesBeforeModifier = true;
+		const table = new RxTableAdapter<TestDoc>(fixture.collection, 'user-1', 'workoutExercises');
+
+		await expect(table.compareAndPut('1-initial', { id: 'row-1', value: 2 })).resolves.toBe(false);
+		expect(fixture.getState()?.value).toBe(1);
+	});
+
+	it('deletes only the exact expected revision and preserves concurrent writes', async () => {
+		const fixture = createVersionedCollection({ id: 'row-1', value: 1, user_id: 'user-1' });
+		const table = new RxTableAdapter<TestDoc>(fixture.collection, 'user-1', 'workoutExercises');
+
+		await expect(table.compareAndDelete('stale', 'row-1')).resolves.toBe(false);
+		expect(fixture.remove).not.toHaveBeenCalled();
+
+		fixture.controls.removeConflict = true;
+		await expect(table.compareAndDelete('1-initial', 'row-1')).resolves.toBe(false);
+		expect(fixture.getState()?.value).toBe(1);
+
+		fixture.controls.removeConflict = false;
+		await expect(table.compareAndDelete('1-initial', 'row-1')).resolves.toBe(true);
+		expect(fixture.getState()).toBeUndefined();
+	});
+
+	it('rejects a persisted document without an RxDB revision', async () => {
+		const fixture = createVersionedCollection({ id: 'row-1', value: 1, user_id: 'user-1' });
+		fixture.controls.revisionless = true;
+		const table = new RxTableAdapter<TestDoc>(fixture.collection, 'user-1', 'workoutExercises');
+
+		await expect(table.bulkGetVersioned(['row-1'])).rejects.toThrow(
+			'RxDB returned a document without a revision.'
+		);
+	});
 });
 
 describe('RxDexieLikeDatabase initialization cache', () => {
