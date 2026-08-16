@@ -20,9 +20,6 @@ const sessionSet: SessionSetOverview = {
 	updatedAt: timestamp,
 	label: 'Set 01',
 	previousReference: {
-		sessionId: 'previous-session',
-		order: 1,
-		side: 'bilateral',
 		weight: 95,
 		reps: 8,
 		rir: 3

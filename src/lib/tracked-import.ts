@@ -1,9 +1,9 @@
 import { strFromU8, Unzip, UnzipInflate } from 'fflate';
 import {
-	db,
+	acquireActiveDatabaseLease,
+	currentUser,
 	ensureDbOpen,
 	normalizeName,
-	syncNow,
 	toDayKey,
 	type Exercise,
 	type SessionSet,
@@ -11,7 +11,9 @@ import {
 	type Workout,
 	type WorkoutExercise,
 	type WorkoutSession,
-	type SessionExercise
+	type SessionExercise,
+	type ActiveDatabaseLease,
+	type VersionedDocument
 } from './db';
 import {
 	BASELINE_EXERCISE_BY_ID,
@@ -116,9 +118,10 @@ type ImportDocument =
 	Exercise | Workout | WorkoutExercise | WorkoutSession | SessionExercise | SessionSet;
 
 type WorkoutExerciseRewrite = {
+	workoutIds: string[];
 	rows: WorkoutExercise[];
 	idsToDelete: string[];
-	previousRows: WorkoutExercise[];
+	previousRows: VersionedDocument<WorkoutExercise>[];
 };
 
 type ImportWriteSet = {
@@ -132,8 +135,7 @@ type ImportWriteSet = {
 
 type ImportDataTable<T extends { id: string }> = {
 	bulkGet(ids: string[]): Promise<(T | undefined)[]>;
-	bulkDelete(ids: string[]): Promise<void>;
-	bulkPut(docs: T[]): Promise<string[]>;
+	bulkAdd(docs: T[]): Promise<string[]>;
 };
 
 const REQUIRED_FILES = ['sessions.csv', 'sets.csv', 'exercises.csv'];
@@ -162,7 +164,9 @@ const UNSUPPORTED_CATEGORIES = [
 
 export async function previewTrackedArchive(file: File): Promise<TrackedImportSummary> {
 	const archive = await readTrackedArchive(file);
-	const plan = await buildImportPlan(archive);
+	await ensureDbOpen();
+	const lease = acquireImportDatabaseLease();
+	const plan = await buildImportPlan(archive, lease);
 
 	return plan.summary;
 }
@@ -173,27 +177,23 @@ export async function importTrackedArchive(
 ): Promise<TrackedImportSummary> {
 	options.onProgress?.('reading');
 	const archive = await readTrackedArchive(file);
+	await ensureDbOpen();
+	const lease = acquireImportDatabaseLease();
 	options.onProgress?.('planning');
-	const plan = await buildImportPlan(archive);
+	const plan = await buildImportPlan(archive, lease);
 
 	if (plan.summary.sessionsImportable === 0 || plan.summary.strengthSetRowsImportable === 0) {
 		throw new Error('No importable Tracked strength workouts were found.');
 	}
 
-	await ensureDbOpen();
-
-	const currentUser = db.cloud.currentUser.value;
-
-	if (!currentUser?.isLoggedIn || !currentUser.userId) {
-		throw new Error('Sign in with Google before importing from Tracked.');
-	}
-
 	options.onProgress?.('writing');
-	const importedSummary = await writeImportPlan(plan, options, currentUser.userId);
+	const importedSummary = await writeImportPlan(plan, options, lease);
+	lease.assertActive();
 
 	try {
 		options.onProgress?.('syncing');
-		await syncNow();
+		await lease.syncNow();
+		lease.assertActive();
 		return { ...importedSummary, syncStatus: 'synced' };
 	} catch (error) {
 		return {
@@ -202,6 +202,16 @@ export async function importTrackedArchive(
 			syncError: error instanceof Error ? error.message : 'Sync failed.'
 		};
 	}
+}
+
+function acquireImportDatabaseLease() {
+	const importOwner = currentUser.value;
+
+	if (!importOwner?.isLoggedIn || !importOwner.userId) {
+		throw new Error('Sign in with Google before importing from Tracked.');
+	}
+
+	return acquireActiveDatabaseLease(importOwner.userId);
 }
 
 async function readTrackedArchive(file: File): Promise<TrackedArchive> {
@@ -375,11 +385,16 @@ function unzipTrackedArchive(data: Uint8Array) {
 	});
 }
 
-async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
-	await ensureDbOpen();
-
-	const existingExercises = await db.exercises.toArray();
-	const existingWorkouts = await db.workouts.toArray();
+async function buildImportPlan(
+	archive: TrackedArchive,
+	lease: ActiveDatabaseLease
+): Promise<ImportPlan> {
+	const existingExercises = await withActiveImportLease(lease, () =>
+		lease.database.exercises.toArray()
+	);
+	const existingWorkouts = await withActiveImportLease(lease, () =>
+		lease.database.workouts.toArray()
+	);
 	const existingExerciseByNormalizedName = new Map<string, Exercise>();
 	const existingWorkoutByNormalizedName = new Map<string, Workout>();
 
@@ -494,6 +509,19 @@ async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
 	const workoutNames = [
 		...new Set(sessionRows.map((session) => getWorkoutName(session, workoutNameByTrackedId)))
 	];
+	const secondarySetCountByNormalizedName = new Map<string, number>();
+
+	for (const set of setRows) {
+		const normalizedName = exercisesByTrackedId.get(set.exerciseId)?.normalizedName;
+
+		if (normalizedName && hasSecondarySetValues(set)) {
+			secondarySetCountByNormalizedName.set(
+				normalizedName,
+				(secondarySetCountByNormalizedName.get(normalizedName) ?? 0) + 1
+			);
+		}
+	}
+
 	const summary = createBaseSummary(archive);
 	summary.sessionsFound = archive.rows.sessions.length;
 	summary.sessionsImportable = sessionRows.length;
@@ -513,11 +541,7 @@ async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
 		.map((exercise) => ({
 			normalizedName: exercise.normalizedName,
 			name: exercise.canonicalExercise?.name ?? exercise.displayName,
-			setsWithSecondaryValues: setRows.filter(
-				(set) =>
-					exercisesByTrackedId.get(set.exerciseId)?.normalizedName === exercise.normalizedName &&
-					hasSecondarySetValues(set)
-			).length,
+			setsWithSecondaryValues: secondarySetCountByNormalizedName.get(exercise.normalizedName) ?? 0,
 			limbPriority: 'primary-right' as TrackedLimbPriority
 		}))
 		.filter((exercise) => exercise.setsWithSecondaryValues > 0)
@@ -585,14 +609,15 @@ async function buildImportPlan(archive: TrackedArchive): Promise<ImportPlan> {
 async function writeImportPlan(
 	plan: ImportPlan,
 	options: TrackedImportOptions,
-	ownerId: string
+	lease: ActiveDatabaseLease
 ): Promise<TrackedImportSummary> {
-	assertImportOwner(ownerId);
+	lease.assertActive();
+	const { database, userId: ownerId } = lease;
 
 	const now = timestamp();
 	const summary = { ...plan.summary, warnings: [...plan.summary.warnings] };
-	const exercises = await upsertImportedExercises(plan, now, ownerId);
-	const workouts = await upsertImportedWorkouts(plan, now, ownerId);
+	const exercises = await upsertImportedExercises(plan, now, ownerId, lease);
+	const workouts = await upsertImportedWorkouts(plan, now, ownerId, lease);
 	const setRowsBySessionId = groupBy(plan.setRows, (set) => set.sessionId);
 	const sessionIdCandidates = [
 		...new Set(
@@ -603,7 +628,11 @@ async function writeImportPlan(
 		)
 	];
 	const existingSessionIds = new Set(
-		(await db.workoutSessions.bulkGet(sessionIdCandidates))
+		(
+			await withActiveImportLease(lease, () =>
+				database.workoutSessions.bulkGet(sessionIdCandidates)
+			)
+		)
 			.filter(isDefined)
 			.map((session) => session.id)
 	);
@@ -709,21 +738,15 @@ async function writeImportPlan(
 		summary.sessionSetsImported += setRowsForSession.length;
 	}
 
-	await db.transaction(
-		'rw',
-		db.exercises,
-		db.workouts,
-		db.workoutExercises,
-		db.workoutSessions,
-		db.sessionExercises,
-		db.sessionSets,
-		async () => {
-			assertImportOwner(ownerId);
+	await withActiveImportLease(lease, () =>
+		database.transaction(async () => {
+			lease.assertActive();
 
 			const workoutExerciseRewrite = await buildWorkoutExerciseRewrite(
 				latestWorkoutTemplateByWorkoutId,
 				workouts.byId,
-				now
+				now,
+				lease
 			);
 			const writeSet: ImportWriteSet = {
 				exercises: exercises.toAdd,
@@ -735,24 +758,9 @@ async function writeImportPlan(
 			};
 
 			assertValidImportWriteSet(ownerId, writeSet);
-			await assertNewImportIdsAvailable(writeSet);
-
-			try {
-				await applyImportWriteSet(writeSet);
-			} catch (error) {
-				try {
-					await rollbackImportWriteSet(writeSet);
-				} catch (rollbackError) {
-					throw new AggregateError(
-						[error, rollbackError],
-						'Tracked import failed and its database rollback could not be verified.',
-						{ cause: rollbackError }
-					);
-				}
-
-				throw error;
-			}
-		}
+			await assertImportWriteSetCompatible(writeSet, lease);
+			await applyImportWriteSet(writeSet, lease);
+		})
 	);
 
 	return summary;
@@ -792,12 +800,14 @@ const IMPORT_TIMESTAMP_FIELDS = new Set([
 	'updatedAt'
 ]);
 
-function assertImportOwner(ownerId: string) {
-	const currentUser = db.cloud.currentUser.value;
-
-	if (!currentUser?.isLoggedIn || currentUser.userId !== ownerId) {
-		throw new Error('The signed-in account changed during the Tracked import.');
-	}
+async function withActiveImportLease<T>(
+	lease: ActiveDatabaseLease,
+	operation: () => Promise<T>
+): Promise<T> {
+	lease.assertActive();
+	const result = await operation();
+	lease.assertActive();
+	return result;
 }
 
 function assertValidImportWriteSet(ownerId: string, writeSet: ImportWriteSet) {
@@ -909,178 +919,296 @@ function assertValidImportDocuments(
 	}
 }
 
-async function assertNewImportIdsAvailable(writeSet: ImportWriteSet) {
+async function assertImportWriteSetCompatible(
+	writeSet: ImportWriteSet,
+	lease: ActiveDatabaseLease
+) {
+	const { database } = lease;
+
 	await Promise.all([
-		assertIdsAvailable('exercises', db.exercises, writeSet.exercises),
-		assertIdsAvailable('workouts', db.workouts, writeSet.workouts),
-		assertIdsAvailable('workoutSessions', db.workoutSessions, writeSet.workoutSessions),
-		assertIdsAvailable('sessionExercises', db.sessionExercises, writeSet.sessionExercises),
-		assertIdsAvailable('sessionSets', db.sessionSets, writeSet.sessionSets)
+		assertDocumentsCompatible('exercises', database.exercises, writeSet.exercises, lease),
+		assertDocumentsCompatible('workouts', database.workouts, writeSet.workouts, lease),
+		assertDocumentsCompatible(
+			'workoutSessions',
+			database.workoutSessions,
+			writeSet.workoutSessions,
+			lease
+		),
+		assertDocumentsCompatible(
+			'sessionExercises',
+			database.sessionExercises,
+			writeSet.sessionExercises,
+			lease
+		),
+		assertDocumentsCompatible('sessionSets', database.sessionSets, writeSet.sessionSets, lease),
+		assertWorkoutExerciseRewriteCompatible(writeSet.workoutExercises, lease)
 	]);
 }
 
-async function assertIdsAvailable<T extends { id: string }>(
+async function assertDocumentsCompatible<T extends { id: string }>(
 	collectionName: ImportCollectionName,
 	table: ImportDataTable<T>,
-	documents: T[]
+	documents: T[],
+	lease: ActiveDatabaseLease
 ) {
 	if (documents.length === 0) {
-		return;
+		return [];
 	}
 
-	const existingDocuments = await table.bulkGet(documents.map((document) => document.id));
+	const existingDocuments = await withActiveImportLease(lease, () =>
+		table.bulkGet(documents.map((document) => document.id))
+	);
 
-	if (existingDocuments.some(isDefined)) {
-		throw new Error(`${collectionName} import IDs conflict with existing data.`);
-	}
-}
-
-async function applyImportWriteSet(writeSet: ImportWriteSet) {
-	if (writeSet.exercises.length > 0) {
-		await db.exercises.bulkAdd(writeSet.exercises);
-	}
-
-	if (writeSet.workouts.length > 0) {
-		await db.workouts.bulkAdd(writeSet.workouts);
-	}
-
-	if (writeSet.workoutSessions.length > 0) {
-		await db.workoutSessions.bulkAdd(writeSet.workoutSessions);
-	}
-
-	if (writeSet.sessionExercises.length > 0) {
-		await db.sessionExercises.bulkAdd(writeSet.sessionExercises);
-	}
-
-	if (writeSet.sessionSets.length > 0) {
-		await db.sessionSets.bulkAdd(writeSet.sessionSets);
-	}
-
-	if (writeSet.workoutExercises.idsToDelete.length > 0) {
-		await db.workoutExercises.bulkDelete(writeSet.workoutExercises.idsToDelete);
-	}
-
-	if (writeSet.workoutExercises.rows.length > 0) {
-		await db.workoutExercises.bulkPut(writeSet.workoutExercises.rows);
-	}
-}
-
-async function rollbackImportWriteSet(writeSet: ImportWriteSet) {
-	const affectedWorkoutExerciseIds = [
-		...new Set([
-			...writeSet.workoutExercises.rows.map((document) => document.id),
-			...writeSet.workoutExercises.idsToDelete
-		])
-	];
-	const rollbackErrors: unknown[] = [];
-	const attempt = async (operation: () => Promise<unknown>) => {
-		try {
-			await operation();
-		} catch (error) {
-			rollbackErrors.push(error);
+	for (const [index, existingDocument] of existingDocuments.entries()) {
+		if (existingDocument && !flatDocumentsEqual(existingDocument, documents[index])) {
+			throw new Error(`${collectionName} import IDs conflict with existing data.`);
 		}
-	};
+	}
 
-	if (affectedWorkoutExerciseIds.length > 0) {
-		await attempt(() => db.workoutExercises.bulkDelete(affectedWorkoutExerciseIds));
-	}
-	if (writeSet.workoutExercises.previousRows.length > 0) {
-		await attempt(() => db.workoutExercises.bulkPut(writeSet.workoutExercises.previousRows));
-	}
-	if (writeSet.sessionSets.length > 0) {
-		await attempt(() => db.sessionSets.bulkDelete(writeSet.sessionSets.map(({ id }) => id)));
-	}
-	if (writeSet.sessionExercises.length > 0) {
-		await attempt(() =>
-			db.sessionExercises.bulkDelete(writeSet.sessionExercises.map(({ id }) => id))
-		);
-	}
-	if (writeSet.workoutSessions.length > 0) {
-		await attempt(() =>
-			db.workoutSessions.bulkDelete(writeSet.workoutSessions.map(({ id }) => id))
-		);
-	}
-	if (writeSet.workouts.length > 0) {
-		await attempt(() => db.workouts.bulkDelete(writeSet.workouts.map(({ id }) => id)));
-	}
-	if (writeSet.exercises.length > 0) {
-		await attempt(() => db.exercises.bulkDelete(writeSet.exercises.map(({ id }) => id)));
+	return existingDocuments;
+}
+
+async function addCompatibleDocuments<T extends { id: string }>(
+	collectionName: ImportCollectionName,
+	table: ImportDataTable<T>,
+	documents: T[],
+	lease: ActiveDatabaseLease
+) {
+	const existingDocuments = await assertDocumentsCompatible(
+		collectionName,
+		table,
+		documents,
+		lease
+	);
+	const missingDocuments = documents.filter((_, index) => !existingDocuments[index]);
+
+	if (missingDocuments.length === 0) {
+		return;
 	}
 
 	try {
-		await verifyImportRollback(writeSet, affectedWorkoutExerciseIds);
+		await withActiveImportLease(lease, () => table.bulkAdd(missingDocuments));
 	} catch (error) {
-		throw new AggregateError(
-			[...rollbackErrors, error],
-			'Tracked import rollback did not restore the original database state.',
-			{ cause: error }
+		const documentsAfterFailure = await assertDocumentsCompatible(
+			collectionName,
+			table,
+			documents,
+			lease
 		);
+
+		if (documentsAfterFailure.every(isDefined)) {
+			return;
+		}
+
+		throw error;
 	}
 }
 
-async function verifyImportRollback(
-	writeSet: ImportWriteSet,
-	affectedWorkoutExerciseIds: string[]
+async function assertWorkoutExerciseRewriteCompatible(
+	rewrite: WorkoutExerciseRewrite,
+	lease: ActiveDatabaseLease
 ) {
-	await Promise.all([
-		assertDocumentsAbsent('exercises', db.exercises, writeSet.exercises),
-		assertDocumentsAbsent('workouts', db.workouts, writeSet.workouts),
-		assertDocumentsAbsent('workoutSessions', db.workoutSessions, writeSet.workoutSessions),
-		assertDocumentsAbsent('sessionExercises', db.sessionExercises, writeSet.sessionExercises),
-		assertDocumentsAbsent('sessionSets', db.sessionSets, writeSet.sessionSets)
-	]);
+	const affectedIds = [...new Set([...rewrite.rows.map(({ id }) => id), ...rewrite.idsToDelete])];
 
-	if (affectedWorkoutExerciseIds.length === 0) {
+	if (affectedIds.length === 0) {
 		return;
 	}
 
-	const actualRows = (await db.workoutExercises.bulkGet(affectedWorkoutExerciseIds)).filter(
-		isDefined
+	const currentRows = await withActiveImportLease(lease, () =>
+		lease.database.workoutExercises.bulkGetVersioned(affectedIds)
 	);
-	const expectedRowsById = new Map(
-		writeSet.workoutExercises.previousRows.map((document) => [document.id, document])
+	const previousRowsById = new Map(
+		rewrite.previousRows.map((versioned) => [versioned.document.id, versioned])
 	);
+	const intendedRowsById = new Map(rewrite.rows.map((document) => [document.id, document]));
 
-	if (actualRows.length !== expectedRowsById.size) {
-		throw new Error('workoutExercises rollback row count did not match the original state.');
-	}
+	for (const [index, current] of currentRows.entries()) {
+		const id = affectedIds[index];
+		const previous = previousRowsById.get(id);
+		const intendedRow = intendedRowsById.get(id);
 
-	for (const actualRow of actualRows) {
-		const expectedRow = expectedRowsById.get(actualRow.id);
+		if (!current) {
+			if (previous) {
+				throw new Error('workoutExercises import conflicts with concurrently changed data.');
+			}
 
-		if (!expectedRow || !flatDocumentsEqual(actualRow, expectedRow)) {
-			throw new Error('workoutExercises rollback did not restore the original rows.');
+			continue;
+		}
+
+		const isExpectedPrevious =
+			previous &&
+			current.version === previous.version &&
+			flatDocumentsEqual(current.document, previous.document);
+		const isCompletedRetry = intendedRow && flatDocumentsEqual(current.document, intendedRow);
+
+		if (!isExpectedPrevious && !isCompletedRetry) {
+			throw new Error('workoutExercises import conflicts with concurrently changed data.');
 		}
 	}
 }
 
-async function assertDocumentsAbsent<T extends { id: string }>(
-	collectionName: ImportCollectionName,
-	table: ImportDataTable<T>,
-	documents: T[]
+async function getVersionedWorkoutExercise(
+	id: string,
+	lease: ActiveDatabaseLease
+): Promise<VersionedDocument<WorkoutExercise> | undefined> {
+	return (
+		await withActiveImportLease(lease, () => lease.database.workoutExercises.bulkGetVersioned([id]))
+	)[0];
+}
+
+function throwWorkoutExerciseConflict(): never {
+	throw new Error('workoutExercises import conflicts with concurrently changed data.');
+}
+
+async function compareAndPutWorkoutExercise(
+	row: WorkoutExercise,
+	previous: VersionedDocument<WorkoutExercise> | undefined,
+	lease: ActiveDatabaseLease
 ) {
-	if (documents.length === 0) {
+	const current = await getVersionedWorkoutExercise(row.id, lease);
+
+	if (current && flatDocumentsEqual(current.document, row)) {
 		return;
 	}
 
-	const remainingDocuments = await table.bulkGet(documents.map(({ id }) => id));
-
-	if (remainingDocuments.some(isDefined)) {
-		throw new Error(`${collectionName} rollback left imported documents behind.`);
+	if (
+		(previous &&
+			(!current ||
+				current.version !== previous.version ||
+				!flatDocumentsEqual(current.document, previous.document))) ||
+		(!previous && current)
+	) {
+		throwWorkoutExerciseConflict();
 	}
+
+	const wasWritten = await withActiveImportLease(lease, () =>
+		lease.database.workoutExercises.compareAndPut(previous?.version, row)
+	);
+
+	if (wasWritten) {
+		return;
+	}
+
+	const rowAfterConflict = await getVersionedWorkoutExercise(row.id, lease);
+
+	if (!rowAfterConflict || !flatDocumentsEqual(rowAfterConflict.document, row)) {
+		throwWorkoutExerciseConflict();
+	}
+}
+
+async function compareAndDeleteWorkoutExercise(
+	id: string,
+	previous: VersionedDocument<WorkoutExercise>,
+	lease: ActiveDatabaseLease
+) {
+	const current = await getVersionedWorkoutExercise(id, lease);
+
+	if (!current) {
+		return;
+	}
+
+	if (
+		current.version !== previous.version ||
+		!flatDocumentsEqual(current.document, previous.document)
+	) {
+		throwWorkoutExerciseConflict();
+	}
+
+	const wasDeleted = await withActiveImportLease(lease, () =>
+		lease.database.workoutExercises.compareAndDelete(previous.version, id)
+	);
+
+	if (wasDeleted) {
+		return;
+	}
+
+	if (await getVersionedWorkoutExercise(id, lease)) {
+		throwWorkoutExerciseConflict();
+	}
+}
+
+async function applyWorkoutExerciseRewrite(
+	rewrite: WorkoutExerciseRewrite,
+	lease: ActiveDatabaseLease
+) {
+	await assertWorkoutExerciseRewriteCompatible(rewrite, lease);
+	const previousRowsById = new Map(
+		rewrite.previousRows.map((versioned) => [versioned.document.id, versioned])
+	);
+
+	for (const row of rewrite.rows) {
+		await compareAndPutWorkoutExercise(row, previousRowsById.get(row.id), lease);
+	}
+
+	for (const id of rewrite.idsToDelete) {
+		const previous = previousRowsById.get(id);
+
+		if (!previous) {
+			throwWorkoutExerciseConflict();
+		}
+
+		await compareAndDeleteWorkoutExercise(id, previous, lease);
+	}
+
+	if (rewrite.workoutIds.length === 0) {
+		return;
+	}
+
+	const appliedRows = await withActiveImportLease(lease, () =>
+		lease.database.workoutExercises.where('workoutId').anyOf(rewrite.workoutIds).toArray()
+	);
+	const intendedRowsById = new Map(rewrite.rows.map((row) => [row.id, row]));
+
+	if (
+		appliedRows.length !== rewrite.rows.length ||
+		appliedRows.some((row) => {
+			const intended = intendedRowsById.get(row.id);
+			return !intended || !flatDocumentsEqual(row, intended);
+		})
+	) {
+		throwWorkoutExerciseConflict();
+	}
+}
+
+async function applyImportWriteSet(writeSet: ImportWriteSet, lease: ActiveDatabaseLease) {
+	const { database } = lease;
+
+	await addCompatibleDocuments('exercises', database.exercises, writeSet.exercises, lease);
+	await addCompatibleDocuments('workouts', database.workouts, writeSet.workouts, lease);
+	await addCompatibleDocuments(
+		'sessionExercises',
+		database.sessionExercises,
+		writeSet.sessionExercises,
+		lease
+	);
+	await addCompatibleDocuments('sessionSets', database.sessionSets, writeSet.sessionSets, lease);
+	await applyWorkoutExerciseRewrite(writeSet.workoutExercises, lease);
+	await addCompatibleDocuments(
+		'workoutSessions',
+		database.workoutSessions,
+		writeSet.workoutSessions,
+		lease
+	);
 }
 
 function flatDocumentsEqual(first: { id: string }, second: { id: string }) {
 	const normalize = (document: { id: string }) =>
 		Object.entries(document)
-			.filter(([, value]) => value !== undefined)
+			.filter(([key, value]) => key !== 'user_id' && value !== undefined)
 			.sort(([firstKey], [secondKey]) => firstKey.localeCompare(secondKey));
 
 	return JSON.stringify(normalize(first)) === JSON.stringify(normalize(second));
 }
 
-async function upsertImportedExercises(plan: ImportPlan, now: string, ownerId: string) {
-	const existingExercises = await db.exercises.toArray();
+async function upsertImportedExercises(
+	plan: ImportPlan,
+	now: string,
+	ownerId: string,
+	lease: ActiveDatabaseLease
+) {
+	const existingExercises = await withActiveImportLease(lease, () =>
+		lease.database.exercises.toArray()
+	);
 	const existingByNormalizedName = new Map<string, Exercise>();
 	const toAdd: Exercise[] = [];
 	let matched = 0;
@@ -1134,8 +1262,15 @@ async function upsertImportedExercises(plan: ImportPlan, now: string, ownerId: s
 	return { toAdd, byNormalizedName: existingByNormalizedName, matched, merged, created };
 }
 
-async function upsertImportedWorkouts(plan: ImportPlan, now: string, ownerId: string) {
-	const existingWorkouts = await db.workouts.toArray();
+async function upsertImportedWorkouts(
+	plan: ImportPlan,
+	now: string,
+	ownerId: string,
+	lease: ActiveDatabaseLease
+) {
+	const existingWorkouts = await withActiveImportLease(lease, () =>
+		lease.database.workouts.toArray()
+	);
 	const byName = new Map<string, Workout>();
 	const byId = new Map<string, Workout>();
 	const toAdd: Workout[] = [];
@@ -1303,20 +1438,24 @@ async function buildWorkoutExerciseRewrite(
 		{ startedAt: string; sessionId: string; exerciseIds: string[] }
 	>,
 	workoutById: Map<string, Workout>,
-	now: string
+	now: string,
+	lease: ActiveDatabaseLease
 ) {
+	let workoutIds: string[] = [];
 	const rows: WorkoutExercise[] = [];
 	const idsToDelete: string[] = [];
-	const previousRows: WorkoutExercise[] = [];
-	const workoutIds = [...latestWorkoutTemplateByWorkoutId.keys()].filter((workoutId) =>
+	const previousRows: VersionedDocument<WorkoutExercise>[] = [];
+	const candidateWorkoutIds = [...latestWorkoutTemplateByWorkoutId.keys()].filter((workoutId) =>
 		workoutById.has(workoutId)
 	);
 
-	if (workoutIds.length === 0) {
-		return { rows, idsToDelete, previousRows };
+	if (candidateWorkoutIds.length === 0) {
+		return { workoutIds, rows, idsToDelete, previousRows };
 	}
 
-	const persistedSessions = await db.workoutSessions.where('workoutId').anyOf(workoutIds).toArray();
+	const persistedSessions = await withActiveImportLease(lease, () =>
+		lease.database.workoutSessions.where('workoutId').anyOf(candidateWorkoutIds).toArray()
+	);
 	const latestPersistedStartedAtByWorkoutId = new Map<string, string>();
 
 	for (const session of persistedSessions) {
@@ -1338,20 +1477,34 @@ async function buildWorkoutExerciseRewrite(
 	);
 
 	if (templatesToRewrite.length === 0) {
-		return { rows, idsToDelete, previousRows };
+		return { workoutIds: [], rows, idsToDelete, previousRows };
 	}
+	workoutIds = templatesToRewrite.map(([workoutId]) => workoutId);
 
-	const existingRowsByWorkoutId = groupBy(
-		await db.workoutExercises
+	const queriedRows = await withActiveImportLease(lease, () =>
+		lease.database.workoutExercises
 			.where('workoutId')
 			.anyOf(templatesToRewrite.map(([workoutId]) => workoutId))
-			.toArray(),
-		(workoutExercise) => workoutExercise.workoutId
+			.toArray()
+	);
+	const versionedResults = await withActiveImportLease(lease, () =>
+		lease.database.workoutExercises.bulkGetVersioned(queriedRows.map(({ id }) => id))
 	);
 
-	for (const existingRows of existingRowsByWorkoutId.values()) {
-		previousRows.push(...existingRows);
+	for (const [index, queriedRow] of queriedRows.entries()) {
+		const versioned = versionedResults[index];
+
+		if (!versioned || !flatDocumentsEqual(versioned.document, queriedRow)) {
+			throwWorkoutExerciseConflict();
+		}
 	}
+
+	const versionedRows = versionedResults.filter(isDefined);
+	const existingRowsByWorkoutId = groupBy(
+		versionedRows.map(({ document }) => document),
+		(workoutExercise) => workoutExercise.workoutId
+	);
+	previousRows.push(...versionedRows);
 
 	for (const [workoutId, template] of templatesToRewrite) {
 		const workout = workoutById.get(workoutId);
@@ -1388,7 +1541,7 @@ async function buildWorkoutExerciseRewrite(
 		);
 	}
 
-	return { rows, idsToDelete, previousRows };
+	return { workoutIds, rows, idsToDelete, previousRows };
 }
 
 function parseCsvFile(contents: string, fileName: string, parseBudget: CsvParseBudget): CsvRow[] {

@@ -39,19 +39,4 @@
 			</p>
 		{/if}
 	</div>
-
-	<!-- {#if overview.previousSummary && overview.summary.status !== 'in_progress'}
-		<a
-			class="mt-4 block rounded-lg border border-white/10 bg-white/[0.03] px-4 py-4 transition hover:border-accent/40 hover:bg-white/[0.05]"
-			href={`/sessions/${overview.previousSummary.id}`}
-		>
-			<p class="text-xs font-semibold tracking-[0.18em] text-accent-soft uppercase">
-				Previous session
-			</p>
-			<p class="mt-2 text-sm font-semibold text-white">
-				{formatDayHeading(overview.previousSummary.dayKey)} at
-				{formatSessionTime(overview.previousSummary.startedAt)}
-			</p>
-		</a>
-	{/if} -->
 </div>

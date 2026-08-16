@@ -15,7 +15,6 @@ import { getRxStorageDexie } from 'rxdb/plugins/storage-dexie';
 import { supabase } from './supabase';
 import type {
 	Exercise,
-	ExerciseResetEvent,
 	SessionExercise,
 	SessionSet,
 	Workout,
@@ -35,7 +34,6 @@ export type SupabaseWorkoutExercise = WorkoutExercise & SyncedRow;
 export type SupabaseWorkoutSession = WorkoutSession & SyncedRow;
 export type SupabaseSessionExercise = SessionExercise & SyncedRow;
 export type SupabaseSessionSet = SessionSet & SyncedRow;
-export type SupabaseExerciseResetEvent = ExerciseResetEvent & SyncedRow;
 
 export type TinyTrainRxCollections = {
 	exercises: RxCollection<SupabaseExercise>;
@@ -44,7 +42,6 @@ export type TinyTrainRxCollections = {
 	workoutSessions: RxCollection<SupabaseWorkoutSession>;
 	sessionExercises: RxCollection<SupabaseSessionExercise>;
 	sessionSets: RxCollection<SupabaseSessionSet>;
-	exerciseResetEvents: RxCollection<SupabaseExerciseResetEvent>;
 };
 
 export type TinyTrainRxDatabase = RxDatabase<TinyTrainRxCollections>;
@@ -60,8 +57,7 @@ const collectionTableNames: Record<CollectionKey, string> = {
 	workoutExercises: 'workout_exercises',
 	workoutSessions: 'workout_sessions',
 	sessionExercises: 'session_exercises',
-	sessionSets: 'session_sets',
-	exerciseResetEvents: 'exercise_reset_events'
+	sessionSets: 'session_sets'
 };
 
 const optionalFieldsByCollection: Record<CollectionKey, string[]> = {
@@ -70,8 +66,7 @@ const optionalFieldsByCollection: Record<CollectionKey, string[]> = {
 	workoutExercises: [],
 	workoutSessions: ['startedAt', 'completedAt'],
 	sessionExercises: [],
-	sessionSets: ['weightInput', 'repsInput', 'rirInput', 'weight', 'reps', 'rir'],
-	exerciseResetEvents: []
+	sessionSets: ['weightInput', 'repsInput', 'rirInput', 'weight', 'reps', 'rir']
 };
 const replicationBatchSize = 500;
 
@@ -253,18 +248,6 @@ const schemas: Record<CollectionKey, RxJsonSchema<any>> = {
 			['sessionExerciseId', 'order'],
 			['exerciseId', 'createdAt']
 		]
-	}),
-	exerciseResetEvents: createSchema<SupabaseExerciseResetEvent>({
-		version: 0,
-		properties: {
-			id: stringProperty,
-			user_id: stringProperty,
-			exerciseId: stringProperty,
-			resetAt: timestampProperty,
-			createdAt: timestampProperty
-		},
-		required: ['id', 'user_id', 'exerciseId', 'resetAt', 'createdAt'],
-		indexes: ['user_id', 'exerciseId', 'resetAt', ['exerciseId', 'resetAt']]
 	})
 };
 
@@ -385,8 +368,7 @@ export async function getTinyTrainRxDatabase(userId: string): Promise<TinyTrainR
 			sessionSets: {
 				schema: schemas.sessionSets,
 				conflictHandler: sessionSetConflictHandler
-			},
-			exerciseResetEvents: { schema: schemas.exerciseResetEvents }
+			}
 		});
 
 		return database;

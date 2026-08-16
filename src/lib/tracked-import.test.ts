@@ -13,10 +13,14 @@ const dbMock = vi.hoisted(() => ({
 	workoutsBulkGet: vi.fn(),
 	workoutsBulkAdd: vi.fn(),
 	workoutsBulkDelete: vi.fn(),
+	workoutExerciseRows: [] as Array<{ id: string; [key: string]: unknown }>,
 	workoutExercisesToArray: vi.fn(),
 	workoutExercisesBulkGet: vi.fn(),
+	workoutExercisesBulkGetVersioned: vi.fn(),
 	workoutExercisesBulkPut: vi.fn(),
 	workoutExercisesBulkDelete: vi.fn(),
+	workoutExercisesCompareAndPut: vi.fn(),
+	workoutExercisesCompareAndDelete: vi.fn(),
 	workoutSessionsToArray: vi.fn(),
 	workoutSessionsBulkGet: vi.fn(),
 	workoutSessionsBulkAdd: vi.fn(),
@@ -33,54 +37,68 @@ const dbMock = vi.hoisted(() => ({
 vi.mock('./db', async () => {
 	const { normalizeName, toDayKey } =
 		await vi.importActual<typeof import('./db/shared')>('./db/shared');
+	const database = {
+		exercises: {
+			toArray: dbMock.exercisesToArray,
+			bulkGet: dbMock.exercisesBulkGet,
+			bulkAdd: dbMock.exercisesBulkAdd,
+			bulkDelete: dbMock.exercisesBulkDelete
+		},
+		workouts: {
+			toArray: dbMock.workoutsToArray,
+			bulkGet: dbMock.workoutsBulkGet,
+			bulkAdd: dbMock.workoutsBulkAdd,
+			bulkDelete: dbMock.workoutsBulkDelete
+		},
+		workoutExercises: {
+			where: () => ({
+				anyOf: (workoutIds: string[]) => ({
+					toArray: () => dbMock.workoutExercisesToArray(workoutIds)
+				})
+			}),
+			bulkGet: dbMock.workoutExercisesBulkGet,
+			bulkGetVersioned: dbMock.workoutExercisesBulkGetVersioned,
+			bulkPut: dbMock.workoutExercisesBulkPut,
+			bulkDelete: dbMock.workoutExercisesBulkDelete,
+			compareAndPut: dbMock.workoutExercisesCompareAndPut,
+			compareAndDelete: dbMock.workoutExercisesCompareAndDelete
+		},
+		workoutSessions: {
+			where: () => ({
+				anyOf: () => ({
+					toArray: dbMock.workoutSessionsToArray
+				})
+			}),
+			bulkGet: dbMock.workoutSessionsBulkGet,
+			bulkAdd: dbMock.workoutSessionsBulkAdd,
+			bulkDelete: dbMock.workoutSessionsBulkDelete
+		},
+		sessionExercises: {
+			bulkGet: dbMock.sessionExercisesBulkGet,
+			bulkAdd: dbMock.sessionExercisesBulkAdd,
+			bulkDelete: dbMock.sessionExercisesBulkDelete
+		},
+		sessionSets: {
+			bulkGet: dbMock.sessionSetsBulkGet,
+			bulkAdd: dbMock.sessionSetsBulkAdd,
+			bulkDelete: dbMock.sessionSetsBulkDelete
+		},
+		transaction: dbMock.transaction
+	};
 
 	return {
-		db: {
-			cloud: { currentUser: { value: dbMock.currentUser } },
-			exercises: {
-				toArray: dbMock.exercisesToArray,
-				bulkGet: dbMock.exercisesBulkGet,
-				bulkAdd: dbMock.exercisesBulkAdd,
-				bulkDelete: dbMock.exercisesBulkDelete
-			},
-			workouts: {
-				toArray: dbMock.workoutsToArray,
-				bulkGet: dbMock.workoutsBulkGet,
-				bulkAdd: dbMock.workoutsBulkAdd,
-				bulkDelete: dbMock.workoutsBulkDelete
-			},
-			workoutExercises: {
-				where: () => ({
-					anyOf: () => ({
-						toArray: dbMock.workoutExercisesToArray
-					})
-				}),
-				bulkGet: dbMock.workoutExercisesBulkGet,
-				bulkPut: dbMock.workoutExercisesBulkPut,
-				bulkDelete: dbMock.workoutExercisesBulkDelete
-			},
-			workoutSessions: {
-				where: () => ({
-					anyOf: () => ({
-						toArray: dbMock.workoutSessionsToArray
-					})
-				}),
-				bulkGet: dbMock.workoutSessionsBulkGet,
-				bulkAdd: dbMock.workoutSessionsBulkAdd,
-				bulkDelete: dbMock.workoutSessionsBulkDelete
-			},
-			sessionExercises: {
-				bulkGet: dbMock.sessionExercisesBulkGet,
-				bulkAdd: dbMock.sessionExercisesBulkAdd,
-				bulkDelete: dbMock.sessionExercisesBulkDelete
-			},
-			sessionSets: {
-				bulkGet: dbMock.sessionSetsBulkGet,
-				bulkAdd: dbMock.sessionSetsBulkAdd,
-				bulkDelete: dbMock.sessionSetsBulkDelete
-			},
-			transaction: dbMock.transaction
-		},
+		acquireActiveDatabaseLease: (expectedUserId: string) => ({
+			userId: expectedUserId,
+			database,
+			syncNow: dbMock.syncNow,
+			assertActive() {
+				if (!dbMock.currentUser.isLoggedIn || dbMock.currentUser.userId !== expectedUserId) {
+					throw new Error('The signed-in account changed during the Tracked import.');
+				}
+			}
+		}),
+		currentUser: { value: dbMock.currentUser },
+		db: database,
 		ensureDbOpen: dbMock.ensureDbOpen,
 		normalizeName,
 		syncNow: dbMock.syncNow,
@@ -162,6 +180,8 @@ function expectNoDatabaseWrites() {
 		dbMock.workoutsBulkDelete,
 		dbMock.workoutExercisesBulkDelete,
 		dbMock.workoutExercisesBulkPut,
+		dbMock.workoutExercisesCompareAndPut,
+		dbMock.workoutExercisesCompareAndDelete,
 		dbMock.workoutSessionsBulkAdd,
 		dbMock.workoutSessionsBulkDelete,
 		dbMock.sessionExercisesBulkAdd,
@@ -187,12 +207,48 @@ describe('Tracked archive', () => {
 		dbMock.workoutsBulkGet.mockImplementation(async (ids: string[]) => ids.map(() => undefined));
 		dbMock.workoutsBulkAdd.mockResolvedValue([]);
 		dbMock.workoutsBulkDelete.mockResolvedValue(undefined);
-		dbMock.workoutExercisesToArray.mockResolvedValue([]);
-		dbMock.workoutExercisesBulkGet.mockImplementation(async (ids: string[]) =>
-			ids.map(() => undefined)
+		dbMock.workoutExerciseRows.splice(0);
+		dbMock.workoutExercisesToArray.mockImplementation(async (workoutIds?: string[]) =>
+			workoutIds
+				? dbMock.workoutExerciseRows.filter((row) => workoutIds.includes(String(row.workoutId)))
+				: dbMock.workoutExerciseRows
 		);
+		dbMock.workoutExercisesBulkGet.mockImplementation(async (ids: string[]) => {
+			const rows = await dbMock.workoutExercisesToArray();
+			return ids.map((id) => rows.find((row: { id: string }) => row.id === id));
+		});
+		dbMock.workoutExercisesBulkGetVersioned.mockImplementation(async (ids: string[]) => {
+			const rows = await dbMock.workoutExercisesBulkGet(ids);
+			return rows.map((document: { id: string } | undefined) =>
+				document ? { document, version: `version:${document.id}` } : undefined
+			);
+		});
 		dbMock.workoutExercisesBulkPut.mockResolvedValue([]);
 		dbMock.workoutExercisesBulkDelete.mockResolvedValue(undefined);
+		dbMock.workoutExercisesCompareAndPut.mockImplementation(
+			async (_expectedVersion: string | undefined, row: { id: string }) => {
+				const index = dbMock.workoutExerciseRows.findIndex(({ id }) => id === row.id);
+
+				if (index === -1) {
+					dbMock.workoutExerciseRows.push(row);
+				} else {
+					dbMock.workoutExerciseRows[index] = row;
+				}
+
+				return true;
+			}
+		);
+		dbMock.workoutExercisesCompareAndDelete.mockImplementation(
+			async (_expectedVersion: string, id: string) => {
+				const index = dbMock.workoutExerciseRows.findIndex((row) => row.id === id);
+
+				if (index !== -1) {
+					dbMock.workoutExerciseRows.splice(index, 1);
+				}
+
+				return true;
+			}
+		);
 		dbMock.workoutSessionsToArray.mockResolvedValue([]);
 		dbMock.workoutSessionsBulkGet.mockImplementation(async (ids: string[]) =>
 			ids.map(() => undefined)
@@ -207,13 +263,7 @@ describe('Tracked archive', () => {
 		dbMock.sessionSetsBulkGet.mockImplementation(async (ids: string[]) => ids.map(() => undefined));
 		dbMock.sessionSetsBulkAdd.mockResolvedValue([]);
 		dbMock.sessionSetsBulkDelete.mockResolvedValue(undefined);
-		dbMock.transaction.mockImplementation(async (...args: unknown[]) => {
-			const callback = args.at(-1);
-
-			if (typeof callback === 'function') {
-				return callback();
-			}
-		});
+		dbMock.transaction.mockImplementation(async (callback: () => Promise<unknown>) => callback());
 		dbMock.syncNow.mockResolvedValue(undefined);
 	});
 
@@ -540,7 +590,7 @@ describe('Tracked archive', () => {
 	});
 
 	it('rebuilds workout templates from the newest imported session and removes stale rows', async () => {
-		dbMock.workoutExercisesToArray.mockResolvedValue([
+		dbMock.workoutExerciseRows.push(
 			{
 				id: 'existing-newer',
 				workoutId: 'tracked:user-1:workout:upper',
@@ -557,7 +607,7 @@ describe('Tracked archive', () => {
 				createdAt: '2026-06-01T00:00:00.000Z',
 				updatedAt: '2026-06-01T00:00:00.000Z'
 			}
-		]);
+		);
 		const file = trackedZip({
 			'exercises.csv': 'id,name\nnewer,Newer Lift\nolder,Older Lift',
 			'workouts.csv': 'id,name\nupper,Upper',
@@ -575,27 +625,29 @@ describe('Tracked archive', () => {
 
 		await importTrackedArchive(file);
 
-		expect(dbMock.workoutExercisesBulkDelete).toHaveBeenCalledWith(['stale-older']);
-		expect(dbMock.workoutExercisesBulkPut).toHaveBeenCalledWith([
+		expect(dbMock.workoutExercisesCompareAndDelete).toHaveBeenCalledWith(
+			'version:stale-older',
+			'stale-older'
+		);
+		expect(dbMock.workoutExercisesCompareAndPut).toHaveBeenCalledWith(
+			'version:existing-newer',
 			expect.objectContaining({
 				id: 'existing-newer',
 				exerciseId: 'tracked:user-1:exercise:newer lift',
 				order: 1
 			})
-		]);
+		);
 	});
 
 	it('preserves a workout template when a persisted session is newer than the import', async () => {
-		dbMock.workoutExercisesToArray.mockResolvedValue([
-			{
-				id: 'persisted-template',
-				workoutId: 'tracked:user-1:workout:upper',
-				exerciseId: 'tracked:user-1:exercise:newer lift',
-				order: 1,
-				createdAt: '2026-07-03T10:00:00.000Z',
-				updatedAt: '2026-07-03T10:00:00.000Z'
-			}
-		]);
+		dbMock.workoutExerciseRows.push({
+			id: 'persisted-template',
+			workoutId: 'tracked:user-1:workout:upper',
+			exerciseId: 'tracked:user-1:exercise:newer lift',
+			order: 1,
+			createdAt: '2026-07-03T10:00:00.000Z',
+			updatedAt: '2026-07-03T10:00:00.000Z'
+		});
 		dbMock.workoutSessionsToArray.mockResolvedValue([
 			{
 				id: 'persisted-newer-session',
@@ -624,8 +676,8 @@ describe('Tracked archive', () => {
 
 		await importTrackedArchive(file);
 
-		expect(dbMock.workoutExercisesBulkDelete).not.toHaveBeenCalled();
-		expect(dbMock.workoutExercisesBulkPut).not.toHaveBeenCalled();
+		expect(dbMock.workoutExercisesCompareAndDelete).not.toHaveBeenCalled();
+		expect(dbMock.workoutExercisesCompareAndPut).not.toHaveBeenCalled();
 	});
 
 	it('imports a signed-in archive with deterministic rows and the selected limb priority', async () => {
@@ -666,16 +718,23 @@ describe('Tracked archive', () => {
 		expect(dbMock.workoutsBulkAdd).toHaveBeenCalledWith([
 			expect.objectContaining({ id: 'tracked:user-1:workout:upper a' })
 		]);
-		expect(dbMock.workoutExercisesBulkPut).toHaveBeenCalledWith([
+		expect(dbMock.workoutExercisesCompareAndPut).toHaveBeenCalledTimes(2);
+		expect(dbMock.workoutExercisesCompareAndPut).toHaveBeenNthCalledWith(
+			1,
+			undefined,
 			expect.objectContaining({
 				workoutId: 'tracked:user-1:workout:upper a',
 				order: 1
-			}),
+			})
+		);
+		expect(dbMock.workoutExercisesCompareAndPut).toHaveBeenNthCalledWith(
+			2,
+			undefined,
 			expect.objectContaining({
 				id: 'tracked:user-1:workout:upper a:exercise:tracked:user-1:exercise:cable cyclone',
 				order: 2
 			})
-		]);
+		);
 
 		expect(workoutSessions).toEqual([
 			expect.objectContaining({
@@ -765,6 +824,20 @@ describe('Tracked archive', () => {
 		expect(secondSessionId).toBe('tracked:user-b:session:s1');
 	});
 
+	it('aborts before writing if the authenticated account changes during planning', async () => {
+		dbMock.workoutSessionsBulkGet.mockImplementationOnce(async (ids: string[]) => {
+			dbMock.currentUser.userId = 'user-2';
+			return ids.map(() => undefined);
+		});
+
+		await expect(importTrackedArchive(richTrackedZip())).rejects.toThrow(
+			'The signed-in account changed during the Tracked import.'
+		);
+
+		expectNoDatabaseWrites();
+		expect(dbMock.syncNow).not.toHaveBeenCalled();
+	});
+
 	it('prevalidates every derived document before the first database write', async () => {
 		const oversizedSetId = 's'.repeat(480);
 		const file = trackedZip({
@@ -781,8 +854,8 @@ describe('Tracked archive', () => {
 		for (const write of [
 			dbMock.exercisesBulkAdd,
 			dbMock.workoutsBulkAdd,
-			dbMock.workoutExercisesBulkDelete,
-			dbMock.workoutExercisesBulkPut,
+			dbMock.workoutExercisesCompareAndDelete,
+			dbMock.workoutExercisesCompareAndPut,
 			dbMock.workoutSessionsBulkAdd,
 			dbMock.sessionExercisesBulkAdd,
 			dbMock.sessionSetsBulkAdd
@@ -792,7 +865,91 @@ describe('Tracked archive', () => {
 		expect(dbMock.syncNow).not.toHaveBeenCalled();
 	});
 
-	it('restores every collection when a late multi-collection write fails', async () => {
+	it('keeps a partial import retryable and exposes the session only after its children exist', async () => {
+		type StoredRow = { id: string; user_id?: string; [key: string]: unknown };
+		const stores = {
+			exercises: new Map<string, StoredRow>(),
+			workouts: new Map<string, StoredRow>(),
+			workoutSessions: new Map<string, StoredRow>(),
+			sessionExercises: new Map<string, StoredRow>(),
+			sessionSets: new Map<string, StoredRow>()
+		};
+		const connectTable = (
+			bulkGet: typeof dbMock.exercisesBulkGet,
+			bulkAdd: typeof dbMock.exercisesBulkAdd,
+			store: Map<string, StoredRow>
+		) => {
+			bulkGet.mockImplementation(async (ids: string[]) => ids.map((id) => store.get(id)));
+			bulkAdd.mockImplementation(async (rows: StoredRow[]) => {
+				for (const row of rows) {
+					store.set(row.id, { ...row, user_id: 'user-1' });
+				}
+
+				return rows.map(({ id }) => id);
+			});
+		};
+
+		connectTable(dbMock.exercisesBulkGet, dbMock.exercisesBulkAdd, stores.exercises);
+		connectTable(dbMock.workoutsBulkGet, dbMock.workoutsBulkAdd, stores.workouts);
+		connectTable(
+			dbMock.workoutSessionsBulkGet,
+			dbMock.workoutSessionsBulkAdd,
+			stores.workoutSessions
+		);
+		connectTable(
+			dbMock.sessionExercisesBulkGet,
+			dbMock.sessionExercisesBulkAdd,
+			stores.sessionExercises
+		);
+		connectTable(dbMock.sessionSetsBulkGet, dbMock.sessionSetsBulkAdd, stores.sessionSets);
+		dbMock.exercisesToArray.mockImplementation(async () => [...stores.exercises.values()]);
+		dbMock.workoutsToArray.mockImplementation(async () => [...stores.workouts.values()]);
+		dbMock.sessionSetsBulkAdd.mockImplementationOnce(async (rows: StoredRow[]) => {
+			stores.sessionSets.set(rows[0].id, { ...rows[0], user_id: 'user-1' });
+			throw new Error('set write failed');
+		});
+
+		await expect(importTrackedArchive(richTrackedZip())).rejects.toThrow('set write failed');
+		expect(stores.sessionSets.size).toBe(1);
+		expect(stores.workoutSessions.size).toBe(0);
+		expect(dbMock.syncNow).not.toHaveBeenCalled();
+
+		const summary = await importTrackedArchive(richTrackedZip());
+
+		expect(summary.sessionsImported).toBe(1);
+		expect(stores.sessionSets.size).toBe(3);
+		expect(stores.workoutSessions.size).toBe(1);
+		expect(dbMock.sessionSetsBulkAdd.mock.calls[1]?.[0]).toHaveLength(2);
+		expect(dbMock.workoutSessionsBulkAdd).toHaveBeenCalledOnce();
+		expect(dbMock.sessionSetsBulkDelete).not.toHaveBeenCalled();
+		expect(dbMock.workoutSessionsBulkDelete).not.toHaveBeenCalled();
+	});
+
+	it('preserves a competing document when a deterministic insert loses a race', async () => {
+		let competingWorkout: { id: string; name: string } | undefined;
+		dbMock.workoutsBulkGet.mockImplementation(async (ids: string[]) =>
+			ids.map((id) => (id === competingWorkout?.id ? competingWorkout : undefined))
+		);
+		dbMock.workoutsBulkAdd.mockImplementationOnce(
+			async (rows: Array<{ id: string; name: string }>) => {
+				competingWorkout = { ...rows[0], name: 'Concurrent tab winner' };
+				throw new Error('insert conflict');
+			}
+		);
+
+		await expect(importTrackedArchive(richTrackedZip())).rejects.toThrow(
+			'workouts import IDs conflict with existing data.'
+		);
+
+		expect(competingWorkout?.name).toBe('Concurrent tab winner');
+		expect(dbMock.workoutsBulkDelete).not.toHaveBeenCalled();
+		expect(dbMock.workoutSessionsBulkAdd).not.toHaveBeenCalled();
+		expect(dbMock.sessionExercisesBulkAdd).not.toHaveBeenCalled();
+		expect(dbMock.sessionSetsBulkAdd).not.toHaveBeenCalled();
+		expect(dbMock.workoutExercisesCompareAndPut).not.toHaveBeenCalled();
+	});
+
+	it('preserves a concurrently edited workout template when its revision changes', async () => {
 		const existingTemplate = {
 			id: 'existing-template',
 			workoutId: 'tracked:user-1:workout:upper a',
@@ -801,34 +958,86 @@ describe('Tracked archive', () => {
 			createdAt: '2026-06-01T00:00:00.000Z',
 			updatedAt: '2026-06-01T00:00:00.000Z'
 		};
-		dbMock.workoutExercisesToArray.mockResolvedValue([existingTemplate]);
-		dbMock.workoutExercisesBulkGet.mockImplementation(async (ids: string[]) =>
-			ids.map((id) => (id === existingTemplate.id ? existingTemplate : undefined))
+		let currentTemplate = existingTemplate;
+		let currentVersion = 'revision-1';
+		dbMock.workoutExerciseRows.push(existingTemplate);
+		dbMock.workoutExercisesBulkGetVersioned.mockImplementation(async (ids: string[]) =>
+			ids.map((id) =>
+				id === currentTemplate.id
+					? { document: currentTemplate, version: currentVersion }
+					: undefined
+			)
 		);
-		dbMock.workoutExercisesBulkPut.mockRejectedValueOnce(new Error('late write failure'));
+		dbMock.workoutExercisesCompareAndDelete.mockImplementationOnce(async () => {
+			currentTemplate = {
+				...existingTemplate,
+				order: 9,
+				updatedAt: '2026-08-16T00:00:00.000Z'
+			};
+			currentVersion = 'revision-2';
+			return false;
+		});
 
-		await expect(importTrackedArchive(richTrackedZip())).rejects.toThrow('late write failure');
+		await expect(importTrackedArchive(richTrackedZip())).rejects.toThrow(
+			'workoutExercises import conflicts with concurrently changed data.'
+		);
 
-		expect(dbMock.exercisesBulkDelete).toHaveBeenCalledWith([
-			'tracked:user-1:exercise:cable cyclone'
-		]);
-		expect(dbMock.workoutsBulkDelete).toHaveBeenCalledWith(['tracked:user-1:workout:upper a']);
-		expect(dbMock.workoutSessionsBulkDelete).toHaveBeenCalledWith(['tracked:user-1:session:s1']);
-		expect(dbMock.sessionExercisesBulkDelete).toHaveBeenCalledWith(
-			expect.arrayContaining([
-				'tracked:user-1:session:s1:exercise:bench',
-				'tracked:user-1:session:s1:exercise:cyclone'
-			])
-		);
-		expect(dbMock.sessionSetsBulkDelete).toHaveBeenCalledWith(
-			expect.arrayContaining([
-				'tracked:user-1:session:s1:exercise:bench:set:set1:primary',
-				'tracked:user-1:session:s1:exercise:cyclone:set:set2:primary',
-				'tracked:user-1:session:s1:exercise:cyclone:set:set2:secondary'
-			])
-		);
-		expect(dbMock.workoutExercisesBulkPut.mock.calls.at(-1)?.[0]).toEqual([existingTemplate]);
+		expect(currentTemplate.order).toBe(9);
+		expect(dbMock.workoutExercisesBulkDelete).not.toHaveBeenCalled();
 		expect(dbMock.syncNow).not.toHaveBeenCalled();
+	});
+
+	it('detects a concurrently inserted template row before exposing the session', async () => {
+		let puts = 0;
+		dbMock.workoutExercisesCompareAndPut.mockImplementation(
+			async (_expectedVersion: string | undefined, row: { id: string; workoutId: string }) => {
+				dbMock.workoutExerciseRows.push(row);
+				puts += 1;
+
+				if (puts === 2) {
+					dbMock.workoutExerciseRows.push({
+						id: 'concurrent-template-row',
+						workoutId: row.workoutId,
+						exerciseId: 'concurrent-exercise',
+						order: 99,
+						createdAt: '2026-08-16T00:00:00.000Z',
+						updatedAt: '2026-08-16T00:00:00.000Z'
+					});
+				}
+
+				return true;
+			}
+		);
+
+		await expect(importTrackedArchive(richTrackedZip())).rejects.toThrow(
+			'workoutExercises import conflicts with concurrently changed data.'
+		);
+
+		expect(dbMock.workoutExerciseRows.some(({ id }) => id === 'concurrent-template-row')).toBe(
+			true
+		);
+		expect(dbMock.workoutSessionsBulkAdd).not.toHaveBeenCalled();
+		expect(dbMock.syncNow).not.toHaveBeenCalled();
+	});
+
+	it('rejects a template row that disappears while its revision snapshot is captured', async () => {
+		dbMock.workoutExerciseRows.push({
+			id: 'disappearing-template',
+			workoutId: 'tracked:user-1:workout:upper a',
+			exerciseId: 'older-exercise',
+			order: 1,
+			createdAt: '2026-06-01T00:00:00.000Z',
+			updatedAt: '2026-06-01T00:00:00.000Z'
+		});
+		dbMock.workoutExercisesBulkGetVersioned.mockResolvedValueOnce([undefined]);
+
+		await expect(importTrackedArchive(richTrackedZip())).rejects.toThrow(
+			'workoutExercises import conflicts with concurrently changed data.'
+		);
+
+		expect(dbMock.workoutExercisesCompareAndPut).not.toHaveBeenCalled();
+		expect(dbMock.workoutExercisesCompareAndDelete).not.toHaveBeenCalled();
+		expect(dbMock.workoutSessionsBulkAdd).not.toHaveBeenCalled();
 	});
 
 	it('keeps legacy unnamespaced imports idempotent while new IDs are owner-scoped', async () => {

@@ -295,16 +295,15 @@ describe('progressive cloud sync', () => {
 
 		await runtime.openSupabaseRuntime('user-1');
 		await vi.waitFor(() => {
-			expect(runtime.db.cloud.syncState.value.status).toBe('error');
+			expect(warn).toHaveBeenCalledWith('Background Supabase sync failed.', replicationError);
 		});
 
 		runtime.startProgressiveSync('user-1');
 
 		await vi.waitFor(() => {
 			expect(runtimeMocks.awaitInitialReplication).toHaveBeenCalledTimes(2);
-			expect(runtime.db.cloud.syncState.value.status).toBe('synced');
+			expect(runtimeMocks.awaitInSync).toHaveBeenCalledWith('user-1', { timeoutMs: 15000 });
 		});
-		expect(warn).toHaveBeenCalledWith('Background Supabase sync failed.', replicationError);
 		warn.mockRestore();
 	});
 
@@ -342,7 +341,7 @@ describe('progressive cloud sync', () => {
 
 		currentReplication.resolve();
 		await vi.waitFor(() => {
-			expect(runtime.db.cloud.syncState.value.status).toBe('synced');
+			expect(runtimeMocks.awaitInSync).toHaveBeenCalledWith('user-1', { timeoutMs: 15000 });
 		});
 		warn.mockRestore();
 	});
@@ -352,7 +351,7 @@ describe('progressive cloud sync', () => {
 
 		await runtime.openSupabaseRuntime('user-1');
 		await vi.waitFor(() => {
-			expect(runtime.db.cloud.syncState.value.status).toBe('synced');
+			expect(runtimeMocks.awaitInitialReplication).toHaveBeenCalledWith('user-1');
 		});
 
 		runtime.startProgressiveSync('user-2');
@@ -368,7 +367,7 @@ describe('progressive cloud sync', () => {
 	});
 });
 
-describe('direct session hydration', () => {
+describe('visible session hydration', () => {
 	it('warns and rejects when Supabase hydration fails', async () => {
 		const hydrationError = new Error('expired Supabase session');
 		runtimeMocks.hydrationError = hydrationError;
@@ -377,7 +376,9 @@ describe('direct session hydration', () => {
 
 		await runtime.openSupabaseRuntime('user-1');
 
-		await expect(runtime.hydrateSessionFromSupabase('session-1')).rejects.toBe(hydrationError);
+		await expect(
+			runtime.hydrateVisibleScope({ type: 'session', sessionId: 'session-1' })
+		).rejects.toBe(hydrationError);
 		expect(warn).toHaveBeenCalledWith(
 			'Direct session hydration from Supabase failed.',
 			hydrationError

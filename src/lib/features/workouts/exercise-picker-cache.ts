@@ -9,7 +9,6 @@ import {
 type ExercisePickerCacheEntry = {
 	exercises: Exercise[];
 	exerciseUsagePreferences: ExerciseUsagePreference[];
-	updatedAt: number;
 	ownerId: string;
 	authGeneration: number;
 };
@@ -47,8 +46,7 @@ export function writeExercisePickerCache(
 		exercises,
 		exerciseUsagePreferences,
 		ownerId: identity.ownerId,
-		authGeneration: identity.generation,
-		updatedAt: Date.now()
+		authGeneration: identity.generation
 	};
 
 	return true;

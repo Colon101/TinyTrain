@@ -13,7 +13,6 @@ describe('SessionSetFieldInput', () => {
 				value: '102.5',
 				previousValue: 100,
 				delta: { state: 'improved', label: '+2.5' },
-				indicatorPosition: 'bottom-left',
 				onInput: () => undefined,
 				onKeydown: () => undefined
 			}
@@ -28,7 +27,7 @@ describe('SessionSetFieldInput', () => {
 		expect(body).toContain('aria-describedby="set-set-1-weight-comparison"');
 		expect(body).toContain('value="102.5"');
 		expect(body).toContain('placeholder="100"');
-		expect(body).toContain('data-delta-position="bottom-left"');
+		expect(body).toContain('bottom-1 left-2 text-left');
 		expect(body).toContain('2.5 higher than the previous session');
 		expect(body).not.toMatch(/<input[^>]*\sdisabled(?:=""|(?=[\s>]))/);
 	});
@@ -44,7 +43,6 @@ describe('SessionSetFieldInput', () => {
 				value: '8',
 				previousValue: 8,
 				delta: { state: 'matched', label: '' },
-				indicatorPosition: 'top-right',
 				onInput: () => undefined,
 				onKeydown: () => undefined
 			}
@@ -65,7 +63,6 @@ describe('SessionSetFieldInput', () => {
 				ariaLabel: 'Set 03 RIR',
 				value: '2',
 				delta: { state: 'empty', label: '' },
-				indicatorPosition: 'bottom-right',
 				disabled: true,
 				onInput: () => undefined,
 				onKeydown: () => undefined

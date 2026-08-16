@@ -41,10 +41,7 @@ const runtimeHarness = vi.hoisted(() => {
 			update: vi.fn(async () => 1),
 			delete: vi.fn()
 		},
-		transaction: vi.fn(async (_mode: string, ...args: unknown[]) => {
-			const callback = args.at(-1) as () => Promise<unknown>;
-			return callback();
-		})
+		transaction: vi.fn(async (callback: () => Promise<unknown>) => callback())
 	};
 
 	return { db, state };

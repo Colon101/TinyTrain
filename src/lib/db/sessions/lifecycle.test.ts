@@ -36,10 +36,7 @@ const runtimeHarness = vi.hoisted(() => {
 		sessionSets: {},
 		workoutExercises: {},
 		workouts: {},
-		transaction: vi.fn(async (_mode: string, ...args: unknown[]) => {
-			const callback = args.at(-1) as () => Promise<unknown>;
-			return callback();
-		})
+		transaction: vi.fn(async (callback: () => Promise<unknown>) => callback())
 	};
 
 	return { db, state };

@@ -257,46 +257,36 @@ export async function mergeExerciseHistory(
 	let renamedMainExercise = mainExercise;
 	let renamed = false;
 
-	await db.transaction(
-		'rw',
-		db.exercises,
-		db.workoutSessions,
-		db.sessionExercises,
-		db.sessionSets,
-		async () => {
-			if (input.mainExerciseName !== undefined) {
-				const renameResult = await renameCustomExercise(mainExercise, input.mainExerciseName, now);
-				renamedMainExercise = renameResult.exercise;
-				renamed = renameResult.renamed;
-			}
-
-			for (const sessionExercise of sessionExercisesToAdd) {
-				sessionExercise.exerciseNameSnapshot = renamedMainExercise.name;
-			}
-
-			if (sessionExercisesToAdd.length > 0) {
-				await db.sessionExercises.bulkAdd(sessionExercisesToAdd);
-			}
-
-			if (sessionSetsToAdd.length > 0) {
-				await db.sessionSets.bulkAdd(sessionSetsToAdd);
-			}
-
-			const touchedSessionIds = [...new Set(sessionExercisesToAdd.map((row) => row.sessionId))];
-
-			await Promise.all(
-				touchedSessionIds.map((sessionId) =>
-					db.workoutSessions.update(sessionId, { updatedAt: now })
-				)
-			);
+	await db.transaction(async () => {
+		if (input.mainExerciseName !== undefined) {
+			const renameResult = await renameCustomExercise(mainExercise, input.mainExerciseName, now);
+			renamedMainExercise = renameResult.exercise;
+			renamed = renameResult.renamed;
 		}
-	);
+
+		for (const sessionExercise of sessionExercisesToAdd) {
+			sessionExercise.exerciseNameSnapshot = renamedMainExercise.name;
+		}
+
+		if (sessionExercisesToAdd.length > 0) {
+			await db.sessionExercises.bulkAdd(sessionExercisesToAdd);
+		}
+
+		if (sessionSetsToAdd.length > 0) {
+			await db.sessionSets.bulkAdd(sessionSetsToAdd);
+		}
+
+		const touchedSessionIds = [...new Set(sessionExercisesToAdd.map((row) => row.sessionId))];
+
+		await Promise.all(
+			touchedSessionIds.map((sessionId) => db.workoutSessions.update(sessionId, { updatedAt: now }))
+		);
+	});
 
 	try {
 		await syncNow();
 		return {
 			mainExercise: renamedMainExercise,
-			secondaryExercise,
 			copiedSessionExercises: sessionExercisesToAdd.length,
 			copiedSessionSets: sessionSetsToAdd.length,
 			skippedConflicts,
@@ -306,7 +296,6 @@ export async function mergeExerciseHistory(
 	} catch (error) {
 		return {
 			mainExercise: renamedMainExercise,
-			secondaryExercise,
 			copiedSessionExercises: sessionExercisesToAdd.length,
 			copiedSessionSets: sessionSetsToAdd.length,
 			skippedConflicts,

@@ -109,8 +109,7 @@ accent consumes the global contract; semantic items explicitly do not change wit
 - `SessionExerciseHeader.svelte`: Exercise x / y label.
 - `SessionExerciseFooter.svelte`: Next and End session actions.
 - `SessionExerciseList.svelte`: Exercises label.
-- `SessionOverviewHeader.svelte`: session exercise labels and previous-session hover/label in the
-  dormant block.
+- `SessionOverviewHeader.svelte`: session exercise labels.
 - `SessionOverviewScreen.svelte`: loading and fallback action; Edit time label; time/duration focus
   borders; selected end-mode tints/borders; and Save time action.
 - `SessionSummaryPanel.svelte`: Start/Resume action. Positive comparisons use semantic positive.
@@ -129,9 +128,8 @@ accent consumes the global contract; semantic items explicitly do not change wit
   limb-side selections.
 - The formerly separate sky importer palette now uses the global accent, and the Database badge is
   aligned with the other accent icon badges.
-- The `+2` appearance preview uses semantic positive. Imported-session confirmation uses semantic
-  success. Operational status copy uses accent text because it can describe working, success, or a
-  partial sync outcome rather than success alone.
+- Imported-session confirmation uses semantic success. Operational status copy uses accent text
+  because it can describe working, success, or a partial sync outcome rather than success alone.
 
 ## Fixed brand and platform assets
 

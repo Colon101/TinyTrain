@@ -20,7 +20,6 @@ import {
 	getSessionSetLabel,
 	getSessionSortTime,
 	isDefined,
-	summarizeExerciseProgress,
 	summarizeSession,
 	toDayKey,
 	toValidDate,
@@ -177,7 +176,6 @@ export async function getDayOverview(dayKey: string): Promise<DayOverview> {
 
 	if (!latestSession) {
 		return {
-			dayKey,
 			session: null
 		};
 	}
@@ -185,7 +183,6 @@ export async function getDayOverview(dayKey: string): Promise<DayOverview> {
 	const summaries = await getSessionSummariesByIds([latestSession.id]);
 
 	return {
-		dayKey,
 		session: summaries.get(latestSession.id) ?? null
 	};
 }
@@ -243,26 +240,12 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 		session.id,
 		currentSessionAt
 	);
-	const progress =
-		sessionExercises.length === 0
-			? null
-			: {
-					improvedExercises: 0,
-					matchedExercises: 0,
-					regressedExercises: 0,
-					mixedExercises: 0,
-					newExercises: 0
-				};
 	const nextExercises = sessionExercises.map((sessionExercise) => {
 		const previousPerformance =
 			previousPerformanceByExerciseId.get(sessionExercise.exerciseId) ?? null;
 		const previousReferenceBySetKey = buildPreviousReferenceBySetKey(
 			sessionExercise,
 			previousPerformance
-		);
-		const { progressStatus, progressSummary } = summarizeExerciseProgress(
-			sessionExercise,
-			previousReferenceBySetKey
 		);
 		const sets = sessionExercise.sets.map((sessionSet) => {
 			const previousReference = previousReferenceBySetKey.get(getSessionSetKey(sessionSet)) ?? null;
@@ -277,31 +260,9 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 			};
 		});
 
-		if (progress) {
-			switch (progressStatus) {
-				case 'improved':
-					progress.improvedExercises += 1;
-					break;
-				case 'regressed':
-					progress.regressedExercises += 1;
-					break;
-				case 'mixed':
-					progress.mixedExercises += 1;
-					break;
-				case 'new':
-					progress.newExercises += 1;
-					break;
-				default:
-					progress.matchedExercises += 1;
-			}
-		}
-
 		return {
 			...sessionExercise,
 			exercise: exerciseById.get(sessionExercise.exerciseId) ?? null,
-			previousPerformance,
-			progressStatus,
-			progressSummary,
 			sets
 		};
 	});
@@ -309,7 +270,6 @@ export async function getSessionOverview(sessionId: string): Promise<SessionOver
 	return {
 		summary: summarizeSession(session, sessionExercises, sessionSets),
 		previousSummary,
-		progress,
 		exercises: nextExercises
 	};
 }

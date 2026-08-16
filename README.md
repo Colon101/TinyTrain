@@ -7,8 +7,7 @@ TinyTrain is an offline-first workout tracker built with SvelteKit, Supabase, Rx
 - Google sign-in through Supabase Auth.
 - Local-first workout, exercise, session, and set storage.
 - Supabase-backed sync with conflict reconciliation.
-- Configurable previous-session comparison indicators for workout inputs, with an automatic
-  device-preference migration and Bottom left as the default.
+- Previous-session comparison indicators for workout inputs.
 - App-wide inactivity recovery with a warning before stale sessions are safely abandoned.
 - Progressive hydration for visible sessions, weeks, and workout lists.
 - PWA app shell and service worker caching.
@@ -62,14 +61,13 @@ VITE_SUPABASE_URL=
 VITE_SUPABASE_ANON_KEY=
 ```
 
-`src/lib/supabase.ts` is only the Supabase client/auth wrapper. It creates the browser Supabase client, handles Google OAuth helpers, exposes the current auth snapshot, and patches a PostgREST reserved-column edge case for the `"order"` column. The public persistence API is exported by `src/lib/db.ts`, with implementations in `src/lib/db/`.
+`src/lib/supabase.ts` is the Supabase client/auth wrapper. It creates the browser client, handles Google OAuth helpers, exposes the current auth snapshot, and quotes the schema's reserved `order` field for RxDB conflict filters. The public persistence API is exported by `src/lib/db.ts`, with implementations in `src/lib/db/`.
 
 ## Project Layout
 
 - `src/lib/db.ts`: stable app-facing database API facade.
 - `src/lib/db/`: runtime, model, workout, exercise, and session persistence modules.
 - `src/lib/db-cloud-sync.ts`: Supabase reconciliation, upload, remote merge, and recent-row hydration helpers used by the database runtime.
-- `src/lib/progress-indicator-preference.ts`: versioned device preference and migration for workout comparison-indicator placement.
 - `src/lib/session-inactivity.ts`: shared inactivity thresholds and time helpers for active-session recovery.
 - `src/lib/rxdb.ts`: RxDB schema setup and Supabase replication wiring.
 - `src/lib/rxdb-dexie-adapter.ts`: Dexie-like adapter around RxDB collections.

@@ -37,8 +37,7 @@ function buildExerciseDetail(): ExerciseDetail {
 			createdAt: timestamp,
 			updatedAt: timestamp
 		},
-		history: [],
-		resetEvents: []
+		history: []
 	};
 }
 

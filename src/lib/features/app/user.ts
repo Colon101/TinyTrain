@@ -2,12 +2,8 @@ export type CloudUser = {
 	userId?: string;
 	name?: string;
 	email?: string;
-	claims?: Record<string, unknown>;
 	isLoggedIn?: boolean;
 	isLoading?: boolean;
-	license?: {
-		status?: string;
-	};
 };
 
 export function getUserDisplayName(user: CloudUser | null | undefined) {

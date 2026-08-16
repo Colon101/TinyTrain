@@ -37,9 +37,6 @@ function buildSet(overrides: Partial<SessionSetOverview> = {}): SessionSetOvervi
 		updatedAt: timestamp,
 		label: 'Set 01',
 		previousReference: {
-			sessionId: 'previous-session',
-			order: 1,
-			side: 'bilateral',
 			weight: 95,
 			reps: 8,
 			rir: 3
@@ -68,7 +65,6 @@ function buildOverview(status: SessionStatus = 'in_progress'): SessionOverview {
 			totalVolume: 800
 		},
 		previousSummary: null,
-		progress: null,
 		exercises: [
 			{
 				id: 'session-exercise-1',
@@ -81,10 +77,7 @@ function buildOverview(status: SessionStatus = 'in_progress'): SessionOverview {
 				createdAt: timestamp,
 				updatedAt: timestamp,
 				sets: [buildSet()],
-				exercise: null,
-				previousPerformance: null,
-				progressStatus: 'new',
-				progressSummary: 'First logged performance for this exercise.'
+				exercise: null
 			}
 		]
 	};

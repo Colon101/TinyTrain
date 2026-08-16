@@ -14,8 +14,7 @@ type TableName =
 	| 'workoutExercises'
 	| 'workoutSessions'
 	| 'sessionExercises'
-	| 'sessionSets'
-	| 'exerciseResetEvents';
+	| 'sessionSets';
 type ChangeListener = (tableName: TableName) => void;
 type TransactionCallback<T> = () => Promise<T> | T;
 
@@ -47,9 +46,21 @@ function stripRxMeta<T>(doc: RxDocument<T> | null | undefined): T | undefined {
 	delete json._deleted;
 	delete json._meta;
 	delete json._rev;
+	delete json.user_id;
 
 	return json as T;
 }
+
+function isWriteConflict(error: unknown) {
+	return (
+		typeof error === 'object' &&
+		error !== null &&
+		'code' in error &&
+		(error as { code?: unknown }).code === 'CONFLICT'
+	);
+}
+
+class ConditionalWriteConflict extends Error {}
 
 function stripUndefinedValues<T extends Record<string, unknown>>(doc: T) {
 	const cleanDoc = { ...doc };
@@ -254,6 +265,32 @@ export class RxTableAdapter<T extends PlainDoc> {
 		return ids.map((id) => this.sharedDocsById.get(id) ?? stripRxMeta<T>(docsById.get(id)));
 	}
 
+	async bulkGetVersioned(
+		ids: string[]
+	): Promise<Array<{ document: T; version: string } | undefined>> {
+		const docsById = await this.collection.findByIds(ids).exec();
+
+		return ids.map((id) => {
+			const sharedDoc = this.sharedDocsById.get(id);
+
+			if (sharedDoc) {
+				throw new Error('Shared documents do not support versioned writes.');
+			}
+
+			const doc = docsById.get(id);
+			const document = stripRxMeta<T>(doc);
+
+			if (!document) {
+				return undefined;
+			}
+			if (!doc?.revision) {
+				throw new Error('RxDB returned a document without a revision.');
+			}
+
+			return { document, version: doc.revision };
+		});
+	}
+
 	async add(doc: T) {
 		await this.collection.insert(this.withUserId(doc));
 		return doc.id;
@@ -290,6 +327,55 @@ export class RxTableAdapter<T extends PlainDoc> {
 		}
 
 		return result.success.map((doc) => doc.primary);
+	}
+
+	async compareAndPut(expectedVersion: string | undefined, next: T) {
+		if (this.sharedDocsById.has(next.id)) {
+			return false;
+		}
+
+		const current = await this.collection.findOne(next.id).exec();
+
+		if (!current) {
+			if (expectedVersion !== undefined) {
+				return false;
+			}
+
+			try {
+				await this.collection.insert(this.withUserId(next));
+				return true;
+			} catch (error) {
+				if (isWriteConflict(error)) {
+					return false;
+				}
+
+				throw error;
+			}
+		}
+
+		if (expectedVersion === undefined) {
+			return false;
+		}
+		if (current.revision !== expectedVersion) {
+			return false;
+		}
+
+		try {
+			await current.modify(() => {
+				if (current.revision !== expectedVersion) {
+					throw new ConditionalWriteConflict();
+				}
+
+				return this.withUserId(next);
+			});
+			return true;
+		} catch (error) {
+			if (error instanceof ConditionalWriteConflict || isWriteConflict(error)) {
+				return false;
+			}
+
+			throw error;
+		}
 	}
 
 	async update(id: string, patch: Partial<T>) {
@@ -332,6 +418,33 @@ export class RxTableAdapter<T extends PlainDoc> {
 		await this.collection.bulkRemove(ids);
 	}
 
+	async compareAndDelete(expectedVersion: string, id: string) {
+		if (this.sharedDocsById.has(id)) {
+			return false;
+		}
+
+		const current = await this.collection.findOne(id).exec();
+
+		if (!current) {
+			return false;
+		}
+
+		if (current.revision !== expectedVersion) {
+			return false;
+		}
+
+		try {
+			await current.remove();
+			return true;
+		} catch (error) {
+			if (error instanceof ConditionalWriteConflict || isWriteConflict(error)) {
+				return false;
+			}
+
+			throw error;
+		}
+	}
+
 	where(field: string) {
 		return new RxWhereQuery<T>(this, field);
 	}
@@ -344,8 +457,7 @@ export type RxDexieLikeDatabase = {
 	workoutSessions: RxTableAdapter<PlainDoc>;
 	sessionExercises: RxTableAdapter<PlainDoc>;
 	sessionSets: RxTableAdapter<PlainDoc>;
-	exerciseResetEvents: RxTableAdapter<PlainDoc>;
-	transaction<T>(mode: string, ...args: unknown[]): Promise<T>;
+	transaction<T>(callback: TransactionCallback<T>): Promise<T>;
 };
 
 const adaptersByUserId = new Map<string, Promise<RxDexieLikeDatabase>>();
@@ -417,22 +529,11 @@ async function createRxDexieLikeDatabase(
 			userId,
 			'sessionSets'
 		),
-		exerciseResetEvents: new RxTableAdapter(
-			database.exerciseResetEvents as unknown as RxCollection<PlainDoc>,
-			userId,
-			'exerciseResetEvents'
-		),
-		async transaction<T>(_mode: string, ...args: unknown[]) {
-			const callback = args.at(-1);
-
-			if (typeof callback !== 'function') {
-				return undefined as T;
-			}
-
+		async transaction<T>(callback: TransactionCallback<T>) {
 			// RxDB's Dexie storage uses one IndexedDB database per collection, so it cannot
 			// provide a real cross-collection transaction here. Serializing these sections
 			// at least preserves app-level write ordering for multi-table mutations.
-			return runSerializedTransaction(callback as TransactionCallback<T>);
+			return runSerializedTransaction(callback);
 		}
 	};
 }

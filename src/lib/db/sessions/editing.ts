@@ -4,7 +4,7 @@ import { db, requireLoggedInUser } from '../runtime';
 import { clearSessionInputDraft, removeSessionInputDraftSets } from '../session-drafts';
 import { compareSessionSetRows, createId, timestamp, withSessionSetDefaults } from '../shared';
 import { listWorkoutExercises } from '../workouts';
-import { updateSessionSetInputs } from './inputs';
+import { updateSessionSetInputValues } from './inputs';
 import { buildSeedSessionSetRows, buildSessionSeedSetRows } from './seeding';
 
 export async function reorderSessionExercises(
@@ -13,7 +13,7 @@ export async function reorderSessionExercises(
 ) {
 	requireLoggedInUser();
 
-	await db.transaction('rw', db.sessionExercises, db.workoutSessions, async () => {
+	await db.transaction(async () => {
 		const sessionExercises = await db.sessionExercises
 			.where('sessionId')
 			.equals(sessionId)
@@ -76,7 +76,7 @@ export async function replaceSessionExercise(sessionExerciseId: string, exercise
 	const now = timestamp();
 	const seedSets = await buildSessionSeedSetRows(sessionExerciseId, exercise, now, session.id);
 
-	await db.transaction('rw', db.sessionExercises, db.sessionSets, db.workoutSessions, async () => {
+	await db.transaction(async () => {
 		const currentSessionExercise = await db.sessionExercises.get(sessionExerciseId);
 
 		if (!currentSessionExercise || currentSessionExercise.sessionId !== session.id) {
@@ -125,7 +125,7 @@ export async function removeSessionExercise(sessionExerciseId: string) {
 		return;
 	}
 
-	await db.transaction('rw', db.sessionExercises, db.sessionSets, db.workoutSessions, async () => {
+	await db.transaction(async () => {
 		const currentSets = await db.sessionSets
 			.where('sessionExerciseId')
 			.equals(sessionExerciseId)
@@ -153,12 +153,6 @@ export async function removeSessionExercise(sessionExerciseId: string) {
 		);
 		await db.workoutSessions.update(sessionExercise.sessionId, { updatedAt: now });
 	});
-}
-
-export async function addExerciseToSession(sessionId: string, exerciseId: string) {
-	const [sessionExercise] = await addExercisesToSession(sessionId, [exerciseId]);
-
-	return sessionExercise;
 }
 
 export async function addExercisesToSession(sessionId: string, exerciseIds: string[]) {
@@ -200,64 +194,56 @@ export async function addExercisesToSession(sessionId: string, exerciseIds: stri
 		})
 	);
 
-	return db.transaction<SessionExercise[]>(
-		'rw',
-		db.sessionExercises,
-		db.sessionSets,
-		db.workoutSessions,
-		async () => {
-			const currentSession = await db.workoutSessions.get(sessionId);
+	return db.transaction<SessionExercise[]>(async () => {
+		const currentSession = await db.workoutSessions.get(sessionId);
 
-			if (!currentSession) {
-				throw new Error('Session not found.');
-			}
-
-			const existingSessionExercises = await db.sessionExercises
-				.where('sessionId')
-				.equals(sessionId)
-				.toArray();
-			const existingExerciseIds = new Set(
-				existingSessionExercises.map((sessionExercise) => sessionExercise.exerciseId)
-			);
-
-			if (
-				candidateSessionExercises.some((candidate) =>
-					existingExerciseIds.has(candidate.exercise.id)
-				)
-			) {
-				throw new Error('That exercise is already in this session.');
-			}
-
-			let nextOrder =
-				existingSessionExercises.reduce(
-					(highestOrder, currentSessionExercise) =>
-						Math.max(highestOrder, currentSessionExercise.order),
-					0
-				) + 1;
-			const sessionExercises = candidateSessionExercises.map((candidate) => ({
-				id: candidate.id,
-				sessionId,
-				workoutId: currentSession.workoutId,
-				exerciseId: candidate.exercise.id,
-				exerciseNameSnapshot: candidate.exercise.name,
-				order: nextOrder++,
-				performedAt: currentSession.startedAt ?? now,
-				createdAt: now,
-				updatedAt: now
-			})) satisfies SessionExercise[];
-			const seedSets = candidateSessionExercises.flatMap((candidate) => candidate.seedSets);
-
-			await db.sessionExercises.bulkAdd(sessionExercises);
-
-			if (seedSets.length > 0) {
-				await db.sessionSets.bulkAdd(seedSets);
-			}
-
-			await db.workoutSessions.update(sessionId, { updatedAt: now });
-
-			return sessionExercises;
+		if (!currentSession) {
+			throw new Error('Session not found.');
 		}
-	);
+
+		const existingSessionExercises = await db.sessionExercises
+			.where('sessionId')
+			.equals(sessionId)
+			.toArray();
+		const existingExerciseIds = new Set(
+			existingSessionExercises.map((sessionExercise) => sessionExercise.exerciseId)
+		);
+
+		if (
+			candidateSessionExercises.some((candidate) => existingExerciseIds.has(candidate.exercise.id))
+		) {
+			throw new Error('That exercise is already in this session.');
+		}
+
+		let nextOrder =
+			existingSessionExercises.reduce(
+				(highestOrder, currentSessionExercise) =>
+					Math.max(highestOrder, currentSessionExercise.order),
+				0
+			) + 1;
+		const sessionExercises = candidateSessionExercises.map((candidate) => ({
+			id: candidate.id,
+			sessionId,
+			workoutId: currentSession.workoutId,
+			exerciseId: candidate.exercise.id,
+			exerciseNameSnapshot: candidate.exercise.name,
+			order: nextOrder++,
+			performedAt: currentSession.startedAt ?? now,
+			createdAt: now,
+			updatedAt: now
+		})) satisfies SessionExercise[];
+		const seedSets = candidateSessionExercises.flatMap((candidate) => candidate.seedSets);
+
+		await db.sessionExercises.bulkAdd(sessionExercises);
+
+		if (seedSets.length > 0) {
+			await db.sessionSets.bulkAdd(seedSets);
+		}
+
+		await db.workoutSessions.update(sessionId, { updatedAt: now });
+
+		return sessionExercises;
+	});
 }
 
 export async function addSessionSetRow(sessionExerciseId: string) {
@@ -278,7 +264,7 @@ export async function addSessionSetRow(sessionExerciseId: string) {
 	const now = timestamp();
 	let nextSets: SessionSet[] = [];
 
-	await db.transaction('rw', db.sessionSets, db.sessionExercises, db.workoutSessions, async () => {
+	await db.transaction(async () => {
 		const currentSessionExercise = await db.sessionExercises.get(sessionExerciseId);
 
 		if (!currentSessionExercise || currentSessionExercise.exerciseId !== exercise.id) {
@@ -331,7 +317,7 @@ export async function removeSessionSetRow(sessionSetId: string) {
 
 	let deletedSetIds: string[] = [];
 
-	await db.transaction('rw', db.sessionSets, db.sessionExercises, db.workoutSessions, async () => {
+	await db.transaction(async () => {
 		const currentSets = await db.sessionSets
 			.where('sessionExerciseId')
 			.equals(sessionSet.sessionExerciseId)
@@ -384,7 +370,7 @@ export async function updateSessionSetInput(
 ) {
 	requireLoggedInUser();
 
-	return updateSessionSetInputs(sessionSetId, field, rawValue);
+	return (await updateSessionSetInputValues(sessionSetId, { [field]: rawValue })).sessionSet;
 }
 
 export async function resetSessionInputs(sessionId: string) {
@@ -424,7 +410,7 @@ export async function resetSessionInputs(sessionId: string) {
 		)
 	).flat();
 
-	await db.transaction('rw', db.sessionSets, db.sessionExercises, db.workoutSessions, async () => {
+	await db.transaction(async () => {
 		const sessionExercises = await db.sessionExercises
 			.where('sessionId')
 			.equals(sessionId)

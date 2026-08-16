@@ -102,7 +102,7 @@
 				}
 
 				api = dbApi;
-				currentUserSubscription = dbApi.db.cloud.currentUser.subscribe((nextUser) => {
+				currentUserSubscription = dbApi.currentUser.subscribe((nextUser) => {
 					if (!disposed) {
 						currentUser = nextUser;
 					}
